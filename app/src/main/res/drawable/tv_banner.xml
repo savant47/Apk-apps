@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Background 16:9 banner gradient -->
+    <path
+        android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="320"
+                android:endY="180"
+                android:type="linear">
+                <item android:color="#0B0F19" android:offset="0.0" />
+                <item android:color="#1E1B4B" android:offset="0.5" />
+                <item android:color="#3B0764" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- TV Decorative Screen Shape -->
+    <path
+        android:pathData="M50,35 h70 a6,6 0 0,1 6,6 v48 a6,6 0 0,1 -6,6 h-70 a6,6 0 0,1 -6,-6 v-48 a6,6 0 0,1 6,-6 z"
+        android:fillColor="#1E293B"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="2" />
+
+    <!-- Play Symbol inside TV screen -->
+    <path
+        android:pathData="M75,50 L95,60 L75,70 Z"
+        android:fillColor="#F43F5E" />
+
+    <!-- Stand -->
+    <path
+        android:pathData="M81,95 h8 v12 h-8 z M70,107 h30 v3 h-30 z"
+        android:fillColor="#475569" />
+
+    <!-- Accent Cinema stripes -->
+    <path
+        android:pathData="M145,50 h130 v8 h-130 z"
+        android:fillColor="#F59E0B" />
+    <path
+        android:pathData="M145,64 h110 v5 h-110 z"
+        android:fillColor="#38BDF8" />
+    <path
+        android:pathData="M145,74 h90 v4 h-90 z"
+        android:fillColor="#A855F7" />
+
+    <!-- Bottom label bar / QS285 TV tag -->
+    <path
+        android:pathData="M0,150 h320 v30 h-320 z"
+        android:fillColor="#0F172A" />
+
+    <!-- Small decorative dots -->
+    <path
+        android:pathData="M20,165 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"
+        android:fillColor="#10B981" />
+    <path
+        android:pathData="M35,165 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"
+        android:fillColor="#38BDF8" />
+    <path
+        android:pathData="M50,165 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"
+        android:fillColor="#F59E0B" />
+</vector>

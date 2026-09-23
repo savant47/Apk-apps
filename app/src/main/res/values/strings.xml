@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">Cinema TV</string>
+    <string name="portal_topcinema">توب سينما TopCinema</string>
+    <string name="portal_watchseries">ووتش سيريز WatchSeries</string>
+    <string name="nav_home">الرئيسية</string>
+    <string name="nav_back">رجوع</string>
+    <string name="nav_forward">تقدم</string>
+    <string name="nav_refresh">تحديث</string>
+    <string name="nav_fullscreen">ملء الشاشة</string>
+    <string name="nav_mouse_mode">الماوس الافتراضي</string>
+    <string name="nav_dpad_mode">وضع الأسهم D-Pad</string>
+    <string name="nav_favorites">المفضلة</string>
+    <string name="nav_history">السجل</string>
+    <string name="nav_zoom_in">تكبير +</string>
+    <string name="nav_zoom_out">تصغير -</string>
+    <string name="remote_tips">الريموت: الأسهم للتحرك • OK للنقر • زر القائمة Menu لإظهار/إخفاء الشريط • Back للرجوع</string>
+    <string name="adblock_enabled">مانع الإعلانات المنبثقة: مفعّل</string>
+    <string name="high_quality_media">جودة الوسائط: عالية (Hardware Accelerated)</string>
+    <string name="empty_favorites">لا توجد عناصر محفوظة في المفضلة بعد</string>
+    <string name="empty_history">سجل المشاهدة فارغ</string>
+    <string name="device_qs285_ready">متوافق مع أجهزة BeoutQ QS285 و Android TV 7+</string>
+</resources>

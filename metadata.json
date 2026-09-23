@@ -1,0 +1,6 @@
+{
+  "name": "Cinema TV",
+  "description": "تطبيق تلفزيون متكامل لأجهزة أندرويد TV و BeoutQ QS285 لتصفح ومشاهدة الأفلام والمسلسلات بجودة عالية وسلاسة من Top Cinema و WatchSeries مع دعم كامل لريموت التحكم وتشغيل الفيديو بملء الشاشة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
