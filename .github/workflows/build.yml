@@ -19,11 +19,10 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
 
-    - name: Install Gradle & Generate Wrapper
-      run: |
-        sudo apt-get update && sudo apt-get install -y gradle
-        gradle wrapper
-        chmod +x gradlew
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '9.0'
 
     - name: Create Secrets and Env
       run: |
@@ -31,8 +30,8 @@ jobs:
         mkdir -p app
         echo "GEMINI_API_KEY=dummy_key" > app/.env
 
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug -x test -x lint --no-daemon
+    - name: Build Debug APK with Gradle
+      run: gradle assembleDebug -x test -x lint --stacktrace --no-daemon
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
