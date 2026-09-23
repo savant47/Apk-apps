@@ -19,7 +19,7 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Download and Install Gradle 9.3.1 Manually
+    - name: Download and Install Gradle 9.3.1
       run: |
         wget -q https://services.gradle.org/distributions/gradle-9.3.1-bin.zip
         unzip -q gradle-9.3.1-bin.zip
@@ -32,7 +32,7 @@ jobs:
         echo "GEMINI_API_KEY=dummy_key" > app/.env
 
     - name: Build Debug APK
-      run: gradle assembleDebug -x test -x lint --no-daemon -Djava.awt.headless=true -Dorg.gradle.jvmargs="-Xmx4g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
+      run: gradle clean assembleDebug -x test -x lint -Dkotlin.daemon.jvm.options="-Xmx2g" -Dorg.gradle.jvmargs="-Xmx4g"
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
