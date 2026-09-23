@@ -39,3 +39,4 @@ jobs:
       with:
         name: CinemaTV-Debug-APK
         path: app/build/outputs/apk/debug/*.apk
+ 
