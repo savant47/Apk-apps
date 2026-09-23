@@ -19,13 +19,11 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Generate Missing gradlew script
+    - name: Download and Install Gradle 9.3.1 Manually
       run: |
-        cat << 'EOF' > gradlew
-        #!/usr/bin/env sh
-        exec java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain "$@"
-        EOF
-        chmod +x gradlew
+        wget -q https://services.gradle.org/distributions/gradle-9.3.1-bin.zip
+        unzip -q gradle-9.3.1-bin.zip
+        echo "${PWD}/gradle-9.3.1/bin" >> $GITHUB_PATH
 
     - name: Create Secrets File
       run: |
@@ -34,7 +32,7 @@ jobs:
         echo "GEMINI_API_KEY=dummy_key" > app/.env
 
     - name: Build Debug APK
-      run: ./gradlew assembleDebug -x test -x lint --no-daemon
+      run: gradle assembleDebug -x test -x lint --no-daemon
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
