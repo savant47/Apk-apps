@@ -25,11 +25,13 @@ jobs:
         unzip -q gradle-9.3.1-bin.zip
         echo "${PWD}/gradle-9.3.1/bin" >> $GITHUB_PATH
 
-    - name: Create Secrets File
+    - name: Create Secrets and Keystore
       run: |
         echo "GEMINI_API_KEY=dummy_key" > .env
         mkdir -p app
         echo "GEMINI_API_KEY=dummy_key" > app/.env
+        keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
+        cp debug.keystore app/debug.keystore
 
     - name: Build Debug APK
       run: gradle clean assembleDebug -x test -x lint -Dkotlin.daemon.jvm.options="-Xmx2g" -Dorg.gradle.jvmargs="-Xmx4g"
