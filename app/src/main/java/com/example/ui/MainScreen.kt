@@ -412,11 +412,7 @@ fun MainScreen(
                   mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                   cacheMode = WebSettings.LOAD_DEFAULT
 
-                  userAgentString = if (displayMode == AppDisplayMode.MOBILE) {
-                    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
-                  } else {
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                  }
+                  userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
                 }
 
                 val chromeClient = TvWebChromeClient(
@@ -464,80 +460,6 @@ fun MainScreen(
             },
             modifier = Modifier.fillMaxSize()
           )
-        }
-
-        // Quick Player Jump Button: appears on TopCinema and WatchSeries DudeBar media pages
-        val isTopCinemaMedia = activePortal == StreamingPortal.TOP_CINEMA &&
-          (currentUrl.contains("مسلسل") || currentUrl.contains("حلقة") || currentUrl.contains("فيلم") || currentUrl.contains("mobland", ignoreCase = true) || currentUrl.contains("%d9%85%d8%b3"))
-        val isWatchSeriesMedia = activePortal == StreamingPortal.WATCH_SERIES &&
-          (currentUrl.contains("/tv/") || currentUrl.contains("/movie/") || currentUrl.contains("/watch/"))
-        val isOnWatchPage = currentUrl.contains("/watch")
-
-        if (!isHomeActive && (isTopCinemaMedia || isWatchSeriesMedia) && !isFullscreenVideo) {
-          FloatingActionButton(
-            onClick = {
-              if (isWatchSeriesMedia) {
-                // Smoothly focus the WatchSeries DudeBar player and seasons/episodes
-                webViewRef?.evaluateJavascript(
-                  """
-                  (function() {
-                    var el = document.querySelector('#player, #iframe-embed, .player-embed, .seasons, .servers-list, iframe[src*="embed"], iframe');
-                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    // Attempt to click CC button on the player controls if available
-                    var cc = document.querySelector('.jw-icon-cc, .vjs-subs-caps-button, button[aria-label*="Captions"], button[aria-label*="Subtitles"], .art-control-subtitle');
-                    if (cc) cc.click();
-                  })();
-                  """.trimIndent(),
-                  null
-                )
-                Toast.makeText(context, "تم التركيز على مشغل WatchSeries DudeBar ومواسم المسلسل 📺", Toast.LENGTH_SHORT).show()
-              } else if (isOnWatchPage) {
-                // Focus and center the video player iframe on TopCinema
-                webViewRef?.evaluateJavascript(
-                  """
-                  (function() {
-                    var el = document.querySelector('.player--iframe, iframe[src*="embed"], #player, .watch--servers--list');
-                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  })();
-                  """.trimIndent(),
-                  null
-                )
-                Toast.makeText(context, "تم التركيز على مشغل الفيديو والسيرفرات", Toast.LENGTH_SHORT).show()
-              } else {
-                // Jump to the direct streaming /watch/ page
-                val cleanBase = currentUrl.trimEnd('/')
-                val watchUrl = "$cleanBase/watch/"
-                navigateTo(watchUrl, StreamingPortal.TOP_CINEMA, pageTitle)
-                Toast.makeText(context, "جاري فتح مشغل الفيديو وسيرفرات المشاهدة...", Toast.LENGTH_SHORT).show()
-              }
-            },
-            containerColor = if (isWatchSeriesMedia) CinemaSecondary else CinemaPrimary,
-            contentColor = Color.White,
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier
-              .align(Alignment.BottomEnd)
-              .padding(end = 24.dp, bottom = if (isBarVisible) 80.dp else 24.dp)
-              .testTag("btn_jump_to_watch_player")
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(24.dp)
-              )
-              Text(
-                text = if (isWatchSeriesMedia) "المشغل والترجمة [CC] 🎬" else if (isOnWatchPage) "تركيز على المشغل 🎬" else "مشاهدة الآن / المشغل 🎬",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-              )
-            }
-          }
         }
 
         // Non-blocking Virtual Mouse Pointer (small 36dp Canvas, never blocks touch events)

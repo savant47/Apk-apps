@@ -17,7 +17,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.widget.Toast
 import java.io.ByteArrayInputStream
 
 class TvWebChromeClient(
@@ -82,18 +81,16 @@ class TvWebChromeClient(
     isUserGesture: Boolean,
     resultMsg: Message?
   ): Boolean {
-    // Strictly prevent opening popup windows, blank tabs, or unattached WebViews
+    // Strictly prevent opening separate blank popup windows that hijack streaming
     return false
   }
 
   override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
-    // Suppress scam / malware alert popups ("Your phone is full", "Update required", etc.)
     result?.confirm()
     return true
   }
 
   override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
-    // Suppress intrusive confirm popups
     result?.cancel()
     return true
   }
@@ -106,18 +103,14 @@ class TvWebViewClient(
   private val onAdBlockedCallback: ((String) -> Unit)? = null
 ) : WebViewClient() {
 
-  // Comprehensive ad / popunder / redirect / tracking network blacklist
-  private val adKeywords = listOf(
-    "luugy", "popads", "propellerads", "adsterra", "onclick", "exoclick",
-    "doubleclick", "bet365", "1xbet", "trafficjunky", "ad-delivery",
-    "adtrue", "juicyads", "syndication", "histats", "trackvoluum",
-    "monetag", "hilltopads", "richpush", "clickadu", "realsrv",
-    "ero-advertising", "yllix", "adnxs", "googlesyndication", "outbrain",
-    "taboola", "criteo", "mgid", "yadro", "adclick", "adservice",
-    "adnetwork", "directrev", "poppush", "pushnoti", "popunder",
-    "popcash", "adkeeper", "adcash", "adcolony", "inmobi", "vungle",
-    "applovin", "unityads", "cpalead", "ogads", "mgid", "zergnet",
-    "revcontent", "taboola", "trafficstars", "trafficfactory"
+  // Known malicious ad / popunder / redirect domains
+  private val adHostKeywords = listOf(
+    "luugy", "popads", "propellerads", "adsterra", "exoclick",
+    "bet365", "1xbet", "trafficjunky", "ad-delivery",
+    "adtrue", "juicyads", "histats", "trackvoluum", "monetag",
+    "hilltopads", "richpush", "clickadu", "realsrv", "ero-advertising",
+    "yllix", "directrev", "poppush", "pushnoti", "popunder", "popcash",
+    "adkeeper", "adcash", "adcolony", "cpalead", "trafficstars"
   )
 
   override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -145,10 +138,10 @@ class TvWebViewClient(
       return true
     }
 
-    // 3. Check known ad keywords
+    // 3. Check known malicious ad keywords in URL
     val lower = url.lowercase()
     if (isAdBlockEnabled()) {
-      for (ad in adKeywords) {
+      for (ad in adHostKeywords) {
         if (lower.contains(ad)) {
           onAdBlockedCallback?.invoke(url)
           return true // Strictly block ad navigation
@@ -165,7 +158,6 @@ class TvWebViewClient(
       } catch (_: Exception) { "" }
 
       if (host.isNotBlank() && !isAllowedMainFrameHost(host)) {
-        // Intercepted unauthorized main frame popup/redirect
         onAdBlockedCallback?.invoke(host)
         return true // Cancel navigation and keep user on the streaming page
       }
@@ -178,12 +170,54 @@ class TvWebViewClient(
   private fun isAllowedMainFrameHost(host: String): Boolean {
     val clean = host.lowercase()
     // Explicit blacklist check even if spoofed in subdomains
-    if (clean.contains("luugy") || clean.contains("adsterra") || clean.contains("propeller") || clean.contains("popads")) {
+    if (clean.contains("luugy") || clean.contains("adsterra") || clean.contains("propeller") || clean.contains("popads") || clean.contains("bet365") || clean.contains("1xbet")) {
       return false
     }
 
+    return isStreamingOrCdnHost(clean) ||
+      clean.contains("player") ||
+      clean.contains("embed")
+  }
+
+  private fun isStreamingOrCdnHost(host: String): Boolean {
+    val clean = host.lowercase()
     return clean.contains("watchseries") ||
       clean.contains("topcinema") ||
+      clean.contains("vidfast") ||
+      clean.contains("videasy") ||
+      clean.contains("vidrock") ||
+      clean.contains("vidup") ||
+      clean.contains("mapple") ||
+      clean.contains("vidlink") ||
+      clean.contains("vidsrc") ||
+      clean.contains("2embed") ||
+      clean.contains("autoembed") ||
+      clean.contains("superembed") ||
+      clean.contains("smashystream") ||
+      clean.contains("apiplayer") ||
+      clean.contains("vidcore") ||
+      clean.contains("yapgrid") ||
+      clean.contains("111movies") ||
+      clean.contains("nontongo") ||
+      clean.contains("peachify") ||
+      clean.contains("xpass") ||
+      clean.contains("vidzee") ||
+      clean.contains("vidtube") ||
+      clean.contains("streamwish") ||
+      clean.contains("filelions") ||
+      clean.contains("filemoon") ||
+      clean.contains("dood") ||
+      clean.contains("updown") ||
+      clean.contains("byse") ||
+      clean.contains("firestream") ||
+      clean.contains("streamtape") ||
+      clean.contains("mp4upload") ||
+      clean.contains("rabbitstream") ||
+      clean.contains("mixdrop") ||
+      clean.contains("boredflix") ||
+      clean.contains("flixbaba") ||
+      clean.contains("moviepire") ||
+      clean.contains("cinegram") ||
       clean.contains("themoviedb.org") ||
       clean.contains("tmdb.org") ||
       clean.contains("opensubtitles") ||
@@ -191,16 +225,10 @@ class TvWebViewClient(
       clean.contains("google.com") ||
       clean.contains("recaptcha") ||
       clean.contains("hcaptcha") ||
-      clean.contains("vidcloud") ||
-      clean.contains("upcloud") ||
-      clean.contains("megacloud") ||
-      clean.contains("streamwish") ||
-      clean.contains("filemoon") ||
-      clean.contains("dood") ||
-      clean.contains("streamtape") ||
-      clean.contains("mp4upload") ||
-      clean.contains("rabbitstream") ||
-      clean.contains("mixdrop")
+      clean.contains("flagsapi") ||
+      clean.contains("wsrv.nl") ||
+      clean.contains("gstatic") ||
+      clean.contains("googletagmanager")
   }
 
   override fun onReceivedSslError(
@@ -229,14 +257,21 @@ class TvWebViewClient(
     request: WebResourceRequest?
   ): WebResourceResponse? {
     if (isAdBlockEnabled()) {
-      val url = request?.url?.toString()?.lowercase() ?: return null
-      for (ad in adKeywords) {
-        if (url.contains(ad)) {
-          // Return empty response to drop the ad request immediately
+      val uri = request?.url ?: return null
+      val host = uri.host?.lowercase() ?: ""
+
+      // Never block any sub-resource from valid streaming servers, video CDNs, or APIs!
+      if (isStreamingOrCdnHost(host)) {
+        return super.shouldInterceptRequest(view, request)
+      }
+
+      // Only drop actual malicious ad host requests
+      for (ad in adHostKeywords) {
+        if (host.contains(ad)) {
           return WebResourceResponse(
-            "text/plain",
+            "application/javascript",
             "UTF-8",
-            ByteArrayInputStream(ByteArray(0))
+            ByteArrayInputStream("/*ad blocked*/".toByteArray())
           )
         }
       }
@@ -246,13 +281,19 @@ class TvWebViewClient(
 
   override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
     super.onPageStarted(view, url, favicon)
-    // Pre-emptive anti-popup neutralization before page scripts can execute
     val preInjectJs = """
       (function() {
         try {
-          window.open = function() {
-            console.log('Prevented window.open popup');
-            return null;
+          var safeDummyWindow = {
+            closed: false,
+            focus: function() {},
+            close: function() {},
+            location: { href: '' },
+            document: { write: function() {}, open: function() {}, close: function() {} }
+          };
+          window.open = function(u) {
+            console.log('Safe window.open handled: ' + u);
+            return safeDummyWindow;
           };
           window.alert = function() { return true; };
           window.confirm = function() { return false; };
@@ -270,74 +311,59 @@ class TvWebViewClient(
       return
     }
 
-    // Neutralize aggressive ad overlays, kill transparent clickjacking layers, and enforce popup suppression
-    val clearAdOverlaysJs = """
+    val enhancePlayerJs = """
       (function() {
-        function clean() {
-          // 1. Prevent window.open
-          window.open = function(u) {
-            console.log('Blocked popup to: ' + u);
-            return null;
-          };
-
-          // 2. Remove obvious transparent popunder or ad hijacking layers
-          var badSelectors = [
-            'iframe[src*="ad"]', 'iframe[src*="pop"]', 'iframe[src*="bet"]',
-            'iframe[src*="luugy"]', 'iframe[src*="propeller"]', 'iframe[src*="onclick"]',
-            'div[class*="popunder"]', 'div[id*="popunder"]', 'div[class*="ad-overlay"]',
-            'div[style*="z-index: 2147483647"]', 'div[style*="z-index: 999999"]',
-            'a[href*="luugy"]', 'a[href*="onclick"]', 'a[href*="adsterra"]'
-          ];
+        function setupPlayers() {
+          // 1. Remove standalone ad overlays not part of video player
           try {
-            document.querySelectorAll(badSelectors.join(',')).forEach(function(el) {
-              if (!el.closest('.player--iframe') && !el.closest('.watch--area') && !el.closest('#player') && !el.closest('video')) {
+            var ads = document.querySelectorAll('a[href*="luugy"], a[href*="adsterra"], a[href*="propeller"], div[id*="popunder"]');
+            ads.forEach(function(el) {
+              if (!el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('.player--iframe')) {
                 el.remove();
               }
             });
           } catch(e) {}
 
-          // 3. Intercept malicious click-jacking on link tags
-          document.addEventListener('click', function(e) {
-            var target = e.target;
-            while (target && target.tagName !== 'A' && target.tagName !== 'BODY') {
-              target = target.parentElement;
-            }
-            if (target && target.tagName === 'A' && target.href) {
-              var h = target.href.toLowerCase();
-              if (h.indexOf('luugy') !== -1 || h.indexOf('onclick') !== -1 || h.indexOf('adsterra') !== -1 || h.indexOf('propeller') !== -1) {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log('Blocked malicious ad click');
-                return false;
+          // 2. Ensure all server lists, player containers, and buttons are responsive
+          try {
+            var clickableItems = document.querySelectorAll(
+              '.servers .server-item, .server--item, .watch--servers--list li, ' +
+              '#movie-player, #player, .movie-player-wrap, .btn-play, ' +
+              '.player--iframe, iframe'
+            );
+            clickableItems.forEach(function(el) {
+              el.style.pointerEvents = 'auto';
+            });
+
+            // 3. Make server buttons on TopCinema explicitly trigger server switch on click
+            var tcServers = document.querySelectorAll('.watch--servers--list li.server--item');
+            tcServers.forEach(function(item) {
+              item.style.cursor = 'pointer';
+              if (!item.getAttribute('data-tc-ready')) {
+                item.setAttribute('data-tc-ready', 'true');
+                item.addEventListener('click', function() {
+                  console.log('Selected TopCinema server: ' + item.innerText);
+                });
               }
-            }
-          }, true);
+            });
 
-          // 4. Ensure legitimate video players, iframes, watch buttons and servers remain 100% interactive
-          var interactiveEls = document.querySelectorAll(
-            '#player, .player--iframe, iframe, .watch--area, .watch--servers--list, ' +
-            'a.watch, a.watchAndDownlaod, a[href*="/watch/"], .Som--Info, .Watch--Movie, ' +
-            '.Small--Box, .recent--block, ul.WatchServers, .server--item'
-          );
-          for (var j = 0; j < interactiveEls.length; j++) {
-            interactiveEls[j].style.pointerEvents = 'auto';
-          }
-
-          // 5. If on a watch/player page, smoothly bring the player area into focus
-          if (window.location.href.indexOf('/watch') !== -1 || window.location.href.indexOf('embed') !== -1) {
-            var playerEl = document.querySelector('.player--iframe, iframe[src*="embed"], #player, .watch--servers--list');
-            if (playerEl) {
-              playerEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            // 4. Ensure .btn-play on WatchSeries starts playback smoothly
+            var playBtn = document.querySelector('.btn-play');
+            if (playBtn && !playBtn.getAttribute('data-app-ready')) {
+              playBtn.setAttribute('data-app-ready', 'true');
+              playBtn.style.cursor = 'pointer';
+              playBtn.style.pointerEvents = 'auto';
             }
-          }
+          } catch(e) {}
         }
-        clean();
-        setTimeout(clean, 1000);
-        setTimeout(clean, 2500);
+
+        setupPlayers();
+        setTimeout(setupPlayers, 1000);
+        setTimeout(setupPlayers, 3000);
       })();
     """.trimIndent()
     try {
-      view?.evaluateJavascript(clearAdOverlaysJs, null)
+      view?.evaluateJavascript(enhancePlayerJs, null)
     } catch (_: Exception) {}
 
     onPageFinishedCallback(url)
