@@ -131,11 +131,21 @@ class TvKeyHandler(
         }
         return true
       }
-      KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+      KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_BUTTON_A -> {
         if (isDown) {
           simulateClickAt(cursorX, cursorY)
         }
         return true
+      }
+      KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+        val webView = getWebView()
+        if (webView != null && webView.hasFocus()) {
+          if (isDown) {
+            simulateClickAt(cursorX, cursorY)
+          }
+          return true
+        }
+        return false
       }
     }
     return false

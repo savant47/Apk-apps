@@ -1,52 +1,73 @@
 package com.example.ui
 
 import android.app.Activity
-import android.content.Context
+import android.content.res.Configuration
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.data.MediaCatalogRepository
+import com.example.data.AppDisplayMode
 import com.example.data.TvPreferencesRepository
 import com.example.model.ControlMode
-import com.example.model.MediaItem
 import com.example.model.StreamingPortal
 import com.example.tv.TvKeyHandler
 import com.example.tv.TvWebChromeClient
 import com.example.tv.TvWebViewClient
-import com.example.ui.home.TvHomeScreen
-import com.example.ui.player.TvMediaPlayerScreen
-import com.example.ui.search.TvSearchScreen
 import com.example.ui.theme.CinemaDarkBackground
+import com.example.ui.theme.CinemaPrimary
+import com.example.ui.theme.CinemaSecondary
+
+interface KeyEventProvider {
+  fun setKeyEventCallback(callback: ActivityKeyEventCallback?)
+}
+
+fun interface ActivityKeyEventCallback {
+  fun onDispatchKeyEvent(event: KeyEvent): Boolean
+}
 
 @Composable
 fun MainScreen(
@@ -55,34 +76,39 @@ fun MainScreen(
 ) {
   val context = LocalContext.current
   val activity = context as? Activity
+  val configuration = LocalConfiguration.current
+  val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
 
-  // Active Screen & Player State
-  var currentDestination by remember { mutableStateOf(TvNavDestination.HOME) }
-  var activePlayerMedia by remember { mutableStateOf<MediaItem?>(null) }
-  var activeResumePosition by remember { mutableLongStateOf(0L) }
+  // Display Mode & Dialogs
+  val displayMode by repository.displayModeFlow.collectAsState()
+  var showDisplayModeDialog by remember { mutableStateOf(false) }
+  var showAdBlockDialog by remember { mutableStateOf(false) }
+  var showFavoritesDialog by remember { mutableStateOf(false) }
+  var showHistoryDialog by remember { mutableStateOf(false) }
+  var showGuideDialog by remember { mutableStateOf(false) }
+  var showSubtitlesDialog by remember { mutableStateOf(false) }
+  var isHomeActive by remember { mutableStateOf(true) }
 
-  // Web State
+  // Portal & Control Mode
   var activePortal by remember { mutableStateOf(repository.getActivePortal()) }
   var controlMode by remember { mutableStateOf(repository.getControlMode()) }
+
+  // Web State
   var isBarVisible by remember { mutableStateOf(true) }
   var isFullscreenVideo by remember { mutableStateOf(false) }
   var loadingProgress by remember { mutableIntStateOf(0) }
   var pageTitle by remember { mutableStateOf("") }
-  var currentUrl by remember { mutableStateOf(activePortal.homeUrl) }
+  var currentUrl by remember {
+    mutableStateOf(activePortal.homeUrl.replace("topcinema.site", "topcinema.io"))
+  }
 
   // Virtual Mouse Coordinates
   var cursorX by remember { mutableFloatStateOf(960f) }
   var cursorY by remember { mutableFloatStateOf(540f) }
 
-  // Dialog States
-  var showFavoritesDialog by remember { mutableStateOf(false) }
-  var showHistoryDialog by remember { mutableStateOf(false) }
-  var showGuideDialog by remember { mutableStateOf(false) }
-
-  // Data
+  // Data from Preferences
   val bookmarks by repository.bookmarksFlow.collectAsState()
   val history by repository.historyFlow.collectAsState()
-  val watchProgress by repository.watchProgressFlow.collectAsState()
 
   // References
   var webViewRef by remember { mutableStateOf<WebView?>(null) }
@@ -90,8 +116,9 @@ fun MainScreen(
   var webChromeClientRef by remember { mutableStateOf<TvWebChromeClient?>(null) }
 
   var lastBackPressTime by remember { mutableStateOf(0L) }
+  var webViewRecreateKey by remember { mutableIntStateOf(0) }
 
-  // Key Handler for Android TV / BeoutQ Remote
+  // Key Handler for Android TV Remote / D-pad / Keyboard
   val tvKeyHandler = remember {
     TvKeyHandler(
       getWebView = { webViewRef },
@@ -114,12 +141,11 @@ fun MainScreen(
         cursorY = y
       },
       onBackHandled = {
-        if (activePlayerMedia != null) {
-          activePlayerMedia = null
-          activeResumePosition = 0L
+        if (showDisplayModeDialog) {
+          showDisplayModeDialog = false
           true
-        } else if (webChromeClientRef?.isCustomViewShowing() == true) {
-          webChromeClientRef?.onHideCustomView()
+        } else if (showAdBlockDialog) {
+          showAdBlockDialog = false
           true
         } else if (showFavoritesDialog) {
           showFavoritesDialog = false
@@ -130,356 +156,552 @@ fun MainScreen(
         } else if (showGuideDialog) {
           showGuideDialog = false
           true
-        } else if (currentDestination != TvNavDestination.HOME) {
-          currentDestination = TvNavDestination.HOME
+        } else if (showSubtitlesDialog) {
+          showSubtitlesDialog = false
           true
-        } else if (currentDestination == TvNavDestination.DIRECT_WEB && webViewRef?.canGoBack() == true) {
-          webViewRef?.goBack()
+        } else if (webChromeClientRef?.isCustomViewShowing() == true) {
+          webChromeClientRef?.onHideCustomView()
+          true
+        } else if (!isHomeActive) {
+          if (webViewRef?.canGoBack() == true) {
+            webViewRef?.goBack()
+          } else {
+            isHomeActive = true
+          }
           true
         } else {
           val now = System.currentTimeMillis()
           if (now - lastBackPressTime < 2500) {
             activity?.finish()
+            true
           } else {
             lastBackPressTime = now
-            Toast.makeText(context, "اضغط Back مرة أخرى للخروج من التطبيق", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "اضغط مرة أخرى للخروج من التطبيق", Toast.LENGTH_SHORT).show()
+            true
           }
-          true
         }
       }
     )
   }
 
-  // Intercept Key Events from Activity
-  DisposableEffect(Unit) {
-    activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-    val callback = object : ActivityKeyEventCallback {
-      override fun onDispatchKeyEvent(event: KeyEvent): Boolean {
-        // If in Web mode with virtual mouse, allow custom remote key interception
-        if (currentDestination == TvNavDestination.DIRECT_WEB && controlMode == ControlMode.VIRTUAL_MOUSE) {
-          if (tvKeyHandler.handleKeyEvent(event)) return true
-        }
-        if (event.action == KeyEvent.ACTION_DOWN) {
-          if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-            return tvKeyHandler.handleKeyEvent(event)
-          }
-          if (event.keyCode == KeyEvent.KEYCODE_MENU) {
-            isBarVisible = !isBarVisible
-            return true
-          }
-        }
-        return false
-      }
+  // Hook Activity KeyEvent to TV Key Handler
+  DisposableEffect(activity) {
+    val keyEventProvider = activity as? KeyEventProvider
+    keyEventProvider?.setKeyEventCallback { event ->
+      tvKeyHandler.handleKeyEvent(event)
     }
-    (activity as? KeyEventProvider)?.setKeyEventCallback(callback)
-
     onDispose {
-      (activity as? KeyEventProvider)?.setKeyEventCallback(null)
+      keyEventProvider?.setKeyEventCallback(null)
     }
   }
 
-  Box(
-    modifier = modifier
-      .fillMaxSize()
-      .background(CinemaDarkBackground)
-      .onGloballyPositioned { coordinates ->
-        val width = coordinates.size.width.toFloat()
-        val height = coordinates.size.height.toFloat()
-        tvKeyHandler.updateScreenBounds(width, height)
+  // Compose BackHandler for Mobile & System gesture back
+  BackHandler {
+    if (showDisplayModeDialog) {
+      showDisplayModeDialog = false
+    } else if (showFavoritesDialog) {
+      showFavoritesDialog = false
+    } else if (showHistoryDialog) {
+      showHistoryDialog = false
+    } else if (showGuideDialog) {
+      showGuideDialog = false
+    } else if (showSubtitlesDialog) {
+      showSubtitlesDialog = false
+    } else if (webChromeClientRef?.isCustomViewShowing() == true) {
+      webChromeClientRef?.onHideCustomView()
+    } else if (!isHomeActive) {
+      if (webViewRef?.canGoBack() == true) {
+        webViewRef?.goBack()
+      } else {
+        isHomeActive = true
       }
-  ) {
-    // Check if player is currently active
-    val currentMedia = activePlayerMedia
-    if (currentMedia != null) {
-      TvMediaPlayerScreen(
-        mediaItem = currentMedia,
-        initialPositionMs = activeResumePosition,
-        onProgressUpdate = { pos, dur ->
-          repository.saveWatchProgress(currentMedia, pos, dur)
+    } else {
+      val now = System.currentTimeMillis()
+      if (now - lastBackPressTime < 2500) {
+        activity?.finish()
+      } else {
+        lastBackPressTime = now
+        Toast.makeText(context, "اضغط مرة أخرى للخروج من التطبيق", Toast.LENGTH_SHORT).show()
+      }
+    }
+  }
+
+  fun navigateTo(url: String, portal: StreamingPortal? = null, title: String? = null) {
+    val cleanUrl = url.replace("topcinema.site", "topcinema.io")
+    currentUrl = cleanUrl
+    if (title != null) pageTitle = title
+    if (portal != null) {
+      activePortal = portal
+      repository.setActivePortal(portal)
+    }
+    isHomeActive = false
+    webViewRef?.loadUrl(cleanUrl)
+  }
+
+  Scaffold(
+    modifier = modifier.fillMaxSize(),
+    containerColor = CinemaDarkBackground,
+    topBar = {
+      if (!isHomeActive && isBarVisible && !isFullscreenVideo) {
+        TvTopBar(
+          activePortal = activePortal,
+          currentUrl = currentUrl,
+          isBarVisible = isBarVisible,
+          loadingProgress = loadingProgress,
+          pageTitle = pageTitle,
+          isBookmarked = repository.isBookmarked(currentUrl),
+          onGoToHome = { isHomeActive = true },
+          onOpenSubtitles = { showSubtitlesDialog = true },
+          onSearchDirect = { portal, query ->
+            val searchUrl = portal.buildSearchUrl(query)
+            navigateTo(searchUrl, portal, "بحث: $query")
+            Toast.makeText(context, "جاري البحث عن $query في ${portal.displayNameArabic}...", Toast.LENGTH_SHORT).show()
+          },
+          onPortalSelected = { portal ->
+            navigateTo(portal.homeUrl, portal, portal.displayNameArabic)
+          },
+          onHomeClick = {
+            navigateTo(activePortal.homeUrl, activePortal, activePortal.displayNameArabic)
+          },
+          onBackClick = {
+            if (webViewRef?.canGoBack() == true) webViewRef?.goBack()
+            else isHomeActive = true
+          },
+          onForwardClick = {
+            if (webViewRef?.canGoForward() == true) webViewRef?.goForward()
+          },
+          onRefreshClick = {
+            webViewRef?.reload()
+          },
+          onBookmarkClick = {
+            val title = pageTitle.ifBlank { activePortal.displayNameArabic }
+            if (repository.isBookmarked(currentUrl)) {
+              val currentBookmarks = repository.getBookmarks()
+              currentBookmarks.find { it.url == currentUrl }?.let {
+                repository.removeBookmark(it.id)
+                Toast.makeText(context, "تمت الإزالة من المفضلة", Toast.LENGTH_SHORT).show()
+              }
+            } else {
+              repository.addBookmark(title, currentUrl, activePortal)
+              Toast.makeText(context, "تمت الإضافة إلى المفضلة", Toast.LENGTH_SHORT).show()
+            }
+          },
+          onToggleFullscreen = {
+            isBarVisible = !isBarVisible
+            if (!isBarVisible) {
+              Toast.makeText(context, "تم إخفاء الشريط العلوي - اضغط السهم أعلى الشاشة أو زر القائمة لإظهاره", Toast.LENGTH_SHORT).show()
+            }
+          },
+          onOpenGuide = { showGuideDialog = true },
+          onOpenAdBlockSettings = { showAdBlockDialog = true },
+          onToggleBarVisibility = { isBarVisible = !isBarVisible },
+          modifier = if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding() else Modifier
+        )
+      }
+    },
+    bottomBar = {
+      if (!isHomeActive && isBarVisible && !isFullscreenVideo) {
+        TvNavBar(
+          activePortal = activePortal,
+          controlMode = controlMode,
+          currentDisplayMode = displayMode,
+          onGoToHome = { isHomeActive = true },
+          onSelectPortal = { portal ->
+            navigateTo(portal.homeUrl, portal, portal.displayNameArabic)
+          },
+          onOpenBookmarks = { showFavoritesDialog = true },
+          onOpenHistory = { showHistoryDialog = true },
+          onToggleControlMode = {
+            val newMode = if (controlMode == ControlMode.VIRTUAL_MOUSE) ControlMode.DPAD_NAV else ControlMode.VIRTUAL_MOUSE
+            controlMode = newMode
+            repository.setControlMode(newMode)
+            val msg = if (newMode == ControlMode.VIRTUAL_MOUSE) "تم تفعيل وضع الماوس (تحريك بالأسهم + نقر بـ OK)" else "تم تفعيل وضع الأسهم للتصفح والتمرير"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+          },
+          onOpenModeDialog = { showDisplayModeDialog = true },
+          modifier = if (displayMode == AppDisplayMode.MOBILE) Modifier.navigationBarsPadding() else Modifier
+        )
+      }
+    }
+  ) { innerPadding ->
+    if (isHomeActive) {
+      HomeDashboardScreen(
+        repository = repository,
+        onLaunchUrl = { url, portal, title ->
+          navigateTo(url, portal, title)
         },
-        onClosePlayer = {
-          activePlayerMedia = null
-          activeResumePosition = 0L
-        },
-        onOpenInWebPortal = { portalUrl ->
-          activePlayerMedia = null
-          activeResumePosition = 0L
-          currentDestination = TvNavDestination.DIRECT_WEB
-          webViewRef?.loadUrl(portalUrl)
-        },
-        modifier = Modifier.fillMaxSize()
+        onOpenBookmarks = { showFavoritesDialog = true },
+        onOpenHistory = { showHistoryDialog = true },
+        onOpenDisplayMode = { showDisplayModeDialog = true },
+        onOpenAdBlockSettings = { showAdBlockDialog = true },
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(innerPadding)
+          .then(if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding() else Modifier)
       )
     } else {
-      // Main App Layout
-      Column(modifier = Modifier.fillMaxSize()) {
-        // Top Navigation Bar
-        if (isBarVisible) {
-          TvNavBar(
-            currentDestination = currentDestination,
-            onNavigate = { dest ->
-              currentDestination = dest
-              if (dest == TvNavDestination.TOP_CINEMA) {
-                activePortal = StreamingPortal.TOP_CINEMA
-              } else if (dest == TvNavDestination.WATCH_SERIES) {
-                activePortal = StreamingPortal.WATCH_SERIES
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(innerPadding)
+          .background(Color.Black)
+      ) {
+        // Unified AndroidView hosting both WebView and HTML5 Fullscreen container
+        key(webViewRecreateKey) {
+          AndroidView(
+            factory = { ctx ->
+              val rootLayout = FrameLayout(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                )
               }
+
+              val fsContainer = FrameLayout(ctx).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                visibility = View.GONE
+              }
+              fullscreenContainerRef = fsContainer
+
+              val webView = WebView(ctx).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                )
+
+                setBackgroundColor(android.graphics.Color.BLACK)
+                setLayerType(View.LAYER_TYPE_NONE, null)
+
+                isClickable = true
+                isLongClickable = true
+                isFocusable = true
+                isFocusableInTouchMode = true
+                requestFocus()
+
+                // Native touch handling: let WebView scroll freely without continuous Compose state updates
+                setOnTouchListener { _, event ->
+                  if (displayMode == AppDisplayMode.TV && controlMode == ControlMode.VIRTUAL_MOUSE) {
+                    if (event.action == MotionEvent.ACTION_DOWN) {
+                      cursorX = event.x
+                      cursorY = event.y
+                    }
+                  }
+                  false
+                }
+
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                settings.apply {
+                  javaScriptEnabled = true
+                  domStorageEnabled = true
+                  databaseEnabled = true
+                  mediaPlaybackRequiresUserGesture = false
+                  loadWithOverviewMode = true
+                  useWideViewPort = true
+                  allowContentAccess = true
+                  allowFileAccess = true
+                  setSupportZoom(true)
+                  builtInZoomControls = true
+                  displayZoomControls = false
+                  javaScriptCanOpenWindowsAutomatically = false
+                  setSupportMultipleWindows(false)
+                  mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                  cacheMode = WebSettings.LOAD_DEFAULT
+
+                  userAgentString = if (displayMode == AppDisplayMode.MOBILE) {
+                    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+                  } else {
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                  }
+                }
+
+                val chromeClient = TvWebChromeClient(
+                  fullscreenContainer = fsContainer,
+                  onFullscreenChanged = { isFs ->
+                    isFullscreenVideo = isFs
+                    isBarVisible = !isFs
+                  },
+                  onProgressUpdate = { p -> loadingProgress = p },
+                  onTitleUpdate = { t -> pageTitle = t }
+                )
+                webChromeClientRef = chromeClient
+                webChromeClient = chromeClient
+
+                webViewClient = TvWebViewClient(
+                  isAdBlockEnabled = { repository.isAdBlockEnabled() },
+                  onPageFinishedCallback = { url ->
+                    currentUrl = url
+                    val detected = StreamingPortal.fromUrl(url)
+                    activePortal = detected
+                    repository.setActivePortal(detected)
+                    val title = pageTitle.ifBlank { url }
+                    repository.addHistory(title, url, detected)
+                  },
+                  onRenderProcessGoneCallback = {
+                    webViewRecreateKey++
+                  },
+                  onAdBlockedCallback = { blockedHostOrUrl ->
+                    Toast.makeText(context, "🚫 تم منع إعلان منبثق ($blockedHostOrUrl)", Toast.LENGTH_SHORT).show()
+                  }
+                )
+
+                val rawUrl = if (currentUrl.isNotBlank() && currentUrl.startsWith("http")) currentUrl else activePortal.homeUrl
+                val targetUrl = rawUrl.replace("topcinema.site", "topcinema.io")
+                loadUrl(targetUrl)
+              }
+
+              webViewRef = webView
+              rootLayout.addView(webView)
+              rootLayout.addView(fsContainer)
+              rootLayout
             },
-            onOpenBookmarks = { showFavoritesDialog = true },
-            onOpenHistory = { showHistoryDialog = true },
-            onOpenRemoteGuide = { showGuideDialog = true }
+            update = { _ ->
+              // Intentionally empty: all URL loads are handled explicitly via navigateTo() to eliminate freeze/reload loops
+            },
+            modifier = Modifier.fillMaxSize()
           )
         }
 
-        // Content Area based on Destination
-        Box(
-          modifier = Modifier
-            .fillMaxWidth()
-            .weight(1f)
-        ) {
-          when (currentDestination) {
-            TvNavDestination.HOME,
-            TvNavDestination.TOP_CINEMA,
-            TvNavDestination.WATCH_SERIES -> {
-              TvHomeScreen(
-                onPlayMedia = { item, resumePosition ->
-                  activePlayerMedia = item
-                  activeResumePosition = resumePosition
-                },
-                onOpenPortalUrl = { url ->
-                  currentDestination = TvNavDestination.DIRECT_WEB
-                  webViewRef?.loadUrl(url)
-                },
-                isBookmarked = { url -> repository.isBookmarked(url) },
-                onToggleBookmark = { item ->
-                  if (repository.isBookmarked(item.portalUrl)) {
-                    val b = repository.getBookmarks().find { it.url == item.portalUrl }
-                    if (b != null) repository.removeBookmark(b.id)
-                    Toast.makeText(context, "تمت الإزالة من المفضلة", Toast.LENGTH_SHORT).show()
-                  } else {
-                    repository.addBookmark(item.arabicTitle, item.portalUrl, item.portal)
-                    Toast.makeText(context, "تمت الإضافة إلى المفضلة ★", Toast.LENGTH_SHORT).show()
-                  }
-                },
-                recentlyWatched = watchProgress,
-                onRemoveRecent = { id -> repository.removeWatchProgress(id) },
-                onClearAllRecents = {
-                  repository.clearWatchHistory()
-                  Toast.makeText(context, "تم مسح سجل المشاهدة", Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.fillMaxSize()
-              )
-            }
+        // Quick Player Jump Button: appears on TopCinema and WatchSeries DudeBar media pages
+        val isTopCinemaMedia = activePortal == StreamingPortal.TOP_CINEMA &&
+          (currentUrl.contains("مسلسل") || currentUrl.contains("حلقة") || currentUrl.contains("فيلم") || currentUrl.contains("mobland", ignoreCase = true) || currentUrl.contains("%d9%85%d8%b3"))
+        val isWatchSeriesMedia = activePortal == StreamingPortal.WATCH_SERIES &&
+          (currentUrl.contains("/tv/") || currentUrl.contains("/movie/") || currentUrl.contains("/watch/"))
+        val isOnWatchPage = currentUrl.contains("/watch")
 
-            TvNavDestination.SEARCH -> {
-              TvSearchScreen(
-                onSelectMedia = { item ->
-                  activePlayerMedia = item
-                  activeResumePosition = 0L
-                },
-                modifier = Modifier.fillMaxSize()
-              )
-            }
-
-            TvNavDestination.DIRECT_WEB -> {
-              // Direct Hardware-Accelerated Web Portal
-              Box(modifier = Modifier.fillMaxSize()) {
-                AndroidView(
-                  factory = { ctx ->
-                    WebView(ctx).apply {
-                      layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                      )
-
-                      settings.apply {
-                        javaScriptEnabled = true
-                        domStorageEnabled = true
-                        databaseEnabled = true
-                        mediaPlaybackRequiresUserGesture = false
-                        loadWithOverviewMode = true
-                        useWideViewPort = true
-                        allowContentAccess = true
-                        allowFileAccess = true
-                        setSupportZoom(true)
-                        builtInZoomControls = true
-                        displayZoomControls = false
-                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        cacheMode = WebSettings.LOAD_DEFAULT
-                        userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 AndroidTV QS285"
-                      }
-
-                      isFocusable = true
-                      isFocusableInTouchMode = true
-                      requestFocus()
-
-                      webViewClient = TvWebViewClient(
-                        isAdBlockEnabled = { repository.isAdBlockEnabled() },
-                        onPageFinishedCallback = { url ->
-                          currentUrl = url
-                          val detected = StreamingPortal.fromUrl(url)
-                          activePortal = detected
-                          repository.setActivePortal(detected)
-                          repository.addHistory(title ?: url, url, detected)
-                        }
-                      )
-
-                      webViewRef = this
-                      loadUrl(activePortal.homeUrl)
-                    }
-                  },
-                  modifier = Modifier.fillMaxSize()
+        if (!isHomeActive && (isTopCinemaMedia || isWatchSeriesMedia) && !isFullscreenVideo) {
+          FloatingActionButton(
+            onClick = {
+              if (isWatchSeriesMedia) {
+                // Smoothly focus the WatchSeries DudeBar player and seasons/episodes
+                webViewRef?.evaluateJavascript(
+                  """
+                  (function() {
+                    var el = document.querySelector('#player, #iframe-embed, .player-embed, .seasons, .servers-list, iframe[src*="embed"], iframe');
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Attempt to click CC button on the player controls if available
+                    var cc = document.querySelector('.jw-icon-cc, .vjs-subs-caps-button, button[aria-label*="Captions"], button[aria-label*="Subtitles"], .art-control-subtitle');
+                    if (cc) cc.click();
+                  })();
+                  """.trimIndent(),
+                  null
                 )
-
-                // Fullscreen Video Container for HTML5 Web players
-                AndroidView(
-                  factory = { ctx ->
-                    FrameLayout(ctx).apply {
-                      layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                      )
-                      visibility = View.GONE
-                      fullscreenContainerRef = this
-
-                      webViewRef?.let { wv ->
-                        val chromeClient = TvWebChromeClient(
-                          fullscreenContainer = this,
-                          onFullscreenChanged = { isFs ->
-                            isFullscreenVideo = isFs
-                            isBarVisible = !isFs
-                          },
-                          onProgressUpdate = { p -> loadingProgress = p },
-                          onTitleUpdate = { t -> pageTitle = t }
-                        )
-                        webChromeClientRef = chromeClient
-                        wv.webChromeClient = chromeClient
-                      }
-                    }
-                  },
-                  modifier = Modifier.fillMaxSize()
+                Toast.makeText(context, "تم التركيز على مشغل WatchSeries DudeBar ومواسم المسلسل 📺", Toast.LENGTH_SHORT).show()
+              } else if (isOnWatchPage) {
+                // Focus and center the video player iframe on TopCinema
+                webViewRef?.evaluateJavascript(
+                  """
+                  (function() {
+                    var el = document.querySelector('.player--iframe, iframe[src*="embed"], #player, .watch--servers--list');
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  })();
+                  """.trimIndent(),
+                  null
                 )
-
-                // Virtual Mouse Overlay (when in mouse mode)
-                VirtualMouseOverlay(
-                  controlMode = controlMode,
-                  cursorX = cursorX,
-                  cursorY = cursorY
-                )
-
-                // Floating Web Controller
-                if (!isFullscreenVideo) {
-                  TvTopBar(
-                    activePortal = activePortal,
-                    controlMode = controlMode,
-                    isBarVisible = isBarVisible,
-                    loadingProgress = loadingProgress,
-                    pageTitle = pageTitle,
-                    isBookmarked = repository.isBookmarked(currentUrl),
-                    onPortalSelected = { portal ->
-                      activePortal = portal
-                      repository.setActivePortal(portal)
-                      webViewRef?.loadUrl(portal.homeUrl)
-                    },
-                    onHomeClick = { webViewRef?.loadUrl(activePortal.homeUrl) },
-                    onBackClick = {
-                      if (webViewRef?.canGoBack() == true) webViewRef?.goBack()
-                      else Toast.makeText(context, "أنت في أول صفحة", Toast.LENGTH_SHORT).show()
-                    },
-                    onForwardClick = { if (webViewRef?.canGoForward() == true) webViewRef?.goForward() },
-                    onRefreshClick = { webViewRef?.reload() },
-                    onToggleControlMode = {
-                      val newMode = if (controlMode == ControlMode.VIRTUAL_MOUSE) ControlMode.DPAD_NAV else ControlMode.VIRTUAL_MOUSE
-                      controlMode = newMode
-                      repository.setControlMode(newMode)
-                      val msg = if (newMode == ControlMode.VIRTUAL_MOUSE) "وضع الماوس مفعّل: استخدم الأسهم للتحريك و OK للنقر" else "وضع الأسهم مفعّل للتنقل والتمرير"
-                      Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                    },
-                    onBookmarkClick = {
-                      val title = webViewRef?.title ?: pageTitle
-                      repository.addBookmark(title, currentUrl, activePortal)
-                      Toast.makeText(context, "تمت الإضافة إلى المفضلة ★", Toast.LENGTH_SHORT).show()
-                    },
-                    onOpenBookmarks = { showFavoritesDialog = true },
-                    onOpenHistory = { showHistoryDialog = true },
-                    onZoomIn = { webViewRef?.zoomIn() },
-                    onZoomOut = { webViewRef?.zoomOut() },
-                    onToggleFullscreen = { isBarVisible = !isBarVisible },
-                    onOpenGuide = { showGuideDialog = true },
-                    onToggleBarVisibility = { isBarVisible = !isBarVisible }
-                  )
-                }
+                Toast.makeText(context, "تم التركيز على مشغل الفيديو والسيرفرات", Toast.LENGTH_SHORT).show()
+              } else {
+                // Jump to the direct streaming /watch/ page
+                val cleanBase = currentUrl.trimEnd('/')
+                val watchUrl = "$cleanBase/watch/"
+                navigateTo(watchUrl, StreamingPortal.TOP_CINEMA, pageTitle)
+                Toast.makeText(context, "جاري فتح مشغل الفيديو وسيرفرات المشاهدة...", Toast.LENGTH_SHORT).show()
               }
+            },
+            containerColor = if (isWatchSeriesMedia) CinemaSecondary else CinemaPrimary,
+            contentColor = Color.White,
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+              .align(Alignment.BottomEnd)
+              .padding(end = 24.dp, bottom = if (isBarVisible) 80.dp else 24.dp)
+              .testTag("btn_jump_to_watch_player")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(24.dp)
+              )
+              Text(
+                text = if (isWatchSeriesMedia) "المشغل والترجمة [CC] 🎬" else if (isOnWatchPage) "تركيز على المشغل 🎬" else "مشاهدة الآن / المشغل 🎬",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+              )
             }
           }
         }
+
+        // Non-blocking Virtual Mouse Pointer (small 36dp Canvas, never blocks touch events)
+        if (displayMode == AppDisplayMode.TV && controlMode == ControlMode.VIRTUAL_MOUSE) {
+          VirtualMouseOverlay(
+            controlMode = controlMode,
+            cursorX = cursorX,
+            cursorY = cursorY,
+            modifier = Modifier.align(Alignment.TopStart)
+          )
+        }
       }
     }
-
-    // Global Dialogs
-    if (showFavoritesDialog) {
-      FavoritesDialog(
-        bookmarks = bookmarks,
-        onSelectBookmark = { item ->
-          currentDestination = TvNavDestination.DIRECT_WEB
-          activePortal = item.portal
-          webViewRef?.loadUrl(item.url)
-        },
-        onRemoveBookmark = { id -> repository.removeBookmark(id) },
-        onDismiss = { showFavoritesDialog = false }
-      )
-    }
-
-    if (showHistoryDialog) {
-      HistoryDialog(
-        history = history,
-        recentlyWatched = watchProgress,
-        onResumeMedia = { item ->
-          val fullItem = MediaCatalogRepository.findById(item.mediaId) ?: MediaItem(
-            id = item.mediaId,
-            title = item.title,
-            arabicTitle = item.arabicTitle,
-            portal = item.portal,
-            category = item.category,
-            genres = listOf("أكشن"),
-            year = 2024,
-            rating = item.rating,
-            qualityBadge = item.qualityBadge,
-            duration = item.arabicTitle,
-            description = item.arabicTitle,
-            posterUrl = item.posterUrl,
-            backdropUrl = item.backdropUrl,
-            portalUrl = item.portalUrl,
-            defaultStreamUrl = item.defaultStreamUrl
-          )
-          activePlayerMedia = fullItem
-          activeResumePosition = item.positionMs
-        },
-        onRemoveRecent = { id -> repository.removeWatchProgress(id) },
-        onClearRecents = {
-          repository.clearWatchHistory()
-          Toast.makeText(context, "تم مسح سجل المشاهدة", Toast.LENGTH_SHORT).show()
-        },
-        onSelectEntry = { entry ->
-          currentDestination = TvNavDestination.DIRECT_WEB
-          activePortal = entry.portal
-          webViewRef?.loadUrl(entry.url)
-        },
-        onClearHistory = { repository.clearHistory() },
-        onDismiss = { showHistoryDialog = false }
-      )
-    }
-
-    if (showGuideDialog) {
-      RemoteGuideDialog(onDismiss = { showGuideDialog = false })
-    }
   }
-}
 
-interface ActivityKeyEventCallback {
-  fun onDispatchKeyEvent(event: KeyEvent): Boolean
-}
+  // Dialogs
+  if (showSubtitlesDialog) {
+    OpenSubtitlesDialog(
+      initialQuery = pageTitle.ifBlank { "Silo" },
+      onDismiss = { showSubtitlesDialog = false },
+      onApplySubtitle = { sub ->
+        showSubtitlesDialog = false
+        val jsInject = """
+          (function() {
+            var applied = false;
+            // 1. Direct video in root document
+            var videos = document.querySelectorAll('video');
+            for (var i = 0; i < videos.length; i++) {
+              var v = videos[i];
+              var oldTrack = document.getElementById('cinema-tv-sub-track-' + i);
+              if (oldTrack) oldTrack.remove();
+              var track = document.createElement('track');
+              track.id = 'cinema-tv-sub-track-' + i;
+              track.kind = 'subtitles';
+              track.label = '${sub.languageName}';
+              track.srclang = '${sub.languageCode}';
+              track.src = '${sub.downloadUrl}';
+              track.default = true;
+              v.appendChild(track);
+              track.mode = 'showing';
+              applied = true;
+            }
 
-interface KeyEventProvider {
-  fun setKeyEventCallback(callback: ActivityKeyEventCallback?)
+            // 2. Check accessible iframes (DudeBar / UpCloud / VidCloud / TopCinema players)
+            var iframes = document.querySelectorAll('iframe');
+            for (var j = 0; j < iframes.length; j++) {
+              try {
+                var doc = iframes[j].contentDocument || iframes[j].contentWindow.document;
+                if (doc) {
+                  var ivideos = doc.querySelectorAll('video');
+                  for (var k = 0; k < ivideos.length; k++) {
+                    var iv = ivideos[k];
+                    var iOldTrack = doc.getElementById('cinema-tv-sub-track-' + k);
+                    if (iOldTrack) iOldTrack.remove();
+                    var iTrack = doc.createElement('track');
+                    iTrack.id = 'cinema-tv-sub-track-' + k;
+                    iTrack.kind = 'subtitles';
+                    iTrack.label = '${sub.languageName}';
+                    iTrack.srclang = '${sub.languageCode}';
+                    iTrack.src = '${sub.downloadUrl}';
+                    iTrack.default = true;
+                    iv.appendChild(iTrack);
+                    iTrack.mode = 'showing';
+                    applied = true;
+                  }
+                  // Try triggering CC menu in iframe
+                  var ccBtn = doc.querySelector('.jw-icon-cc, .vjs-subs-caps-button, button[aria-label*="Captions"], button[aria-label*="Subtitles"]');
+                  if (ccBtn) {
+                    ccBtn.click();
+                    applied = true;
+                  }
+                }
+              } catch(e) {}
+            }
+
+            // 3. Trigger CC button in root document if present
+            var rootCc = document.querySelector('.jw-icon-cc, .vjs-subs-caps-button, button[aria-label*="Captions"], button[aria-label*="Subtitles"], .art-control-subtitle');
+            if (rootCc) {
+              rootCc.click();
+              applied = true;
+            }
+
+            return applied ? 'APPLIED' : 'QUEUED';
+          })();
+        """.trimIndent()
+        webViewRef?.evaluateJavascript(jsInject) { res ->
+          val note = if (activePortal == StreamingPortal.WATCH_SERIES) {
+            "تم تفعيل ترجمة ${sub.languageName}! (يمكنك أيضاً النقر على زر [CC] بالمشغل لاختيار العربية فوراً)"
+          } else {
+            "تم تفعيل ترجمة: ${sub.languageName}"
+          }
+          Toast.makeText(context, note, Toast.LENGTH_LONG).show()
+        }
+      }
+    )
+  }
+
+  if (showFavoritesDialog) {
+    FavoritesDialog(
+      bookmarks = bookmarks,
+      onSelectBookmark = { bookmark ->
+        activePortal = bookmark.portal
+        repository.setActivePortal(bookmark.portal)
+        currentUrl = bookmark.url
+        webViewRef?.loadUrl(bookmark.url)
+        showFavoritesDialog = false
+      },
+      onRemoveBookmark = { id -> repository.removeBookmark(id) },
+      onDismiss = { showFavoritesDialog = false }
+    )
+  }
+
+  if (showHistoryDialog) {
+    HistoryDialog(
+      history = history,
+      onSelectEntry = { entry ->
+        activePortal = entry.portal
+        repository.setActivePortal(entry.portal)
+        currentUrl = entry.url
+        webViewRef?.loadUrl(entry.url)
+        showHistoryDialog = false
+      },
+      onRemoveEntry = { id -> repository.removeHistoryEntry(id) },
+      onClearHistory = { repository.clearHistory() },
+      onDismiss = { showHistoryDialog = false }
+    )
+  }
+
+  if (showGuideDialog) {
+    RemoteGuideDialog(onDismiss = { showGuideDialog = false })
+  }
+
+  if (showDisplayModeDialog) {
+    DisplayModeSelectionDialog(
+      currentMode = displayMode,
+      onModeSelected = { mode ->
+        repository.setDisplayMode(mode)
+        showDisplayModeDialog = false
+        // Update user agent to match selected mode
+        webViewRef?.settings?.userAgentString = if (mode == AppDisplayMode.MOBILE) {
+          "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+        } else {
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        }
+        if (mode == AppDisplayMode.TV) {
+          activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+          Toast.makeText(context, "تم التحويل إلى وضع شاشة أندرويد تي في (أفقي 16:9) 📺", Toast.LENGTH_SHORT).show()
+        } else {
+          activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+          Toast.makeText(context, "تم التحويل إلى وضع الهاتف المحمول (رأسي/لمس) 📱", Toast.LENGTH_SHORT).show()
+        }
+        webViewRef?.reload()
+      },
+      onDismiss = { showDisplayModeDialog = false }
+    )
+  }
+
+  if (showAdBlockDialog) {
+    AdBlockSettingsDialog(
+      repository = repository,
+      onDismiss = { showAdBlockDialog = false },
+      onSettingsChanged = {
+        webViewRef?.reload()
+      }
+    )
+  }
 }

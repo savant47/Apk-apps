@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,17 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,101 +39,116 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.AppDisplayMode
+import com.example.model.ControlMode
+import com.example.model.StreamingPortal
 import com.example.ui.theme.CinemaAccent
-import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
 import com.example.ui.theme.CinemaFocusGlow
 import com.example.ui.theme.CinemaPrimary
 import com.example.ui.theme.CinemaSecondary
-import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.CinemaSurfaceVariant
-
-enum class TvNavDestination(val label: String, val icon: ImageVector) {
-  HOME("الرئيسية", Icons.Default.Home),
-  TOP_CINEMA("أفلام توب سينما", Icons.Default.Movie),
-  WATCH_SERIES("مسلسلات ووتش سيريز", Icons.Default.LiveTv),
-  SEARCH("البحث والتصنيف", Icons.Default.Search),
-  DIRECT_WEB("المتصفح المباشر للموقعين", Icons.Default.Language)
-}
 
 @Composable
 fun TvNavBar(
-  currentDestination: TvNavDestination,
-  onNavigate: (TvNavDestination) -> Unit,
+  activePortal: StreamingPortal,
+  controlMode: ControlMode,
+  currentDisplayMode: AppDisplayMode,
+  onGoToHome: () -> Unit,
+  onSelectPortal: (StreamingPortal) -> Unit,
   onOpenBookmarks: () -> Unit,
   onOpenHistory: () -> Unit,
-  onOpenRemoteGuide: () -> Unit,
+  onToggleControlMode: () -> Unit,
+  onOpenModeDialog: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   Box(
     modifier = modifier
       .fillMaxWidth()
-      .height(60.dp)
+      .height(56.dp)
       .background(CinemaDarkBackground)
       .border(width = 1.dp, color = CinemaSurfaceVariant)
-      .padding(horizontal = 24.dp)
+      .padding(horizontal = 8.dp)
   ) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      // App Brand & Navigation Tabs
+      // Home & Direct Portal Switchers: TopCinema & WatchSeries
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
       ) {
-        // App Logo Badge
-        Row(
-          modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(CinemaPrimary.copy(alpha = 0.25f))
-            .border(1.dp, CinemaPrimary, RoundedCornerShape(8.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          Text(text = "CINEMA", color = CinemaPrimary, fontWeight = FontWeight.Black, fontSize = 14.sp)
-          Spacer(modifier = Modifier.width(4.dp))
-          Text(text = "TV", color = CinemaAccent, fontWeight = FontWeight.Black, fontSize = 14.sp)
-        }
+        // Home Button
+        TvNavUtilityButton(
+          label = "الرئيسية",
+          icon = Icons.Default.Tv,
+          activeColor = CinemaAccent,
+          onClick = onGoToHome,
+          testTag = "btn_nav_home"
+        )
 
-        Spacer(modifier = Modifier.width(10.dp))
+        // Button 1: TopCinema
+        TvNavActionButton(
+          label = "توب سينما",
+          subLabel = "TopCinema",
+          icon = Icons.Default.Movie,
+          isSelected = activePortal == StreamingPortal.TOP_CINEMA,
+          activeColor = CinemaPrimary,
+          onClick = { onSelectPortal(StreamingPortal.TOP_CINEMA) },
+          testTag = "btn_nav_topcinema"
+        )
 
-        // Navigation Destinations
-        TvNavDestination.entries.forEach { destination ->
-          TvNavTabButton(
-            destination = destination,
-            isSelected = currentDestination == destination,
-            onClick = { onNavigate(destination) }
-          )
-        }
+        // Button 2: WatchSeries
+        TvNavActionButton(
+          label = "ووتش سيريز",
+          subLabel = "WatchSeries",
+          icon = Icons.Default.LiveTv,
+          isSelected = activePortal == StreamingPortal.WATCH_SERIES,
+          activeColor = CinemaSecondary,
+          onClick = { onSelectPortal(StreamingPortal.WATCH_SERIES) },
+          testTag = "btn_nav_watchseries"
+        )
       }
 
-      // Quick Tools (Bookmarks, History, Remote Guide)
+      // Secondary Utilities: Bookmarks, History, Virtual Mouse, Mode
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
       ) {
-        TvHeaderToolButton(
-          icon = Icons.Default.Bookmark,
+        // Bookmarks
+        TvNavUtilityButton(
           label = "المفضلة",
-          testTag = "nav_bookmarks_btn",
-          onClick = onOpenBookmarks
+          icon = Icons.Default.Bookmark,
+          onClick = onOpenBookmarks,
+          testTag = "btn_nav_bookmarks"
         )
 
-        TvHeaderToolButton(
-          icon = Icons.Default.History,
+        // History
+        TvNavUtilityButton(
           label = "السجل",
-          testTag = "nav_history_btn",
-          onClick = onOpenHistory
+          icon = Icons.Default.History,
+          onClick = onOpenHistory,
+          testTag = "btn_nav_history"
         )
 
-        TvHeaderToolButton(
-          icon = Icons.Default.SettingsRemote,
-          label = "الريموت QS285",
-          testTag = "nav_remote_guide_btn",
-          activeColor = CinemaSecondary,
-          onClick = onOpenRemoteGuide
+        // Virtual Mouse toggle (useful for TV remote navigation)
+        TvNavUtilityButton(
+          label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس: نشط" else "الماوس",
+          icon = Icons.Default.Mouse,
+          isActive = controlMode == ControlMode.VIRTUAL_MOUSE,
+          activeColor = CinemaAccent,
+          onClick = onToggleControlMode,
+          testTag = "btn_nav_mouse"
+        )
+
+        // Mode switch
+        TvNavUtilityButton(
+          label = if (currentDisplayMode == AppDisplayMode.TV) "وضع TV" else "وضع هاتف",
+          icon = Icons.Default.Tv,
+          onClick = onOpenModeDialog,
+          testTag = "btn_nav_mode"
         )
       }
     }
@@ -143,90 +156,102 @@ fun TvNavBar(
 }
 
 @Composable
-fun TvNavTabButton(
-  destination: TvNavDestination,
+private fun TvNavActionButton(
+  label: String,
+  subLabel: String,
+  icon: ImageVector,
   isSelected: Boolean,
-  onClick: () -> Unit
+  activeColor: Color,
+  onClick: () -> Unit,
+  testTag: String
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val isFocused by interactionSource.collectIsFocusedAsState()
 
   Box(
     modifier = Modifier
-      .testTag("nav_tab_${destination.name}")
-      .scale(if (isFocused) 1.08f else 1.0f)
+      .scale(if (isFocused) 1.05f else 1.0f)
       .clip(RoundedCornerShape(8.dp))
       .background(
-        if (isSelected) CinemaPrimary.copy(alpha = 0.35f)
-        else if (isFocused) CinemaFocusGlow.copy(alpha = 0.3f)
-        else Color.Transparent
+        when {
+          isSelected -> activeColor.copy(alpha = 0.25f)
+          isFocused -> CinemaFocusGlow.copy(alpha = 0.2f)
+          else -> Color.Transparent
+        }
       )
       .border(
-        width = if (isSelected || isFocused) 1.5.dp else 0.dp,
-        color = if (isFocused) CinemaFocusGlow else if (isSelected) CinemaPrimary else Color.Transparent,
+        width = if (isFocused) 2.dp else if (isSelected) 1.5.dp else 1.dp,
+        color = if (isFocused) CinemaFocusGlow else if (isSelected) activeColor else CinemaSurfaceVariant,
         shape = RoundedCornerShape(8.dp)
       )
+      .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-      .padding(horizontal = 12.dp, vertical = 7.dp)
-  ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      Icon(
-        imageVector = destination.icon,
-        contentDescription = destination.label,
-        tint = if (isFocused) CinemaFocusGlow else if (isSelected) CinemaAccent else Color.LightGray,
-        modifier = Modifier.size(16.dp)
-      )
-      Spacer(modifier = Modifier.width(6.dp))
-      Text(
-        text = destination.label,
-        color = if (isFocused) CinemaFocusGlow else if (isSelected) Color.White else Color(0xFFD1D5DB),
-        fontSize = 12.sp,
-        fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
-      )
-    }
-  }
-}
-
-@Composable
-fun TvHeaderToolButton(
-  icon: ImageVector,
-  label: String,
-  testTag: String,
-  onClick: () -> Unit,
-  activeColor: Color = CinemaAccent
-) {
-  val interactionSource = remember { MutableInteractionSource() }
-  val isFocused by interactionSource.collectIsFocusedAsState()
-
-  Box(
-    modifier = Modifier
+      .padding(horizontal = 12.dp, vertical = 6.dp)
       .testTag(testTag)
-      .scale(if (isFocused) 1.08f else 1.0f)
-      .clip(RoundedCornerShape(8.dp))
-      .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.25f) else CinemaSurface)
-      .border(
-        width = if (isFocused) 1.5.dp else 1.dp,
-        color = if (isFocused) CinemaFocusGlow else CinemaBorder,
-        shape = RoundedCornerShape(8.dp)
-      )
-      .focusable(interactionSource = interactionSource)
-      .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-      .padding(horizontal = 10.dp, vertical = 6.dp)
   ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       Icon(
         imageVector = icon,
         contentDescription = label,
-        tint = if (isFocused) CinemaFocusGlow else activeColor,
-        modifier = Modifier.size(15.dp)
+        tint = if (isSelected) activeColor else Color.LightGray,
+        modifier = Modifier.size(18.dp)
       )
-      Spacer(modifier = Modifier.width(5.dp))
+      Spacer(modifier = Modifier.width(6.dp))
+      Column {
+        Text(
+          text = label,
+          color = if (isSelected) Color.White else Color.LightGray,
+          fontSize = 12.sp,
+          fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun TvNavUtilityButton(
+  label: String,
+  icon: ImageVector,
+  isActive: Boolean = false,
+  activeColor: Color = CinemaAccent,
+  onClick: () -> Unit,
+  testTag: String
+) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val isFocused by interactionSource.collectIsFocusedAsState()
+
+  Box(
+    modifier = Modifier
+      .scale(if (isFocused) 1.05f else 1.0f)
+      .clip(RoundedCornerShape(8.dp))
+      .background(
+        if (isActive) activeColor.copy(alpha = 0.25f)
+        else if (isFocused) CinemaFocusGlow.copy(alpha = 0.2f)
+        else Color.Transparent
+      )
+      .border(
+        width = if (isFocused) 2.dp else 1.dp,
+        color = if (isFocused) CinemaFocusGlow else if (isActive) activeColor else CinemaSurfaceVariant,
+        shape = RoundedCornerShape(8.dp)
+      )
+      .clickable(interactionSource = interactionSource, indication = null) { onClick() }
+      .focusable(interactionSource = interactionSource)
+      .padding(horizontal = 8.dp, vertical = 6.dp)
+      .testTag(testTag)
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Icon(
+        imageVector = icon,
+        contentDescription = label,
+        tint = if (isActive) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
+        modifier = Modifier.size(16.dp)
+      )
+      Spacer(modifier = Modifier.width(4.dp))
       Text(
         text = label,
-        color = if (isFocused) CinemaFocusGlow else Color.White,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold
+        color = if (isActive) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
+        fontSize = 11.sp
       )
     }
   }

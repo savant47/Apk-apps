@@ -45,91 +45,54 @@ fun VirtualMouseOverlay(
   cursorY: Float,
   modifier: Modifier = Modifier
 ) {
-  AnimatedVisibility(
-    visible = controlMode == ControlMode.VIRTUAL_MOUSE,
-    enter = fadeIn(),
-    exit = fadeOut(),
-    modifier = modifier.fillMaxSize()
+  if (controlMode != ControlMode.VIRTUAL_MOUSE) return
+
+  // Small pointer canvas only covering its own 36x36dp size
+  Canvas(
+    modifier = modifier
+      .size(36.dp)
+      .offset { IntOffset(cursorX.roundToInt(), cursorY.roundToInt()) }
   ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-      // Draw Cursor at cursorX, cursorY
-      val density = LocalDensity.current
-      val cursorXDp = with(density) { cursorX.toDp() }
-      val cursorYDp = with(density) { cursorY.toDp() }
+    // Glowing target halo around pointer
+    drawCircle(
+      color = Color(0x3338BDF8),
+      radius = 16.dp.toPx(),
+      center = Offset(4.dp.toPx(), 4.dp.toPx())
+    )
 
-      Canvas(
-        modifier = Modifier
-          .size(36.dp)
-          .offset { IntOffset(cursorX.roundToInt(), cursorY.roundToInt()) }
-      ) {
-        // Glowing target halo around pointer
-        drawCircle(
-          color = Color(0x3338BDF8),
-          radius = 16.dp.toPx(),
-          center = Offset(4.dp.toPx(), 4.dp.toPx())
-        )
-
-        // Arrow cursor path
-        val path = Path().apply {
-          moveTo(0f, 0f)
-          lineTo(22.dp.toPx(), 14.dp.toPx())
-          lineTo(13.dp.toPx(), 14.dp.toPx())
-          lineTo(18.dp.toPx(), 26.dp.toPx())
-          lineTo(13.dp.toPx(), 28.dp.toPx())
-          lineTo(8.dp.toPx(), 16.dp.toPx())
-          lineTo(0f, 22.dp.toPx())
-          close()
-        }
-
-        // Dark drop shadow
-        drawPath(path = path, color = Color(0xCC000000), style = Stroke(width = 3.dp.toPx()))
-
-        // Bright electric cyan pointer body
-        drawPath(path = path, color = Color(0xFF38BDF8))
-
-        // White inner highlight
-        val innerPath = Path().apply {
-          moveTo(2.dp.toPx(), 2.dp.toPx())
-          lineTo(16.dp.toPx(), 11.dp.toPx())
-          lineTo(10.dp.toPx(), 11.dp.toPx())
-          lineTo(13.dp.toPx(), 19.dp.toPx())
-          close()
-        }
-        drawPath(path = innerPath, color = Color.White)
-
-        // Active center indicator
-        drawCircle(
-          color = Color(0xFFF43F5E),
-          radius = 2.5.dp.toPx(),
-          center = Offset(2.dp.toPx(), 2.dp.toPx())
-        )
-      }
-
-      // Bottom-End Floating Helper HUD
-      Box(
-        modifier = Modifier
-          .align(Alignment.BottomEnd)
-          .padding(end = 16.dp, bottom = 16.dp)
-          .clip(RoundedCornerShape(8.dp))
-          .background(CinemaDarkBackground.copy(alpha = 0.85f))
-          .border(1.dp, CinemaSecondary.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-          .padding(horizontal = 12.dp, vertical = 6.dp)
-      ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Icon(
-            imageVector = Icons.Default.Mouse,
-            contentDescription = null,
-            tint = CinemaAccent,
-            modifier = Modifier.size(16.dp)
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(
-            text = "وضع الماوس: الأسهم للتحريك • OK للنقر",
-            color = Color.White,
-            fontSize = 11.sp
-          )
-        }
-      }
+    // Arrow cursor path
+    val path = Path().apply {
+      moveTo(0f, 0f)
+      lineTo(22.dp.toPx(), 14.dp.toPx())
+      lineTo(13.dp.toPx(), 14.dp.toPx())
+      lineTo(18.dp.toPx(), 26.dp.toPx())
+      lineTo(13.dp.toPx(), 28.dp.toPx())
+      lineTo(8.dp.toPx(), 16.dp.toPx())
+      lineTo(0f, 22.dp.toPx())
+      close()
     }
+
+    // Dark drop shadow
+    drawPath(path = path, color = Color(0xCC000000), style = Stroke(width = 3.dp.toPx()))
+
+    // Bright electric cyan pointer body
+    drawPath(path = path, color = Color(0xFF38BDF8))
+
+    // White inner highlight
+    val innerPath = Path().apply {
+      moveTo(2.dp.toPx(), 2.dp.toPx())
+      lineTo(16.dp.toPx(), 11.dp.toPx())
+      lineTo(10.dp.toPx(), 11.dp.toPx())
+      lineTo(13.dp.toPx(), 19.dp.toPx())
+      close()
+    }
+    drawPath(path = innerPath, color = Color.White)
+
+    // Active center indicator
+    drawCircle(
+      color = Color(0xFFF43F5E),
+      radius = 2.5.dp.toPx(),
+      center = Offset(2.dp.toPx(), 2.dp.toPx())
+    )
   }
 }

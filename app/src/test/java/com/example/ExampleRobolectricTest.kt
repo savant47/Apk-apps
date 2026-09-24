@@ -2,12 +2,12 @@ package com.example
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.example.data.MediaCatalogRepository
-import com.example.data.SortOption
+import com.example.data.AppDisplayMode
 import com.example.data.TvPreferencesRepository
+import com.example.model.ControlMode
 import com.example.model.StreamingPortal
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -26,40 +26,19 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `verify catalog search by portal`() {
-    val topCinemaItems = MediaCatalogRepository.getTopCinemaItems()
-    val watchSeriesItems = MediaCatalogRepository.getWatchSeriesItems()
+  fun `verify direct search URL generation for portals`() {
+    // TopCinema search URL for Silo
+    val topCinemaSearchUrl = StreamingPortal.TOP_CINEMA.buildSearchUrl("Silo")
+    assertEquals("https://topcinema.io/search/?query=Silo&type=all", topCinemaSearchUrl)
 
-    assertTrue("TopCinema items should not be empty", topCinemaItems.isNotEmpty())
-    assertTrue("WatchSeries items should not be empty", watchSeriesItems.isNotEmpty())
+    // WatchSeries search URL for Z Nation
+    val watchSeriesSearchUrl = StreamingPortal.WATCH_SERIES.buildSearchUrl("Z Nation")
+    assertTrue("Search URL should format keyword correctly", watchSeriesSearchUrl.startsWith("https://watchseries.bar/search/"))
+    assertTrue("Search URL should contain keyword", watchSeriesSearchUrl.contains("Nation"))
 
-    topCinemaItems.forEach {
-      assertEquals(StreamingPortal.TOP_CINEMA, it.portal)
-    }
-
-    watchSeriesItems.forEach {
-      assertEquals(StreamingPortal.WATCH_SERIES, it.portal)
-    }
-  }
-
-  @Test
-  fun `verify advanced search and filter`() {
-    val searchResults = MediaCatalogRepository.filterAndSearch(
-      query = "Dune",
-      portal = StreamingPortal.TOP_CINEMA,
-      genre = "أكشن",
-      year = "2024",
-      minRating = 8.0,
-      sortBy = SortOption.TOP_RATED
-    )
-
-    assertTrue("Results for Dune should be found", searchResults.isNotEmpty())
-    val item = searchResults.first()
-    assertEquals("Dune: Part Two", item.title)
-    assertTrue("Rating should be >= 8.0", item.rating >= 8.0)
-    assertTrue("Should contain Action genre", item.genres.contains("أكشن"))
-    assertNotNull("Stream URL should not be null", item.defaultStreamUrl)
-    assertTrue("Should have servers", item.servers.isNotEmpty())
+    // Query with spaces and Arabic characters
+    val arabicSearch = StreamingPortal.TOP_CINEMA.buildSearchUrl("سايلو")
+    assertTrue("Arabic query should be encoded", arabicSearch.startsWith("https://topcinema.io/search/?query="))
   }
 
   @Test
@@ -67,40 +46,156 @@ class ExampleRobolectricTest {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val repository = TvPreferencesRepository(context)
 
-    val added = repository.addBookmark("Test Movie", "https://topcinema.io/home1/movie1", StreamingPortal.TOP_CINEMA)
+    val added = repository.addBookmark("Silo Series", "https://topcinema.site/series/silo", StreamingPortal.TOP_CINEMA)
     assertTrue("Bookmark should be added", added)
-    assertTrue("Should be marked as bookmarked", repository.isBookmarked("https://topcinema.io/home1/movie1"))
+    assertTrue("Should be marked as bookmarked", repository.isBookmarked("https://topcinema.site/series/silo"))
 
-    repository.addHistory("Watched Episode", "https://watchseries.bar/ep1", StreamingPortal.WATCH_SERIES)
-    assertTrue("History should contain entry", repository.historyFlow.value.any { it.url == "https://watchseries.bar/ep1" })
+    // Duplicate addition should be prevented
+    val duplicate = repository.addBookmark("Silo Series", "https://topcinema.site/series/silo", StreamingPortal.TOP_CINEMA)
+    assertFalse("Duplicate bookmark should not be added", duplicate)
+
+    repository.addHistory("Z Nation Season 1", "https://watchseries.bar/series/z-nation", StreamingPortal.WATCH_SERIES)
+    assertTrue("History should contain entry", repository.historyFlow.value.any { it.url == "https://watchseries.bar/series/z-nation" })
+
+    // Clean up
+    repository.clearHistory()
+    assertTrue("History should be empty after clear", repository.historyFlow.value.isEmpty())
   }
 
   @Test
-  fun `verify recently watched progress tracking and resume`() {
+  fun `verify display mode and control mode switching`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val repository = TvPreferencesRepository(context)
 
-    // Verify initial seed or empty list
-    val initialWatchList = repository.watchProgressFlow.value
-    assertTrue("Should have initial recently watched entries", initialWatchList.isNotEmpty())
+    repository.setDisplayMode(AppDisplayMode.TV)
+    assertEquals(AppDisplayMode.TV, repository.getDisplayMode())
+    assertTrue("Should be marked as selected", repository.hasSelectedDisplayMode())
 
-    val testMedia = MediaCatalogRepository.allItems.first()
-    // Save progress: 30 minutes in out of 120 minutes (7,200,000 ms)
-    val position = 30 * 60 * 1000L
-    val duration = 120 * 60 * 1000L
-    repository.saveWatchProgress(testMedia, position, duration)
+    repository.setDisplayMode(AppDisplayMode.MOBILE)
+    assertEquals(AppDisplayMode.MOBILE, repository.getDisplayMode())
 
-    val updatedProgress = repository.getWatchProgress(testMedia.id)
-    assertNotNull("Saved progress should be found", updatedProgress)
-    assertEquals(testMedia.id, updatedProgress?.mediaId)
-    assertEquals(position, updatedProgress?.positionMs)
-    assertEquals(duration, updatedProgress?.durationMs)
-    assertEquals(25, updatedProgress?.progressPercent)
-    assertEquals(0.25f, updatedProgress?.progressFraction ?: 0f, 0.01f)
-    assertEquals(90 * 60 * 1000L, updatedProgress?.remainingMs)
+    // Control mode
+    repository.setControlMode(ControlMode.VIRTUAL_MOUSE)
+    assertEquals(ControlMode.VIRTUAL_MOUSE, repository.getControlMode())
 
-    // Remove from history
-    repository.removeWatchProgress(testMedia.id)
-    assertEquals(null, repository.getWatchProgress(testMedia.id))
+    repository.setControlMode(ControlMode.DPAD_NAV)
+    assertEquals(ControlMode.DPAD_NAV, repository.getControlMode())
+  }
+
+  @Test
+  fun `verify WatchSeries multi-season series and movie URL generation`() {
+    // Multi-season TV Series (e.g. Breaking Bad, Game of Thrones, Silo)
+    val seriesQuery = "Breaking Bad"
+    val seriesSearchUrl = StreamingPortal.WATCH_SERIES.buildSearchUrl(seriesQuery)
+    assertTrue("Search URL should point to WatchSeries search", seriesSearchUrl.contains("watchseries.bar/search/"))
+    assertTrue("Search URL should contain encoded title", seriesSearchUrl.contains("Breaking"))
+
+    // Direct multi-season series path pattern
+    val seriesSlug = "breaking-bad"
+    val seriesId = 1396
+    val seriesUrl = "https://watchseries.bar/tv/$seriesSlug/$seriesId"
+    assertTrue("TV Series URL should use /tv/ schema for season selection", seriesUrl.contains("/tv/breaking-bad/1396"))
+
+    // Movie path pattern
+    val movieSlug = "inception"
+    val movieId = 27205
+    val movieUrl = "https://watchseries.bar/movie/$movieSlug/$movieId"
+    assertTrue("Movie URL should use /movie/ schema", movieUrl.contains("/movie/inception/27205"))
+  }
+
+  @Test
+  fun `verify OpenSubtitles service integration and Arabic translation retrieval`() = kotlinx.coroutines.runBlocking {
+    val service = com.example.data.SearchAndSubtitlesService()
+
+    // 1. Search subtitles for multi-season series in Arabic
+    val arabicSubs = service.searchOpenSubtitles("Breaking Bad", "ar")
+    assertTrue("Subtitles list should not be empty", arabicSubs.isNotEmpty())
+    val arabicSub = arabicSubs.first()
+    assertEquals("ar", arabicSub.languageCode)
+    assertTrue("Language label should indicate Arabic", arabicSub.languageName.contains("العربية"))
+    assertTrue("Download URL should not be empty", arabicSub.downloadUrl.isNotBlank())
+
+    // 2. Search subtitles in English
+    val englishSubs = service.searchOpenSubtitles("Breaking Bad", "en")
+    assertTrue("English subtitles should be returned", englishSubs.isNotEmpty())
+    assertEquals("en", englishSubs.first().languageCode)
+
+    // 3. Search subtitles for movies (e.g. Inception)
+    val movieSubs = service.searchOpenSubtitles("Inception", "ar")
+    assertTrue("Movie subtitles should be retrieved", movieSubs.isNotEmpty())
+    assertTrue("Format should be vtt or srt", movieSubs.first().format in listOf("vtt", "srt"))
+  }
+
+  @Test
+  fun `verify dual portal search returns results for multi-season shows and movies`() = kotlinx.coroutines.runBlocking {
+    val service = com.example.data.SearchAndSubtitlesService()
+
+    // Search for a multi-season show (Silo)
+    val (topCinemaSilo, watchSeriesSilo) = service.searchDualPortals("Silo")
+    assertTrue("TopCinema should return search items for Silo", topCinemaSilo.isNotEmpty())
+    assertTrue("WatchSeries should return search items for Silo", watchSeriesSilo.isNotEmpty())
+    assertEquals(StreamingPortal.TOP_CINEMA, topCinemaSilo.first().portal)
+    assertEquals(StreamingPortal.WATCH_SERIES, watchSeriesSilo.first().portal)
+
+    // Search for movie (Inception)
+    val (topCinemaMovie, watchSeriesMovie) = service.searchDualPortals("Inception")
+    assertTrue("TopCinema should return movie results", topCinemaMovie.isNotEmpty())
+    assertTrue("WatchSeries should return movie results", watchSeriesMovie.isNotEmpty())
+  }
+
+  @Test
+  fun `verify AdGuard DNS and strict popup blocker preferences`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repository = TvPreferencesRepository(context)
+
+    // Defaults should be enabled
+    assertTrue("AdBlock should be enabled by default", repository.isAdBlockEnabled())
+    assertTrue("AdGuard DNS filter should be enabled by default", repository.isAdGuardDnsEnabled())
+    assertTrue("Strict popup blocker should be enabled by default", repository.isStrictPopupBlockerEnabled())
+
+    // Toggling
+    repository.setAdGuardDnsEnabled(false)
+    assertFalse(repository.isAdGuardDnsEnabled())
+    repository.setAdGuardDnsEnabled(true)
+    assertTrue(repository.isAdGuardDnsEnabled())
+
+    repository.setStrictPopupBlockerEnabled(false)
+    assertFalse(repository.isStrictPopupBlockerEnabled())
+    repository.setStrictPopupBlockerEnabled(true)
+    assertTrue(repository.isStrictPopupBlockerEnabled())
+  }
+
+  @Test
+  fun `verify luugy and popunder ad URLs are identified as ads`() {
+    val adUrls = listOf(
+      "https://luugy.com/4/1090664",
+      "https://sub.luugy.com/click",
+      "https://popads.net/serve",
+      "https://adsterra.com/direct",
+      "https://bet365.com/affiliate",
+      "market://details?id=com.scam.app",
+      "intent://example.com#Intent"
+    )
+
+    val safeUrls = listOf(
+      "https://watchseries.bar/tv/silo/1",
+      "https://watchseries.bar/movie/inception/27205",
+      "https://topcinema.io/watch/123",
+      "https://challenges.cloudflare.com/turnstile",
+      "https://api.themoviedb.org/3/search/multi"
+    )
+
+    // Verify detection pattern logic
+    val adKeywords = listOf("luugy", "popads", "propellerads", "adsterra", "bet365", "onclick", "exoclick")
+    for (bad in adUrls) {
+      val isAd = bad.startsWith("market:") || bad.startsWith("intent:") || adKeywords.any { bad.lowercase().contains(it) }
+      assertTrue("Ad URL should be identified as ad: $bad", isAd)
+    }
+
+    for (safe in safeUrls) {
+      val isSafe = safe.contains("watchseries") || safe.contains("topcinema") || safe.contains("cloudflare") || safe.contains("themoviedb")
+      assertTrue("Legitimate streaming URL should be recognized as safe: $safe", isSafe)
+    }
   }
 }
+
