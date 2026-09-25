@@ -1,0 +1,6 @@
+{
+  "summary":  "An implementation plan to add a Hybrid Web Auto-Play Next feature inside WebView. It includes injecting a robust JavaScript controller to monitor HTML5 video states and click next buttons, alongside a custom JavascriptInterface bridging WebView events with Android code.",
+  "updatedAt":  "2026-09-25T17:13:43.799157684Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

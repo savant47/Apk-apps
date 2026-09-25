@@ -26,35 +26,186 @@ class SearchAndSubtitlesService {
   private val desktopUserAgent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
-  suspend fun searchDualPortals(
+  suspend fun searchAllPortals(
     query: String
-  ): Pair<List<SearchResultItem>, List<SearchResultItem>> = coroutineScope {
+  ): Map<StreamingPortal, List<SearchResultItem>> = coroutineScope {
     val cleanQuery = query.trim()
     if (cleanQuery.isBlank()) {
-      return@coroutineScope Pair(emptyList(), emptyList())
+      return@coroutineScope emptyMap()
     }
 
-    val topCinemaDeferred = async(Dispatchers.IO) {
-      searchTopCinema(cleanQuery)
+    val enabledPortals = StreamingPortal.values().filter { it.isEnabled }
+    val deferreds = enabledPortals.associateWith { portal ->
+      async(Dispatchers.IO) {
+        when (portal) {
+          StreamingPortal.TOP_CINEMA -> {
+            try { searchTopCinema(cleanQuery) } catch (_: Exception) { fallbackTopCinemaResults(cleanQuery) }
+          }
+          StreamingPortal.WATCH_SERIES -> {
+            try { searchWatchSeries(cleanQuery) } catch (_: Exception) { fallbackWatchSeriesResults(cleanQuery) }
+          }
+          StreamingPortal.LAROZA -> {
+            try { searchLaRoza(cleanQuery) } catch (_: Exception) { fallbackLaRozaResults(cleanQuery) }
+          }
+          StreamingPortal.EGY_DEAD -> {
+            try { searchEgyDead(cleanQuery) } catch (_: Exception) { fallbackEgyDeadResults(cleanQuery) }
+          }
+          else -> {
+            // Custom Portals (PORTAL_4 / PORTAL_5): Return fallback direct search results
+            listOf(
+              SearchResultItem(
+                id = "${portal.id}_custom_direct",
+                title = "$cleanQuery - ابحث في ${portal.displayNameArabic}",
+                url = portal.buildSearchUrl(cleanQuery),
+                portal = portal,
+                posterUrl = "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=400&q=80",
+                type = portal.displayNameArabic,
+                quality = "مشاهدة مباشرة"
+              )
+            )
+          }
+        }
+      }
     }
 
-    val watchSeriesDeferred = async(Dispatchers.IO) {
-      searchWatchSeries(cleanQuery)
+    deferreds.mapValues { entry ->
+      try {
+        entry.value.await()
+      } catch (_: Exception) {
+        when (entry.key) {
+          StreamingPortal.TOP_CINEMA -> fallbackTopCinemaResults(cleanQuery)
+          StreamingPortal.WATCH_SERIES -> fallbackWatchSeriesResults(cleanQuery)
+          StreamingPortal.LAROZA -> fallbackLaRozaResults(cleanQuery)
+          StreamingPortal.EGY_DEAD -> fallbackEgyDeadResults(cleanQuery)
+          else -> emptyList()
+        }
+      }
     }
+  }
 
-    val topCinemaResults = try {
-      topCinemaDeferred.await()
-    } catch (_: Exception) {
-      fallbackTopCinemaResults(cleanQuery)
-    }
+  suspend fun searchDualPortals(
+    query: String
+  ): Pair<List<SearchResultItem>, List<SearchResultItem>> {
+    val results = searchAllPortals(query)
+    return Pair(
+      results[StreamingPortal.TOP_CINEMA] ?: emptyList(),
+      results[StreamingPortal.WATCH_SERIES] ?: emptyList()
+    )
+  }
 
-    val watchSeriesResults = try {
-      watchSeriesDeferred.await()
-    } catch (_: Exception) {
-      fallbackWatchSeriesResults(cleanQuery)
-    }
+  private suspend fun searchLaRoza(query: String): List<SearchResultItem> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<SearchResultItem>()
+    val encoded = URLEncoder.encode(query, "UTF-8")
+    val url = "${StreamingPortal.LAROZA.homeUrl.substringBefore("/home")}/search.php?keywords=$encoded"
 
-    Pair(topCinemaResults, watchSeriesResults)
+    try {
+      val request = Request.Builder()
+        .url(url)
+        .header("User-Agent", desktopUserAgent)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .build()
+
+      val response = httpClient.newCall(request).execute()
+      if (response.code != 200) return@withContext emptyList()
+      val html = response.body?.string() ?: ""
+
+      val segments = html.split(Pattern.compile("<div[^>]*class=\"[^\"]*pm-video-thumb[^\"]*\"[^>]*>", Pattern.CASE_INSENSITIVE))
+      var count = 0
+      val seenUrls = mutableSetOf<String>()
+
+      if (segments.size > 1) {
+        for (i in 1 until segments.size) {
+          if (count >= 20) break
+          val segment = segments[i]
+
+          // Extract link
+          val linkMatcher = Pattern.compile("<a[^>]+href=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+          if (linkMatcher.find()) {
+            val link = linkMatcher.group(1)?.trim() ?: ""
+            if (link.isNotBlank() && !link.contains("/category.php") && !link.contains("/newvideos")) {
+              
+              // Extract poster (LaRoza uses data-echo for lazy image loading)
+              var posterUrl = ""
+              val echoMatcher = Pattern.compile("data-echo=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+              if (echoMatcher.find()) {
+                posterUrl = echoMatcher.group(1)?.trim() ?: ""
+              }
+              if (posterUrl.isBlank()) {
+                val imgMatcher = Pattern.compile("<img[^>]+src=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+                if (imgMatcher.find()) {
+                  posterUrl = imgMatcher.group(1)?.trim() ?: ""
+                }
+              }
+
+              // Extract title
+              var title = ""
+              val titleMatcher = Pattern.compile("title=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+              if (titleMatcher.find()) {
+                title = cleanHtmlEntities(titleMatcher.group(1)?.trim() ?: "")
+              }
+              if (title.isBlank()) {
+                val altMatcher = Pattern.compile("alt=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+                if (altMatcher.find()) {
+                  title = cleanHtmlEntities(altMatcher.group(1)?.trim() ?: "")
+                }
+              }
+
+              // Extract duration/label (optional info)
+              val durationMatcher = Pattern.compile("<span[^>]*class=\"[^\"]*pm-label-duration[^\"]*\"[^>]*>(.*?)</span>", Pattern.CASE_INSENSITIVE).matcher(segment)
+              val duration = if (durationMatcher.find()) durationMatcher.group(1)?.trim() ?: "" else ""
+
+              if (title.isNotBlank() && title.length > 2) {
+                val absoluteLink = if (link.startsWith("/")) "${StreamingPortal.LAROZA.homeUrl.substringBefore("/home")}$link" else link
+                val absolutePoster = if (posterUrl.isNotBlank()) {
+                  if (posterUrl.startsWith("/")) "${StreamingPortal.LAROZA.homeUrl.substringBefore("/home")}$posterUrl" else posterUrl
+                } else {
+                  "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=400&q=80"
+                }
+
+                if (!seenUrls.contains(absoluteLink)) {
+                  seenUrls.add(absoluteLink)
+                  
+                  // Determine if movie or series
+                  val isSeries = title.contains("مسلسل", ignoreCase = true) || 
+                                 title.contains("حلقة", ignoreCase = true) || 
+                                 absoluteLink.contains("series", ignoreCase = true)
+
+                  results.add(
+                    SearchResultItem(
+                      id = UUID.randomUUID().toString(),
+                      title = title,
+                      url = absoluteLink,
+                      portal = StreamingPortal.LAROZA,
+                      posterUrl = absolutePoster,
+                      type = if (isSeries) "مسلسل (لاروزا)" else "فيلم (لاروزا)",
+                      quality = if (duration.isNotBlank()) "مدة: $duration" else "HD 1080p Web-DL"
+                    )
+                  )
+                  count++
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (_: Exception) {}
+
+    results
+  }
+
+  private fun fallbackLaRozaResults(query: String): List<SearchResultItem> {
+    val searchUrl = StreamingPortal.LAROZA.buildSearchUrl(query)
+    return listOf(
+      SearchResultItem(
+        id = "lr_direct_1",
+        title = "$query - ابحث وشاهد مباشرة على لاروزا",
+        url = searchUrl,
+        portal = StreamingPortal.LAROZA,
+        posterUrl = "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=400&q=80",
+        type = "لاروزا (LaRoza)",
+        quality = "جميع الجودات وسيرفرات سريعة"
+      )
+    )
   }
 
   private suspend fun searchTopCinema(query: String): List<SearchResultItem> = withContext(Dispatchers.IO) {
@@ -145,7 +296,7 @@ class SearchAndSubtitlesService {
     } catch (_: Exception) {}
 
     if (results.isEmpty()) {
-      return@withContext fallbackTopCinemaResults(query)
+      return@withContext emptyList()
     }
     results
   }
@@ -248,7 +399,7 @@ class SearchAndSubtitlesService {
     }
 
     if (results.isEmpty()) {
-      return@withContext fallbackWatchSeriesResults(query)
+      return@withContext emptyList()
     }
     results
   }
@@ -399,6 +550,113 @@ class SearchAndSubtitlesService {
     }
 
     list
+  }
+
+  private suspend fun searchEgyDead(query: String): List<SearchResultItem> = withContext(Dispatchers.IO) {
+    val results = mutableListOf<SearchResultItem>()
+    val encoded = URLEncoder.encode(query, "UTF-8")
+    val url = "${StreamingPortal.EGY_DEAD.homeUrl.trimEnd('/')}/?s=$encoded"
+
+    try {
+      val request = Request.Builder()
+        .url(url)
+        .header("User-Agent", desktopUserAgent)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .build()
+
+      val response = httpClient.newCall(request).execute()
+      if (response.code != 200) return@withContext emptyList()
+      val html = response.body?.string() ?: ""
+
+      val segments = html.split(Pattern.compile("<li[^>]*class=\"[^\"]*movieItem[^\"]*\"[^>]*>", Pattern.CASE_INSENSITIVE))
+      var count = 0
+      val seenUrls = mutableSetOf<String>()
+
+      if (segments.size > 1) {
+        for (i in 1 until segments.size) {
+          if (count >= 20) break
+          val segment = segments[i]
+
+          // Extract link
+          val linkMatcher = Pattern.compile("<a[^>]+href=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+          if (linkMatcher.find()) {
+            val link = linkMatcher.group(1)?.trim() ?: ""
+            if (link.isNotBlank() && !link.contains("/category/") && !link.contains("/genre/") && !link.contains("/tags/")) {
+              
+              // Extract poster
+              val imgMatcher = Pattern.compile("<img[^>]+src=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+              val posterUrl = if (imgMatcher.find()) imgMatcher.group(1)?.trim() ?: "" else ""
+
+              // Extract title
+              var title = ""
+              val titleTagMatcher = Pattern.compile("<h1[^>]*class=\"[^\"]*BottomTitle[^\"]*\"[^>]*>(.*?)</h1>", Pattern.DOTALL or Pattern.CASE_INSENSITIVE).matcher(segment)
+              if (titleTagMatcher.find()) {
+                title = cleanHtmlEntities(titleTagMatcher.group(1)?.replace(Regex("<[^>]*>"), "")?.trim() ?: "")
+              }
+
+              if (title.isBlank()) {
+                val titleAttrMatcher = Pattern.compile("title=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(segment)
+                if (titleAttrMatcher.find()) {
+                  title = cleanHtmlEntities(titleAttrMatcher.group(1)?.trim() ?: "")
+                }
+              }
+
+              // Extract category
+              val catMatcher = Pattern.compile("<span[^>]*class=\"[^\"]*cat_name[^\"]*\"[^>]*>(.*?)</span>", Pattern.DOTALL or Pattern.CASE_INSENSITIVE).matcher(segment)
+              val catName = if (catMatcher.find()) catMatcher.group(1)?.replace(Regex("<[^>]*>"), "")?.trim() ?: "" else ""
+
+              if (title.isNotBlank() && title.length > 2) {
+                val absoluteLink = if (link.startsWith("/")) "${StreamingPortal.EGY_DEAD.homeUrl.trimEnd('/')}$link" else link
+                val absolutePoster = if (posterUrl.isNotBlank()) {
+                  if (posterUrl.startsWith("/")) "${StreamingPortal.EGY_DEAD.homeUrl.trimEnd('/')}$posterUrl" else posterUrl
+                } else {
+                  "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=400&q=80"
+                }
+
+                if (!seenUrls.contains(absoluteLink)) {
+                  seenUrls.add(absoluteLink)
+                  
+                  // Check if it's a series or movie based on title or catName
+                  val isSeries = title.contains("مسلسل", ignoreCase = true) || 
+                                 catName.contains("مسلسل", ignoreCase = true) || 
+                                 link.contains("series", ignoreCase = true)
+
+                  results.add(
+                    SearchResultItem(
+                      id = UUID.randomUUID().toString(),
+                      title = title,
+                      url = absoluteLink,
+                      portal = StreamingPortal.EGY_DEAD,
+                      posterUrl = absolutePoster,
+                      type = if (isSeries) "مسلسل (إيجي ديد)" else "فيلم (إيجي ديد)",
+                      quality = "HD 1080p Web-DL"
+                    )
+                  )
+                  count++
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (_: Exception) {}
+
+    results
+  }
+
+  private fun fallbackEgyDeadResults(query: String): List<SearchResultItem> {
+    val searchUrl = StreamingPortal.EGY_DEAD.buildSearchUrl(query)
+    return listOf(
+      SearchResultItem(
+        id = "ed_direct_1",
+        title = "$query - ابحث وشاهد مباشرة على إيجي ديد",
+        url = searchUrl,
+        portal = StreamingPortal.EGY_DEAD,
+        posterUrl = "https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=400&q=80",
+        type = "إيجي ديد (EgyDead)",
+        quality = "جميع الجودات وسيرفرات سريعة"
+      )
+    )
   }
 
   private fun cleanHtmlEntities(str: String): String {

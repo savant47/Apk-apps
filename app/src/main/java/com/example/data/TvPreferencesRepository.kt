@@ -36,6 +36,39 @@ class TvPreferencesRepository(context: Context) {
     loadBookmarks()
     loadHistory()
     loadDisplayMode()
+    loadPortals()
+  }
+
+  fun loadPortals() {
+    for (portal in StreamingPortal.values()) {
+      val prefix = "portal_${portal.id}"
+      portal.displayNameArabic = prefs.getString("${prefix}_name_ar", portal.displayNameArabic) ?: portal.displayNameArabic
+      portal.displayNameEnglish = prefs.getString("${prefix}_name_en", portal.displayNameEnglish) ?: portal.displayNameEnglish
+      portal.homeUrl = prefs.getString("${prefix}_home_url", portal.homeUrl) ?: portal.homeUrl
+      portal.searchBaseUrl = prefs.getString("${prefix}_search_url", portal.searchBaseUrl) ?: portal.searchBaseUrl
+      portal.isEnabled = prefs.getBoolean("${prefix}_enabled", portal.isEnabled)
+    }
+  }
+
+  fun savePortal(
+    portal: StreamingPortal,
+    nameAr: String,
+    nameEn: String,
+    homeUrl: String,
+    searchUrl: String,
+    enabled: Boolean
+  ) {
+    val prefix = "portal_${portal.id}"
+    prefs.edit()
+      .putString("${prefix}_name_ar", nameAr)
+      .putString("${prefix}_name_en", nameEn)
+      .putString("${prefix}_home_url", homeUrl)
+      .putString("${prefix}_search_url", searchUrl)
+      .putBoolean("${prefix}_enabled", enabled)
+      .apply()
+
+    // Reload the updated portals in-memory immediately
+    loadPortals()
   }
 
   private fun loadDisplayMode() {

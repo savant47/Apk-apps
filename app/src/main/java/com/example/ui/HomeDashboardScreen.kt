@@ -1,6 +1,7 @@
 package com.example.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -39,7 +40,13 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -64,7 +71,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -97,6 +106,9 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.ui.res.painterResource
+import com.example.R
+
 
 @Composable
 fun HomeDashboardScreen(
@@ -115,9 +127,10 @@ fun HomeDashboardScreen(
 
   var searchQuery by remember { mutableStateOf("") }
   var isSearching by remember { mutableStateOf(false) }
-  var topCinemaResults by remember { mutableStateOf<List<SearchResultItem>>(emptyList()) }
-  var watchSeriesResults by remember { mutableStateOf<List<SearchResultItem>>(emptyList()) }
+  var portalResultsMap by remember { mutableStateOf<Map<StreamingPortal, List<SearchResultItem>>>(emptyMap()) }
   var hasSearched by remember { mutableStateOf(false) }
+  var showSourcesDialog by remember { mutableStateOf(false) }
+  var spellingSuggestion by remember { mutableStateOf<String?>(null) }
 
   val history by repository.historyFlow.collectAsState()
   val displayMode by repository.displayModeFlow.collectAsState()
@@ -141,11 +154,11 @@ fun HomeDashboardScreen(
     focusManager.clearFocus()
     isSearching = true
     hasSearched = true
+    spellingSuggestion = getSpellingSuggestion(q)
 
     scope.launch {
-      val (tc, ws) = searchService.searchDualPortals(q)
-      topCinemaResults = tc
-      watchSeriesResults = ws
+      val results = searchService.searchAllPortals(q)
+      portalResultsMap = results
       isSearching = false
     }
   }
@@ -154,6 +167,20 @@ fun HomeDashboardScreen(
     modifier = modifier
       .fillMaxSize()
       .background(CinemaDarkBackground)
+      .drawBehind {
+        drawCircle(
+          brush = Brush.radialGradient(
+            colors = listOf(
+              CinemaPrimary.copy(alpha = 0.12f),
+              Color.Transparent
+            ),
+            center = Offset(size.width / 2f, 0f),
+            radius = size.width * 0.9f
+          ),
+          center = Offset(size.width / 2f, 0f),
+          radius = size.width * 0.9f
+        )
+      }
       .padding(horizontal = 16.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(18.dp)
   ) {
@@ -169,40 +196,22 @@ fun HomeDashboardScreen(
           verticalAlignment = Alignment.CenterVertically,
           modifier = Modifier.weight(1f, fill = false)
         ) {
-          Box(
+          Image(
+            painter = painterResource(id = R.drawable.ic_savant_logo),
+            contentDescription = "SavantTV Logo",
             modifier = Modifier
               .size(38.dp)
-              .clip(RoundedCornerShape(10.dp))
-              .background(
-                Brush.linearGradient(listOf(CinemaPrimary, CinemaSecondary))
-              ),
-            contentAlignment = Alignment.Center
-          ) {
-            Icon(
-              imageVector = Icons.Default.Tv,
-              contentDescription = null,
-              tint = Color.White,
-              modifier = Modifier.size(22.dp)
-            )
-          }
+              .clip(RoundedCornerShape(8.dp))
+          )
           Spacer(modifier = Modifier.width(8.dp))
-          Column {
-            Text(
-              text = "Cinema TV",
-              color = Color.White,
-              fontSize = 16.sp,
-              fontWeight = FontWeight.Bold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis
-            )
-            Text(
-              text = "سينما تي في",
-              color = CinemaAccent,
-              fontSize = 11.sp,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis
-            )
-          }
+          Text(
+            text = "SavantTV",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
         }
 
         // Action Buttons: Mode Badge, Bookmarks, History
@@ -299,6 +308,23 @@ fun HomeDashboardScreen(
               modifier = Modifier.size(18.dp)
             )
           }
+
+          IconButton(
+            onClick = { showSourcesDialog = true },
+            modifier = Modifier
+              .size(36.dp)
+              .clip(CircleShape)
+              .background(CinemaSurface)
+              .border(1.dp, CinemaBorder, CircleShape)
+              .testTag("btn_dashboard_sources")
+          ) {
+            Icon(
+              Icons.Default.Settings,
+              contentDescription = "إدارة المصادر",
+              tint = Color.LightGray,
+              modifier = Modifier.size(18.dp)
+            )
+          }
         }
       }
     }
@@ -367,14 +393,22 @@ fun HomeDashboardScreen(
     // 2. Unified Search Bar with Dedicated Search Button
     item {
       Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = CinemaSurface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, CinemaBorder),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = CinemaSurface.copy(alpha = 0.85f)),
+        border = androidx.compose.foundation.BorderStroke(
+          width = 1.dp,
+          brush = Brush.linearGradient(
+            listOf(
+              Color.White.copy(alpha = 0.12f),
+              CinemaBorder.copy(alpha = 0.4f)
+            )
+          )
+        ),
         modifier = Modifier.fillMaxWidth()
       ) {
         Column(modifier = Modifier.padding(14.dp)) {
           Text(
-            text = "🔍 ابحث في موقعي توب سينما وووتش سيريز معاً:",
+            text = "🔍 ابحث في جميع بوابات ومصادر المشاهدة معاً:",
             color = Color.White,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold
@@ -417,9 +451,9 @@ fun HomeDashboardScreen(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
                 focusedIndicatorColor = CinemaAccent,
-                unfocusedIndicatorColor = CinemaBorder
+                unfocusedIndicatorColor = CinemaBorder.copy(alpha = 0.5f)
               ),
-              shape = RoundedCornerShape(10.dp),
+              shape = RoundedCornerShape(12.dp),
               modifier = Modifier
                 .weight(1f)
                 .testTag("home_search_input")
@@ -432,8 +466,8 @@ fun HomeDashboardScreen(
                 containerColor = CinemaAccent,
                 contentColor = Color.Black
               ),
-              shape = RoundedCornerShape(10.dp),
-              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+              shape = RoundedCornerShape(12.dp),
+              contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
               modifier = Modifier.testTag("btn_dual_search_action")
             ) {
               Icon(
@@ -505,28 +539,26 @@ fun HomeDashboardScreen(
         }
       }
     } else if (hasSearched) {
-      // Results for TopCinema
-      item {
-        PortalResultsSection(
-          portal = StreamingPortal.TOP_CINEMA,
-          query = searchQuery,
-          results = topCinemaResults,
-          onItemClick = { item ->
-            onLaunchUrl(item.url, StreamingPortal.TOP_CINEMA, item.title)
-          }
-        )
-      }
-
-      // Results for WatchSeries
-      item {
-        PortalResultsSection(
-          portal = StreamingPortal.WATCH_SERIES,
-          query = searchQuery,
-          results = watchSeriesResults,
-          onItemClick = { item ->
-            onLaunchUrl(item.url, StreamingPortal.WATCH_SERIES, item.title)
-          }
-        )
+      // Results rendered dynamically for all enabled portals!
+      StreamingPortal.values().filter { it.isEnabled }.forEach { portal ->
+        val results = portalResultsMap[portal] ?: emptyList()
+        item {
+          PortalResultsSection(
+            portal = portal,
+            query = searchQuery,
+            results = results,
+            onItemClick = { item ->
+              onLaunchUrl(item.url, portal, item.title)
+            },
+            spellingSuggestion = spellingSuggestion,
+            onSearchSuggestion = { corrected ->
+              executeDualSearch(corrected)
+            },
+            onLaunchManualUrl = { manualUrl ->
+              onLaunchUrl(manualUrl, portal, "${portal.displayNameArabic} (تصفح يدوي)")
+            }
+          )
+        }
       }
     }
 
@@ -546,78 +578,302 @@ fun HomeDashboardScreen(
       )
     }
 
-    // 5. Direct Portal Shortcuts Cards
-    item {
-      Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-          text = "🌐 تصفح بوابات المشاهدة مباشرة:",
-          color = Color.White,
-          fontSize = 14.sp,
-          fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(8.dp))
 
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-          // TopCinema Card
-          Card(
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = CinemaSurface),
-            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaPrimary.copy(alpha = 0.5f)),
-            modifier = Modifier
-              .weight(1f)
-              .clickable {
-                onLaunchUrl(StreamingPortal.TOP_CINEMA.homeUrl, StreamingPortal.TOP_CINEMA, "توب سينما")
-              }
+  }
+
+  if (showSourcesDialog) {
+    SourcesManagementDialog(
+      repository = repository,
+      onDismiss = { showSourcesDialog = false }
+    )
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SourcesManagementDialog(
+  repository: TvPreferencesRepository,
+  onDismiss: () -> Unit
+) {
+  var selectedPortalForEdit by remember { mutableStateOf<StreamingPortal?>(null) }
+  
+  // Fields for editing a portal
+  var editNameAr by remember { mutableStateOf("") }
+  var editNameEn by remember { mutableStateOf("") }
+  var editHomeUrl by remember { mutableStateOf("") }
+  var editSearchUrl by remember { mutableStateOf("") }
+  var editEnabled by remember { mutableStateOf(true) }
+
+  BasicAlertDialog(
+    onDismissRequest = {
+      if (selectedPortalForEdit != null) {
+        selectedPortalForEdit = null
+      } else {
+        onDismiss()
+      }
+    }
+  ) {
+    Card(
+      shape = RoundedCornerShape(16.dp),
+      colors = CardDefaults.cardColors(containerColor = CinemaSurface),
+      border = androidx.compose.foundation.BorderStroke(1.5.dp, CinemaBorder),
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(16.dp)
+    ) {
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(16.dp)
+      ) {
+        if (selectedPortalForEdit == null) {
+          // Main Portal List View
+          Text(
+            text = "⚙️ إدارة وبوابات مصادر الفيديو:",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Start
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = "يمكنك تعديل روابط المواقع الافتراضية، أو تفعيل وتخصيص المصادر الإضافية 4 و 5 بأي اسم وموقع من دماغك!",
+            color = Color.Gray,
+            fontSize = 11.sp,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Start
+          )
+          Spacer(modifier = Modifier.height(14.dp))
+
+          Column(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth()
           ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
+            StreamingPortal.values().forEach { portal ->
+               val isCustom = portal == StreamingPortal.PORTAL_5
+              Card(
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(containerColor = CinemaDarkBackground),
+                border = androidx.compose.foundation.BorderStroke(1.dp, if (portal.isEnabled) CinemaBorder else Color.DarkGray),
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Row(
                   modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(CinemaPrimary),
-                  contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                  Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                  Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      Box(
+                        modifier = Modifier
+                          .size(8.dp)
+                          .clip(CircleShape)
+                          .background(if (portal.isEnabled) CinemaAccent else Color.Gray)
+                      )
+                      Spacer(modifier = Modifier.width(6.dp))
+                      Text(
+                        text = portal.displayNameArabic,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                      )
+                      Spacer(modifier = Modifier.width(6.dp))
+                      Text(
+                        text = "(${portal.displayNameEnglish})",
+                        color = Color.Gray,
+                        fontSize = 11.sp
+                      )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                      text = if (portal.homeUrl.isNotBlank()) portal.homeUrl else "غير مهيأ بعد (مغلق)",
+                      color = if (portal.isEnabled) CinemaAccent else Color.Gray,
+                      fontSize = 11.sp,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis
+                    )
+                  }
+
+                  Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isCustom) {
+                      Checkbox(
+                        checked = portal.isEnabled,
+                        onCheckedChange = { checked ->
+                          repository.savePortal(
+                            portal = portal,
+                            nameAr = portal.displayNameArabic,
+                            nameEn = portal.displayNameEnglish,
+                            homeUrl = portal.homeUrl,
+                            searchUrl = portal.searchBaseUrl,
+                            enabled = checked
+                          )
+                        },
+                        colors = CheckboxDefaults.colors(
+                          checkedColor = CinemaAccent,
+                          uncheckedColor = Color.Gray,
+                          checkmarkColor = Color.Black
+                        )
+                      )
+                    }
+
+                    Button(
+                      onClick = {
+                        selectedPortalForEdit = portal
+                        editNameAr = portal.displayNameArabic
+                        editNameEn = portal.displayNameEnglish
+                        editHomeUrl = portal.homeUrl
+                        editSearchUrl = portal.searchBaseUrl
+                        editEnabled = portal.isEnabled
+                      },
+                      colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
+                      shape = RoundedCornerShape(6.dp),
+                      contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                      modifier = Modifier.height(28.dp)
+                    ) {
+                      Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(12.dp), tint = Color.White)
+                      Spacer(modifier = Modifier.width(4.dp))
+                      Text("تعديل", fontSize = 10.sp, color = Color.White)
+                    }
+                  }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("توب سينما", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
               }
-              Spacer(modifier = Modifier.height(6.dp))
-              Text("أفلام ومسلسلات مترجمة بسيرفرات سريعة وبدون إعلانات مزعجة", color = Color.Gray, fontSize = 10.sp, maxLines = 2)
             }
           }
 
-          // WatchSeries Card
-          Card(
-            shape = RoundedCornerShape(12.dp),
-            colors = CardDefaults.cardColors(containerColor = CinemaSurface),
-            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaSecondary.copy(alpha = 0.5f)),
-            modifier = Modifier
-              .weight(1f)
-              .clickable {
-                onLaunchUrl(StreamingPortal.WATCH_SERIES.homeUrl, StreamingPortal.WATCH_SERIES, "ووتش سيريز")
-              }
+          Spacer(modifier = Modifier.height(16.dp))
+          Button(
+            onClick = onDismiss,
+            colors = ButtonDefaults.buttonColors(containerColor = CinemaSecondary),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth().height(42.dp)
           ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                  modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(CinemaSecondary),
-                  contentAlignment = Alignment.Center
-                ) {
-                  Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Text("إغلاق", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+          }
+        } else {
+          // Edit Portal Form View
+          val portal = selectedPortalForEdit!!
+          val isCustom = portal == StreamingPortal.PORTAL_5
+
+          Text(
+            text = "✏️ تعديل مصدر: ${portal.displayNameArabic}",
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Start
+          )
+          Spacer(modifier = Modifier.height(14.dp))
+
+          // Name AR (Custom portals only)
+          if (isCustom) {
+            Text("اسم الموقع بالعربية:", color = Color.LightGray, fontSize = 11.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedTextField(
+              value = editNameAr,
+              onValueChange = { editNameAr = it },
+              singleLine = true,
+              colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = CinemaAccent),
+              modifier = Modifier.fillMaxWidth(),
+              placeholder = { Text("مثال: أكوام", fontSize = 11.sp, color = Color.Gray) }
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text("اسم الموقع بالإنجليزية (English Name):", color = Color.LightGray, fontSize = 11.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            OutlinedTextField(
+              value = editNameEn,
+              onValueChange = { editNameEn = it },
+              singleLine = true,
+              colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = CinemaAccent),
+              modifier = Modifier.fillMaxWidth(),
+              placeholder = { Text("Example: Akoam", fontSize = 11.sp, color = Color.Gray) }
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+          }
+
+          // Home URL
+          Text("الرابط الرئيسي (Home URL):", color = Color.LightGray, fontSize = 11.sp)
+          Spacer(modifier = Modifier.height(4.dp))
+          OutlinedTextField(
+            value = editHomeUrl,
+            onValueChange = { editHomeUrl = it },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = CinemaAccent),
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("https://example.com/", fontSize = 11.sp, color = Color.Gray) }
+          )
+          Spacer(modifier = Modifier.height(10.dp))
+
+          // Search URL
+          Text("رابط البحث (Search URL):", color = Color.LightGray, fontSize = 11.sp)
+          Spacer(modifier = Modifier.height(4.dp))
+          OutlinedTextField(
+            value = editSearchUrl,
+            onValueChange = { editSearchUrl = it },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = CinemaAccent),
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("ضع %s مكان الكلمة المبحوثة، مثال: https://example.com/search/%s", fontSize = 11.sp, color = Color.Gray) }
+          )
+          Spacer(modifier = Modifier.height(14.dp))
+
+          // Enable checkbox for Custom portals in form
+          if (isCustom) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.clickable { editEnabled = !editEnabled }
+            ) {
+              Checkbox(
+                checked = editEnabled,
+                onCheckedChange = { editEnabled = it },
+                colors = CheckboxDefaults.colors(
+                  checkedColor = CinemaAccent,
+                  uncheckedColor = Color.Gray,
+                  checkmarkColor = Color.Black
+                )
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("تفعيل هذا المصدر المخصص وعرضه في القوائم والبحث", color = Color.White, fontSize = 12.sp)
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+          }
+
+          // Action Buttons
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Button(
+              onClick = { selectedPortalForEdit = null },
+              colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
+              shape = RoundedCornerShape(8.dp),
+              modifier = Modifier.weight(1f).height(40.dp)
+            ) {
+              Text("إلغاء", fontSize = 12.sp, color = Color.White)
+            }
+
+            Button(
+              onClick = {
+                if (editHomeUrl.isNotBlank()) {
+                  repository.savePortal(
+                    portal = portal,
+                    nameAr = editNameAr,
+                    nameEn = editNameEn,
+                    homeUrl = editHomeUrl,
+                    searchUrl = editSearchUrl,
+                    enabled = if (isCustom) editEnabled else true
+                  )
+                  selectedPortalForEdit = null
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("ووتش سيريز", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-              }
-              Spacer(modifier = Modifier.height(6.dp))
-              Text("المسلسلات التلفزيونية العالمية كاملة بكافة المواسم والحلقات", color = Color.Gray, fontSize = 10.sp, maxLines = 2)
+              },
+              colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
+              shape = RoundedCornerShape(8.dp),
+              modifier = Modifier.weight(1f).height(40.dp)
+            ) {
+              Text("حفظ 💾", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
             }
           }
         }
@@ -631,10 +887,18 @@ fun PortalResultsSection(
   portal: StreamingPortal,
   query: String,
   results: List<SearchResultItem>,
-  onItemClick: (SearchResultItem) -> Unit
+  onItemClick: (SearchResultItem) -> Unit,
+  spellingSuggestion: String? = null,
+  onSearchSuggestion: ((String) -> Unit)? = null,
+  onLaunchManualUrl: ((String) -> Unit)? = null
 ) {
-  val isTopCinema = portal == StreamingPortal.TOP_CINEMA
-  val badgeColor = if (isTopCinema) CinemaPrimary else CinemaSecondary
+  val badgeColor = when (portal) {
+    StreamingPortal.TOP_CINEMA -> CinemaPrimary
+    StreamingPortal.WATCH_SERIES -> CinemaSecondary
+    StreamingPortal.LAROZA -> CinemaAccent
+    StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50) // Beautiful green for EgyDead
+    else -> CinemaSurfaceVariant
+  }
 
   Column(modifier = Modifier.fillMaxWidth()) {
     Row(
@@ -651,7 +915,7 @@ fun PortalResultsSection(
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-          text = if (isTopCinema) "🎬 نتائج توب سينما (TopCinema)" else "📺 نتائج ووتش سيريز (WatchSeries)",
+          text = "🎬 نتائج ${portal.displayNameArabic} (${portal.displayNameEnglish})",
           color = Color.White,
           fontSize = 14.sp,
           fontWeight = FontWeight.Bold
@@ -668,16 +932,64 @@ fun PortalResultsSection(
 
     if (results.isEmpty()) {
       Card(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = CinemaSurface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, CinemaBorder),
         modifier = Modifier.fillMaxWidth()
       ) {
-        Text(
-          text = "لا توجد نتائج مباشرة في ${portal.displayNameArabic} لـ \"$query\"، يمكنك البحث بالاسم الإنجليزي أو تصفح الموقع مباشرة.",
-          color = Color.Gray,
-          fontSize = 12.sp,
-          modifier = Modifier.padding(12.dp)
-        )
+        Column(
+          modifier = Modifier.padding(14.dp),
+          horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+          Text(
+            text = "😞 لا توجد نتائج مباشرة لموقع ${portal.displayNameArabic} لـ \"$query\"",
+            color = Color.LightGray,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+          )
+          Spacer(modifier = Modifier.height(6.dp))
+
+          if (spellingSuggestion != null && onSearchSuggestion != null) {
+            Text(
+              text = "هل تقصد البحث عن الاسم الصحيح التالي؟",
+              color = Color.Gray,
+              fontSize = 11.sp,
+              textAlign = TextAlign.Center,
+              modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Button(
+              onClick = { onSearchSuggestion(spellingSuggestion) },
+              colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent, contentColor = Color.Black),
+              shape = RoundedCornerShape(8.dp),
+              modifier = Modifier.height(32.dp)
+            ) {
+              Text(text = "👉 $spellingSuggestion", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+          }
+
+          if (onLaunchManualUrl != null) {
+            Text(
+              text = "أو يمكنك محاولة التصفح والبحث اليدوي في الموقع مباشرة:",
+              color = Color.Gray,
+              fontSize = 11.sp,
+              textAlign = TextAlign.Center,
+              modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Button(
+              onClick = { onLaunchManualUrl(portal.buildSearchUrl(query)) },
+              colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
+              shape = RoundedCornerShape(6.dp),
+              modifier = Modifier.height(32.dp)
+            ) {
+              Text("البحث اليدوي المباشر في الموقع 🔍", fontSize = 11.sp, color = Color.White)
+            }
+          }
+        }
       }
     } else {
       LazyRow(
@@ -706,15 +1018,24 @@ fun SearchResultCard(
   val isFocused by interactionSource.collectIsFocusedAsState()
 
   Card(
-    shape = RoundedCornerShape(10.dp),
-    colors = CardDefaults.cardColors(containerColor = CinemaSurface),
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(containerColor = CinemaSurface.copy(alpha = 0.85f)),
     border = androidx.compose.foundation.BorderStroke(
       width = if (isFocused) 2.dp else 1.dp,
-      color = if (isFocused) CinemaFocusGlow else CinemaBorder
+      brush = if (isFocused) {
+        Brush.linearGradient(listOf(CinemaFocusGlow, CinemaSecondary))
+      } else {
+        Brush.linearGradient(
+          listOf(
+            Color.White.copy(alpha = 0.08f),
+            CinemaBorder.copy(alpha = 0.3f)
+          )
+        )
+      }
     ),
     modifier = Modifier
       .width(170.dp)
-      .scale(if (isFocused) 1.03f else 1f)
+      .scale(if (isFocused) 1.04f else 1f)
       .focusable(interactionSource = interactionSource)
       .clickable { onClick() }
       .testTag("result_card_${item.id}")
@@ -725,6 +1046,7 @@ fun SearchResultCard(
         modifier = Modifier
           .fillMaxWidth()
           .height(130.dp)
+          .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
           .background(Color.Black)
       ) {
         if (item.posterUrl.isNotBlank()) {
@@ -996,14 +1318,22 @@ fun ContinueWatchingCard(
   }
 
   Card(
-    shape = RoundedCornerShape(10.dp),
-    colors = CardDefaults.cardColors(containerColor = CinemaSurface),
-    border = androidx.compose.foundation.BorderStroke(1.dp, CinemaBorder),
+    shape = RoundedCornerShape(14.dp),
+    colors = CardDefaults.cardColors(containerColor = CinemaSurface.copy(alpha = 0.8f)),
+    border = androidx.compose.foundation.BorderStroke(
+      width = 1.dp,
+      brush = Brush.linearGradient(
+        listOf(
+          Color.White.copy(alpha = 0.12f),
+          CinemaBorder.copy(alpha = 0.4f)
+        )
+      )
+    ),
     modifier = Modifier
-      .width(200.dp)
+      .width(205.dp)
       .clickable { onResume() }
   ) {
-    Column(modifier = Modifier.padding(10.dp)) {
+    Column(modifier = Modifier.padding(12.dp)) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1048,11 +1378,11 @@ fun ContinueWatchingCard(
       Button(
         onClick = onResume,
         colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent, contentColor = Color.Black),
-        shape = RoundedCornerShape(6.dp),
+        shape = RoundedCornerShape(8.dp),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
         modifier = Modifier
           .fillMaxWidth()
-          .height(28.dp)
+          .height(30.dp)
       ) {
         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(12.dp))
         Spacer(modifier = Modifier.width(4.dp))
@@ -1060,4 +1390,55 @@ fun ContinueWatchingCard(
       }
     }
   }
+}
+
+fun getSpellingSuggestion(query: String): String? {
+  val clean = query.trim().lowercase()
+  if (clean.isBlank()) return null
+  
+  val popularShows = listOf(
+    "Futurama", "Silo", "Z Nation", "The Walking Dead", "Peaky Blinders", 
+    "Breaking Bad", "Game of Thrones", "From", "الحشاشين", "Severance", 
+    "The Last of Us", "Succession", "Friends", "Stranger Things", "Dark", 
+    "The Boys", "Rick and Morty", "Sherlock", "Fargo", "True Detective", 
+    "Dexter", "The Office", "Black Mirror", "Better Call Saul", "Vikings", 
+    "House of the Dragon", "Narcos", "Squid Game", "Attack on Titan", "Death Note",
+    "Simpsons", "Family Guy", "South Park", "Bojack Horseman", "Batman", "Spider-Man",
+    "Lost", "Prison Break", "Suits", "Lucifer", "The Crown", "Westworld", "The Witcher",
+    "The Mandalorian", "The Bear", "Shogun", "Fallout", "The White Lotus", "Euphoria"
+  )
+
+  var bestMatch: String? = null
+  var minDistance = 3 // Threshold: edit distance must be < 3
+  
+  for (show in popularShows) {
+    val distance = calculateLevenshteinDistance(clean, show.lowercase())
+    if (distance < minDistance) {
+      minDistance = distance
+      bestMatch = show
+    }
+  }
+  
+  return bestMatch
+}
+
+private fun calculateLevenshteinDistance(s1: String, s2: String): Int {
+  val dp = Array(s1.length + 1) { IntArray(s2.length + 1) }
+  for (i in 0..s1.length) {
+    dp[i][0] = i
+  }
+  for (j in 0..s2.length) {
+    dp[0][j] = j
+  }
+  for (i in 1..s1.length) {
+    for (j in 1..s2.length) {
+      val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
+      dp[i][j] = minOf(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      )
+    }
+  }
+  return dp[s1.length][s2.length]
 }

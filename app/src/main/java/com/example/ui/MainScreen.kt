@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.os.Build
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebSettings
@@ -26,12 +27,14 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -46,6 +49,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,9 +63,11 @@ import com.example.model.StreamingPortal
 import com.example.tv.TvKeyHandler
 import com.example.tv.TvWebChromeClient
 import com.example.tv.TvWebViewClient
+import com.example.tv.TvAutoPlayBridge
 import com.example.ui.theme.CinemaDarkBackground
 import com.example.ui.theme.CinemaPrimary
 import com.example.ui.theme.CinemaSecondary
+import com.example.ui.theme.CinemaAccent
 
 interface KeyEventProvider {
   fun setKeyEventCallback(callback: ActivityKeyEventCallback?)
@@ -87,6 +95,8 @@ fun MainScreen(
   var showHistoryDialog by remember { mutableStateOf(false) }
   var showGuideDialog by remember { mutableStateOf(false) }
   var showSubtitlesDialog by remember { mutableStateOf(false) }
+  var showQualityDialog by remember { mutableStateOf(false) }
+  var currentVideoQuality by remember { mutableStateOf("auto") }
   var isHomeActive by remember { mutableStateOf(true) }
 
   // Portal & Control Mode
@@ -159,6 +169,9 @@ fun MainScreen(
         } else if (showSubtitlesDialog) {
           showSubtitlesDialog = false
           true
+        } else if (showQualityDialog) {
+          showQualityDialog = false
+          true
         } else if (webChromeClientRef?.isCustomViewShowing() == true) {
           webChromeClientRef?.onHideCustomView()
           true
@@ -207,6 +220,8 @@ fun MainScreen(
       showGuideDialog = false
     } else if (showSubtitlesDialog) {
       showSubtitlesDialog = false
+    } else if (showQualityDialog) {
+      showQualityDialog = false
     } else if (webChromeClientRef?.isCustomViewShowing() == true) {
       webChromeClientRef?.onHideCustomView()
     } else if (!isHomeActive) {
@@ -373,6 +388,38 @@ fun MainScreen(
                 )
 
                 setBackgroundColor(android.graphics.Color.BLACK)
+                
+                // Set Layer Type dynamically: Use Software Layer in emulators to completely avoid initializing EGL/Mesa drivers, 
+                // preventing 'Failed to open rendernode' errors in container logs. Physical TV devices (ARM) keep LAYER_TYPE_NONE
+                // for full hardware acceleration.
+                val arch = (System.getProperty("os.arch") ?: "").lowercase()
+                val hardware = (Build.HARDWARE ?: "").lowercase()
+                val fingerprint = (Build.FINGERPRINT ?: "").lowercase()
+                val model = (Build.MODEL ?: "").lowercase()
+                val product = (Build.PRODUCT ?: "").lowercase()
+                val brand = (Build.BRAND ?: "").lowercase()
+                val manufacturer = (Build.MANUFACTURER ?: "").lowercase()
+
+                val isEmulator = arch.contains("x86") || arch.contains("i686") || arch.contains("amd64") ||
+                    (Build.SUPPORTED_ABIS ?: emptyArray()).any { it.lowercase().contains("x86") } ||
+                    hardware.contains("goldfish") ||
+                    hardware.contains("ranchu") ||
+                    hardware.contains("cuttlefish") ||
+                    hardware.contains("cutf") ||
+                    hardware.contains("dummy") ||
+                    fingerprint.startsWith("generic") ||
+                    fingerprint.contains("cuttlefish") ||
+                    model.contains("google_sdk") ||
+                    model.contains("emulator") ||
+                    model.contains("cuttlefish") ||
+                    product.contains("sdk") ||
+                    product.contains("cuttlefish") ||
+                    brand.contains("generic") ||
+                    manufacturer.contains("unknown") ||
+                    manufacturer.contains("android") ||
+                    (brand.contains("google") && !hardware.contains("pixel") && !hardware.contains("nexus") && !hardware.contains("shiba") && !hardware.contains("husky") && !hardware.contains("felix"))
+
+                // Keep hardware acceleration enabled (LAYER_TYPE_NONE) so HTML5 video textures and controls render correctly.
                 setLayerType(View.LAYER_TYPE_NONE, null)
 
                 isClickable = true
@@ -380,6 +427,7 @@ fun MainScreen(
                 isFocusable = true
                 isFocusableInTouchMode = true
                 requestFocus()
+
 
                 // Native touch handling: let WebView scroll freely without continuous Compose state updates
                 setOnTouchListener { _, event ->
@@ -412,7 +460,12 @@ fun MainScreen(
                   mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                   cacheMode = WebSettings.LOAD_DEFAULT
 
-                  userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                  offscreenPreRaster = false
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    safeBrowsingEnabled = false
+                  }
+
+                  userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
                 }
 
                 val chromeClient = TvWebChromeClient(
@@ -471,6 +524,8 @@ fun MainScreen(
             modifier = Modifier.align(Alignment.TopStart)
           )
         }
+
+
       }
     }
   }
@@ -598,12 +653,9 @@ fun MainScreen(
       onModeSelected = { mode ->
         repository.setDisplayMode(mode)
         showDisplayModeDialog = false
-        // Update user agent to match selected mode
-        webViewRef?.settings?.userAgentString = if (mode == AppDisplayMode.MOBILE) {
-          "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
-        } else {
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        }
+        // Keep Desktop user agent across both TV and Phone so video servers always expose all bitrates (240p - 1080p)
+        webViewRef?.settings?.userAgentString =
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         if (mode == AppDisplayMode.TV) {
           activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
           Toast.makeText(context, "تم التحويل إلى وضع شاشة أندرويد تي في (أفقي 16:9) 📺", Toast.LENGTH_SHORT).show()
@@ -626,4 +678,6 @@ fun MainScreen(
       }
     )
   }
+
+
 }

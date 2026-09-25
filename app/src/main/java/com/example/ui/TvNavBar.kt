@@ -89,27 +89,32 @@ fun TvNavBar(
           testTag = "btn_nav_home"
         )
 
-        // Button 1: TopCinema
-        TvNavActionButton(
-          label = "توب سينما",
-          subLabel = "TopCinema",
-          icon = Icons.Default.Movie,
-          isSelected = activePortal == StreamingPortal.TOP_CINEMA,
-          activeColor = CinemaPrimary,
-          onClick = { onSelectPortal(StreamingPortal.TOP_CINEMA) },
-          testTag = "btn_nav_topcinema"
-        )
+        // Render direct portal switch buttons dynamically for all enabled portals!
+        StreamingPortal.values().filter { it.isEnabled }.forEach { portal ->
+          val btnColor = when (portal) {
+            StreamingPortal.TOP_CINEMA -> CinemaPrimary
+            StreamingPortal.WATCH_SERIES -> CinemaSecondary
+            StreamingPortal.LAROZA -> CinemaAccent
+            StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50)
+            else -> CinemaSurfaceVariant
+          }
+          val icon = when (portal) {
+            StreamingPortal.TOP_CINEMA -> Icons.Default.Movie
+            StreamingPortal.WATCH_SERIES -> Icons.Default.LiveTv
+            StreamingPortal.EGY_DEAD -> Icons.Default.Tv
+            else -> Icons.Default.Tv
+          }
 
-        // Button 2: WatchSeries
-        TvNavActionButton(
-          label = "ووتش سيريز",
-          subLabel = "WatchSeries",
-          icon = Icons.Default.LiveTv,
-          isSelected = activePortal == StreamingPortal.WATCH_SERIES,
-          activeColor = CinemaSecondary,
-          onClick = { onSelectPortal(StreamingPortal.WATCH_SERIES) },
-          testTag = "btn_nav_watchseries"
-        )
+          TvNavActionButton(
+            label = portal.displayNameArabic,
+            subLabel = portal.displayNameEnglish,
+            icon = icon,
+            isSelected = activePortal == portal,
+            activeColor = btnColor,
+            onClick = { onSelectPortal(portal) },
+            testTag = "btn_nav_${portal.id}"
+          )
+        }
       }
 
       // Secondary Utilities: Bookmarks, History, Virtual Mouse, Mode

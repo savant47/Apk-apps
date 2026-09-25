@@ -155,6 +155,13 @@ fun RemoteGuideDialog(
             title = "اختصارات سريعة",
             description = "الزر الأصفر يبدل وضع الماوس مباشرة، والزر الأزرق يفعل وضع ملء الشاشة الكامل."
           )
+
+          RemoteKeyInfoRow(
+            keyBadge = "أيقونة الجودة ⚙️",
+            badgeColor = Color(0xFFFFB300),
+            title = "التحكم بجودة الفيديو (240p - 1080p)",
+            description = "أيقونة HighQuality في الشريط العلوي تتيح لك اختيار الجودة بسهولة، كما تظهر الجودات فوراً داخل مشغل الفيديو عند النقر على الترس."
+          )
         }
 
         Spacer(modifier = Modifier.height(16.dp))

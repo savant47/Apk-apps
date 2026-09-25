@@ -4,11 +4,12 @@ import java.net.URLEncoder
 
 enum class StreamingPortal(
   val id: String,
-  val displayNameArabic: String,
-  val displayNameEnglish: String,
-  val homeUrl: String,
-  val searchBaseUrl: String,
-  val description: String
+  var displayNameArabic: String,
+  var displayNameEnglish: String,
+  var homeUrl: String,
+  var searchBaseUrl: String,
+  val description: String,
+  var isEnabled: Boolean = true
 ) {
   TOP_CINEMA(
     id = "topcinema",
@@ -25,6 +26,32 @@ enum class StreamingPortal(
     homeUrl = "https://watchseries.bar/home",
     searchBaseUrl = "https://watchseries.bar/search/",
     description = "أحدث المسلسلات التلفزيونية العالمية والحلقات كاملة بجميع المواسم"
+  ),
+  LAROZA(
+    id = "laroza",
+    displayNameArabic = "لاروزا",
+    displayNameEnglish = "LaRoza",
+    homeUrl = "https://llaroza.boats/home.24",
+    searchBaseUrl = "https://llaroza.boats/search.php?keywords=",
+    description = "أفلام ومسلسلات عربية وأجنبية مترجمة وحصرية بجودة عالية وسيرفرات سريعة جداً"
+  ),
+  EGY_DEAD(
+    id = "egydead",
+    displayNameArabic = "إيجي ديد",
+    displayNameEnglish = "EgyDead",
+    homeUrl = "https://tv10.egydead.live/",
+    searchBaseUrl = "https://tv10.egydead.live/?s=",
+    description = "سيرفر إيجي ديد السريع للأفلام والمسلسلات العربية والأجنبية المترجمة",
+    isEnabled = true
+  ),
+  PORTAL_5(
+    id = "portal5",
+    displayNameArabic = "مصدر مخصص 2",
+    displayNameEnglish = "Custom Portal 2",
+    homeUrl = "",
+    searchBaseUrl = "",
+    description = "مصدر مخصص إضافي يمكنك برمجته وتعديله بالكامل من الإعدادات",
+    isEnabled = false
   );
 
   fun buildSearchUrl(query: String): String {
@@ -41,25 +68,53 @@ enum class StreamingPortal(
       finalQuery.replace(" ", "+")
     }
     return when (this) {
-      TOP_CINEMA -> "https://topcinema.io/search/?query=$encoded&type=all"
-      WATCH_SERIES -> "https://watchseries.bar/search/$encoded?q=$encoded"
+      TOP_CINEMA -> {
+        val base = homeUrl.substringBefore("/home")
+        "$base/search/?query=$encoded&type=all"
+      }
+      WATCH_SERIES -> {
+        val base = homeUrl.substringBefore("/home")
+        "$base/search/$encoded?q=$encoded"
+      }
+      LAROZA -> {
+        "${homeUrl.substringBefore("/home")}/search.php?keywords=$encoded"
+      }
+      EGY_DEAD -> {
+        "${homeUrl.trimEnd('/')}/?s=$encoded"
+      }
+      PORTAL_5 -> {
+        if (searchBaseUrl.isNotBlank()) {
+          if (searchBaseUrl.contains("%s")) searchBaseUrl.replace("%s", encoded) else "$searchBaseUrl$encoded"
+        } else {
+          "${homeUrl.trimEnd('/')}/search/$encoded"
+        }
+      }
     }
   }
 
   companion object {
     fun fromUrl(url: String): StreamingPortal {
-      return if (url.contains("watchseries", ignoreCase = true)) {
+      val lower = url.lowercase()
+      return if (lower.contains("watchseries")) {
         WATCH_SERIES
+      } else if (lower.contains("laroza") || lower.contains("llaroza") || lower.contains("roza")) {
+        LAROZA
+      } else if (lower.contains("egydead") || lower.contains("egy-dead")) {
+        EGY_DEAD
+      } else if (PORTAL_5.isEnabled && PORTAL_5.homeUrl.isNotBlank() && lower.contains(PORTAL_5.homeUrl.substringAfter("://").substringBefore("/").lowercase())) {
+        PORTAL_5
       } else {
         TOP_CINEMA
       }
     }
 
     fun fromId(id: String): StreamingPortal {
-      return if (id.equals(WATCH_SERIES.id, ignoreCase = true) || id.equals(WATCH_SERIES.name, ignoreCase = true)) {
-        WATCH_SERIES
-      } else {
-        TOP_CINEMA
+      return when (id.lowercase()) {
+        "watchseries" -> WATCH_SERIES
+        "laroza" -> LAROZA
+        "egydead" -> EGY_DEAD
+        "portal5" -> PORTAL_5
+        else -> TOP_CINEMA
       }
     }
   }

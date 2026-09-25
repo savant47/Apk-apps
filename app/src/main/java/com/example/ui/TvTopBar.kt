@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -252,34 +253,36 @@ fun TvTopBar(
                   .clickable { keyboardController?.show() }
               )
 
-              // Direct Search Button 1: TopCinema
-              Button(
-                onClick = { executeSearch(StreamingPortal.TOP_CINEMA) },
-                colors = ButtonDefaults.buttonColors(containerColor = CinemaPrimary),
-                shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                modifier = Modifier
-                  .height(38.dp)
-                  .testTag("topbar_btn_search_topcinema")
-              ) {
-                Icon(Icons.Default.Movie, contentDescription = null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("توب سينما", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-              }
+              // Render direct search buttons dynamically for all enabled portals!
+              StreamingPortal.values().filter { it.isEnabled }.forEach { portal ->
+                val btnColor = when (portal) {
+                  StreamingPortal.TOP_CINEMA -> CinemaPrimary
+                  StreamingPortal.WATCH_SERIES -> CinemaSecondary
+                  StreamingPortal.LAROZA -> CinemaAccent
+                  StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50)
+                  else -> CinemaSurfaceVariant
+                }
+                val textColor = if (portal == StreamingPortal.LAROZA) Color.Black else Color.White
+                val icon = when (portal) {
+                  StreamingPortal.TOP_CINEMA -> Icons.Default.Movie
+                  StreamingPortal.WATCH_SERIES -> Icons.Default.LiveTv
+                  StreamingPortal.EGY_DEAD -> Icons.Default.Tv
+                  else -> Icons.Default.HighQuality
+                }
 
-              // Direct Search Button 2: WatchSeries
-              Button(
-                onClick = { executeSearch(StreamingPortal.WATCH_SERIES) },
-                colors = ButtonDefaults.buttonColors(containerColor = CinemaSecondary),
-                shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                modifier = Modifier
-                  .height(38.dp)
-                  .testTag("topbar_btn_search_watchseries")
-              ) {
-                Icon(Icons.Default.LiveTv, contentDescription = null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("ووتش سيريز", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Button(
+                  onClick = { executeSearch(portal) },
+                  colors = ButtonDefaults.buttonColors(containerColor = btnColor),
+                  shape = RoundedCornerShape(6.dp),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                  modifier = Modifier
+                    .height(38.dp)
+                    .testTag("topbar_btn_search_${portal.id}")
+                ) {
+                  Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = textColor)
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text(portal.displayNameArabic, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textColor)
+                }
               }
             }
 
@@ -302,6 +305,7 @@ fun TvTopBar(
                 onClick = onOpenSubtitles,
                 testTag = "btn_topbar_subtitles"
               )
+
               TvTopBarIconButton(
                 icon = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                 contentDescription = "إضافة للمفضلة",
