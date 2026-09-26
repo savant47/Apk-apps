@@ -96,6 +96,7 @@ fun MainScreen(
   var showGuideDialog by remember { mutableStateOf(false) }
   var showSubtitlesDialog by remember { mutableStateOf(false) }
   var showQualityDialog by remember { mutableStateOf(false) }
+  var showUpdateDialog by remember { mutableStateOf(false) }
   var currentVideoQuality by remember { mutableStateOf("auto") }
   var isHomeActive by remember { mutableStateOf(true) }
 
@@ -310,6 +311,7 @@ fun MainScreen(
           onOpenGuide = { showGuideDialog = true },
           onOpenAdBlockSettings = { showAdBlockDialog = true },
           onOpenQuality = { showQualityDialog = true },
+          onOpenUpdate = { showUpdateDialog = true },
           onToggleBarVisibility = { isBarVisible = !isBarVisible },
           modifier = if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding() else Modifier
         )
@@ -350,6 +352,7 @@ fun MainScreen(
         onOpenHistory = { showHistoryDialog = true },
         onOpenDisplayMode = { showDisplayModeDialog = true },
         onOpenAdBlockSettings = { showAdBlockDialog = true },
+        onOpenUpdate = { showUpdateDialog = true },
         modifier = Modifier
           .fillMaxSize()
           .padding(innerPadding)
@@ -725,5 +728,10 @@ fun MainScreen(
     )
   }
 
-
+  if (showUpdateDialog) {
+    AppUpdateDialog(
+      repository = repository,
+      onDismiss = { showUpdateDialog = false }
+    )
+  }
 }

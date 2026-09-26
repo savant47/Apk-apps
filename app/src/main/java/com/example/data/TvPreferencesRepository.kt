@@ -281,6 +281,51 @@ class TvPreferencesRepository(context: Context) {
     prefs.edit().putString(KEY_HISTORY_JSON, jsonArray.toString()).apply()
   }
 
+  fun getGitHubRepo(): String {
+    return prefs.getString(KEY_GITHUB_REPO, DEFAULT_GITHUB_REPO) ?: DEFAULT_GITHUB_REPO
+  }
+
+  fun setGitHubRepo(repo: String) {
+    prefs.edit().putString(KEY_GITHUB_REPO, repo.trim()).apply()
+  }
+
+  /**
+   * Exports all user data (history, bookmarks, display mode, portal configs) to a backup JSON string.
+   */
+  fun exportUserDataJson(): String {
+    val root = JSONObject()
+    root.put("version", 1)
+    root.put("timestamp", System.currentTimeMillis())
+    root.put("bookmarks", prefs.getString(KEY_BOOKMARKS_JSON, "[]"))
+    root.put("history", prefs.getString(KEY_HISTORY_JSON, "[]"))
+    root.put("display_mode", prefs.getString(KEY_DISPLAY_MODE, AppDisplayMode.MOBILE.name))
+    root.put("active_portal", prefs.getString(KEY_ACTIVE_PORTAL, StreamingPortal.TOP_CINEMA.id))
+    root.put("github_repo", getGitHubRepo())
+    return root.toString(2)
+  }
+
+  /**
+   * Restores user data from a backup JSON string if needed.
+   */
+  fun restoreUserDataJson(jsonString: String): Boolean {
+    return try {
+      val root = JSONObject(jsonString)
+      val editor = prefs.edit()
+      if (root.has("bookmarks")) editor.putString(KEY_BOOKMARKS_JSON, root.getString("bookmarks"))
+      if (root.has("history")) editor.putString(KEY_HISTORY_JSON, root.getString("history"))
+      if (root.has("display_mode")) editor.putString(KEY_DISPLAY_MODE, root.getString("display_mode"))
+      if (root.has("active_portal")) editor.putString(KEY_ACTIVE_PORTAL, root.getString("active_portal"))
+      if (root.has("github_repo")) editor.putString(KEY_GITHUB_REPO, root.getString("github_repo"))
+      editor.apply()
+      loadBookmarks()
+      loadHistory()
+      loadDisplayMode()
+      true
+    } catch (_: Exception) {
+      false
+    }
+  }
+
   companion object {
     private const val KEY_BOOKMARKS_JSON = "bookmarks_json"
     private const val KEY_HISTORY_JSON = "history_json"
@@ -291,5 +336,7 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_AD_BLOCK = "ad_block_enabled"
     private const val KEY_ADGUARD_DNS = "adguard_dns_enabled"
     private const val KEY_STRICT_POPUP_BLOCKER = "strict_popup_blocker_enabled"
+    private const val KEY_GITHUB_REPO = "github_repo_slug"
+    const val DEFAULT_GITHUB_REPO = "Savant47/cinema-tv"
   }
 }

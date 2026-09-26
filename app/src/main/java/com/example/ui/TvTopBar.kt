@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -108,6 +109,7 @@ fun TvTopBar(
   onOpenGuide: () -> Unit,
   onOpenAdBlockSettings: () -> Unit = {},
   onOpenQuality: () -> Unit = {},
+  onOpenUpdate: () -> Unit = {},
   onToggleBarVisibility: () -> Unit,
   modifier: Modifier = Modifier
 ) {
@@ -312,6 +314,13 @@ fun TvTopBar(
                 tint = Color(0xFF38BDF8),
                 onClick = onOpenQuality,
                 testTag = "btn_topbar_quality"
+              )
+              TvTopBarIconButton(
+                icon = Icons.Default.SystemUpdate,
+                contentDescription = "تحديث التطبيق المباشر (OTA Update)",
+                tint = CinemaSuccess,
+                onClick = onOpenUpdate,
+                testTag = "btn_topbar_update"
               )
 
               TvTopBarIconButton(

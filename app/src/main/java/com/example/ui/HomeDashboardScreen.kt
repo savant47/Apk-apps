@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Checkbox
@@ -118,6 +119,7 @@ fun HomeDashboardScreen(
   onOpenHistory: () -> Unit,
   onOpenDisplayMode: () -> Unit,
   onOpenAdBlockSettings: () -> Unit = {},
+  onOpenUpdate: () -> Unit = {},
   modifier: Modifier = Modifier,
   searchService: SearchAndSubtitlesService = remember { SearchAndSubtitlesService() }
 ) {
@@ -322,6 +324,23 @@ fun HomeDashboardScreen(
               Icons.Default.Settings,
               contentDescription = "إدارة المصادر",
               tint = Color.LightGray,
+              modifier = Modifier.size(18.dp)
+            )
+          }
+
+          IconButton(
+            onClick = onOpenUpdate,
+            modifier = Modifier
+              .size(36.dp)
+              .clip(CircleShape)
+              .background(CinemaSurface)
+              .border(1.dp, CinemaSuccess.copy(alpha = 0.6f), CircleShape)
+              .testTag("btn_dashboard_update")
+          ) {
+            Icon(
+              Icons.Default.SystemUpdate,
+              contentDescription = "تحديث التطبيق",
+              tint = CinemaSuccess,
               modifier = Modifier.size(18.dp)
             )
           }
