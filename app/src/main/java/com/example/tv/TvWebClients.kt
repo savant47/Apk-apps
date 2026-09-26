@@ -318,178 +318,6 @@ class TvWebViewClient(
       }
     }
 
-    // 2. High-precision cross-origin iframe HTML interceptor for 100% reliable postMessage autoplay events!
-    if (method == "GET" && 
-        (urlStr.contains("/embed") || urlStr.contains("/iframe") || urlStr.contains("player") || urlStr.contains("play")) &&
-        !urlStr.endsWith(".js") && !urlStr.endsWith(".css") && !urlStr.endsWith(".mp4") && 
-        !urlStr.endsWith(".m3u8") && !urlStr.endsWith(".ts") && !urlStr.endsWith(".png") && 
-        !urlStr.endsWith(".jpg") && !urlStr.endsWith(".gif") && !urlStr.endsWith(".webp")
-    ) {
-      try {
-        val conn = URL(urlStr).openConnection() as HttpURLConnection
-        conn.connectTimeout = 5000
-        conn.readTimeout = 5000
-        conn.requestMethod = "GET"
-        
-        // Forward all headers to maintain cookies/credentials/User-Agent of WebView
-        request.requestHeaders.forEach { (key, value) ->
-          conn.setRequestProperty(key, value)
-        }
-        
-        val responseCode = conn.responseCode
-        if (responseCode == 200) {
-          val contentType = conn.contentType ?: "text/html"
-          if (contentType.lowercase().contains("text/html")) {
-            val encoding = conn.contentEncoding ?: "UTF-8"
-            val reader = BufferedReader(InputStreamReader(conn.inputStream, encoding))
-            val sb = StringBuilder()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-              sb.append(line).append("\n")
-            }
-            reader.close()
-            var html = sb.toString()
-            
-            // Injected styles and script inside the same-origin of the iframe
-            val scriptToInject = """
-              <style>
-              /* TV Optimized Video Player & Quality Menu for BeoutQ / Android TV */
-              .jw-settings-menu, .jw-settings-submenu, .vjs-menu, .plyr__menu__container, .art-settings,
-              [class*="settings-menu"], [class*="settings-submenu"], [class*="quality-menu"] {
-                min-width: 220px !important;
-                background: #0B132B !important;
-                background-color: #0B132B !important;
-                border: 2px solid #38bdf8 !important;
-                border-radius: 10px !important;
-                box-shadow: 0 4px 16px rgba(0,0,0,0.85) !important;
-                z-index: 2147483647 !important;
-                opacity: 1 !important;
-                visibility: visible !important;
-              }
-              .jw-settings-item, .vjs-menu-item, .plyr__menu__container [role="menuitem"], .art-setting-item,
-              .jw-settings-content li, .jw-reset.jw-settings-item, [class*="settings-item"], [class*="quality-item"],
-              .jw-settings-submenu-item, .jw-text, .jw-reset {
-                font-size: 16px !important;
-                line-height: 24px !important;
-                padding: 10px 16px !important;
-                min-height: 44px !important;
-                color: #ffffff !important;
-                background: #0B132B !important;
-                background-color: #0B132B !important;
-                cursor: pointer !important;
-                pointer-events: auto !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: space-between !important;
-                text-shadow: none !important;
-                opacity: 1 !important;
-                visibility: visible !important;
-              }
-              .jw-settings-item:hover, .jw-settings-item:focus, .jw-settings-item[aria-checked="true"],
-              .vjs-menu-item:hover, .vjs-menu-item:focus, .vjs-selected, .art-setting-item:hover,
-              [class*="settings-item"]:hover, [class*="quality-item"]:hover {
-                background: #0284c7 !important;
-                background-color: #0284c7 !important;
-                color: #ffffff !important;
-                font-weight: bold !important;
-              }
-              .jw-settings-submenu-quality, [class*="submenu-quality"] {
-                display: block !important;
-                opacity: 1 !important;
-                visibility: visible !important;
-                background: #0B132B !important;
-              }
-              </style>
-              <script>
-              (function() {
-                console.log("TvAutoPlay: Frame loaded!");
-                function hookSettings() {
-                  var buttons = document.querySelectorAll(
-                    '.jw-icon-settings, button[aria-label*="Settings"], button[aria-label*="إعدادات"], ' +
-                    '.vjs-menu-button-popup, .plyr__controls [data-plyr="settings"], .art-control-setting, ' +
-                    '[class*="settings-btn"], [class*="gear"]'
-                  );
-                  buttons.forEach(function(btn) {
-                    if (btn.getAttribute('data-tv-hooked')) return;
-                    btn.setAttribute('data-tv-hooked', 'true');
-                    btn.addEventListener('click', function() {
-                      setTimeout(function() {
-                        try {
-                          var qualityItem = document.querySelector('.jw-settings-item[aria-controls*="quality"], .jw-settings-item[aria-label*="Quality"], [data-jw-submenu-name="quality"]');
-                          if (qualityItem) {
-                            qualityItem.click();
-                          } else {
-                            var qSubmenu = document.querySelector('.jw-settings-submenu[data-jw-submenu-name="quality"], .jw-settings-submenu-quality');
-                            var mainSubmenu = document.querySelector('.jw-settings-submenu[data-jw-submenu-name="main"]');
-                            if (qSubmenu) {
-                              if (mainSubmenu) mainSubmenu.classList.remove('jw-settings-submenu-active');
-                              qSubmenu.classList.add('jw-settings-submenu-active');
-                              qSubmenu.style.display = 'block';
-                              qSubmenu.style.visibility = 'visible';
-                            }
-                          }
-                        } catch(e) {}
-                      }, 100);
-                    });
-                  });
-                }
-
-                function checkVideo() {
-                  var videos = document.querySelectorAll('video');
-                  videos.forEach(function(video) {
-                    if (video.getAttribute('data-ended-hooked-cross')) return;
-                    video.setAttribute('data-ended-hooked-cross', 'true');
-                    console.log('TvAutoPlay: Hooked video inside iframe successfully!');
-                    
-                    video.addEventListener('ended', function() {
-                      console.log('TvAutoPlay: Video ended! Sending postMessage...');
-                      window.parent.postMessage('video_ended', '*');
-                    });
-                    
-                    video.addEventListener('timeupdate', function() {
-                      if (video.duration && video.currentTime > 0) {
-                        var remaining = video.duration - video.currentTime;
-                        if (remaining <= 8) {
-                          if (!video.getAttribute('data-autoplay-triggered-cross')) {
-                            video.setAttribute('data-autoplay-triggered-cross', 'true');
-                            console.log('TvAutoPlay: Video near end! Sending postMessage...');
-                            window.parent.postMessage('video_ended', '*');
-                          }
-                        }
-                      }
-                    });
-                  });
-                }
-
-                hookSettings();
-                checkVideo();
-                setTimeout(function() { hookSettings(); checkVideo(); }, 500);
-                setTimeout(function() { hookSettings(); checkVideo(); }, 1500);
-                setTimeout(function() { hookSettings(); checkVideo(); }, 3000);
-              })();
-              </script>
-            """.trimIndent()
-            
-            html = if (html.contains("</body>")) {
-              html.replace("</body>", "$scriptToInject</body>")
-            } else if (html.contains("</html>")) {
-              html.replace("</html>", "$scriptToInject</html>")
-            } else {
-              html + scriptToInject
-            }
-            
-            return WebResourceResponse(
-              "text/html",
-              encoding,
-              ByteArrayInputStream(html.toByteArray(Charsets.UTF_8))
-            )
-          }
-        }
-      } catch (e: Exception) {
-        Log.e("TvWebViewClient", "CORS proxy injection failed: ${e.message}")
-      }
-    }
-
     return super.shouldInterceptRequest(view, request)
   }
 
@@ -535,104 +363,6 @@ class TvWebViewClient(
           }
         });
 
-        function injectQualityStyles(doc) {
-          try {
-            if (!doc || doc.getElementById('cinema-tv-quality-style')) return;
-            var style = doc.createElement('style');
-            style.id = 'cinema-tv-quality-style';
-            style.innerHTML = `
-              /* Ultra-compatible Android TV / BeoutQ Settings & Quality Menu styling */
-              .jw-settings-menu, .jw-settings-submenu, .vjs-menu, .plyr__menu__container, .art-settings {
-                min-width: 220px !important;
-                background: #0B132B !important;
-                border: 2px solid #38bdf8 !important;
-                border-radius: 12px !important;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.95) !important;
-                z-index: 2147483647 !important;
-                opacity: 1 !important;
-                visibility: visible !important;
-              }
-              .jw-settings-item, .vjs-menu-item, .plyr__menu__container [role="menuitem"], .art-setting-item, .jw-text, .jw-reset {
-                font-size: 16px !important;
-                line-height: 24px !important;
-                padding: 12px 18px !important;
-                min-height: 46px !important;
-                color: #ffffff !important;
-                background: #0B132B !important;
-                cursor: pointer !important;
-                pointer-events: auto !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: space-between !important;
-                text-shadow: none !important;
-              }
-              .jw-settings-item:hover, .jw-settings-item:focus, .jw-settings-item[aria-checked="true"],
-              .vjs-menu-item:hover, .vjs-menu-item:focus, .vjs-selected, .art-setting-item:hover {
-                background: #0284c7 !important;
-                color: #ffffff !important;
-                font-weight: bold !important;
-              }
-              .jw-settings-submenu-quality {
-                display: block !important;
-                opacity: 1 !important;
-                background: #0B132B !important;
-              }
-              /* Ensure player iframe container has enough height on TV */
-              @media screen and (min-width: 600px) {
-                .player--iframe {
-                  min-height: 460px !important;
-                  height: 52vh !important;
-                }
-              }
-            `;
-            (doc.head || doc.body).appendChild(style);
-          } catch(e) {}
-        }
-
-        function hookPlayerSettings(doc) {
-          try {
-            if (!doc) return;
-            injectQualityStyles(doc);
-
-            // Hook settings gear button to auto-reveal quality options directly
-            var settingsButtons = doc.querySelectorAll(
-              '.jw-icon-settings, button[aria-label*="Settings"], button[aria-label*="إعدادات"], ' +
-              '.vjs-menu-button-popup, .plyr__controls [data-plyr="settings"], .art-control-setting'
-            );
-
-            settingsButtons.forEach(function(btn) {
-              if (btn.getAttribute('data-tv-hooked')) return;
-              btn.setAttribute('data-tv-hooked', 'true');
-
-              btn.addEventListener('click', function() {
-                setTimeout(function() {
-                  try {
-                    // 1. In JWPlayer: Auto-activate quality submenu if present
-                    var qSubmenu = doc.querySelector('.jw-settings-submenu[data-jw-submenu-name="quality"], .jw-settings-submenu-quality');
-                    var mainSubmenu = doc.querySelector('.jw-settings-submenu[data-jw-submenu-name="main"]');
-                    var qualityItem = doc.querySelector('.jw-settings-item[aria-controls*="quality"], .jw-settings-item[aria-label*="Quality"], [data-jw-submenu-name="quality"]');
-
-                    if (qualityItem) {
-                      qualityItem.click();
-                    } else if (qSubmenu) {
-                      if (mainSubmenu) mainSubmenu.classList.remove('jw-settings-submenu-active');
-                      qSubmenu.classList.add('jw-settings-submenu-active');
-                      qSubmenu.style.display = 'block';
-                      qSubmenu.style.visibility = 'visible';
-                    }
-
-                    // 2. Video.js: Auto-expand quality menu
-                    var vjsQuality = doc.querySelector('.vjs-quality-menu-button, .vjs-menu-button-popup');
-                    if (vjsQuality) {
-                      var vjsMenu = vjsQuality.querySelector('.vjs-menu');
-                      if (vjsMenu) vjsMenu.classList.add('vjs-lock-showing');
-                    }
-                  } catch(e) {}
-                }, 80);
-              });
-            });
-          } catch(e) {}
-        }
 
         window.playNextEpisode = function() {
           console.log('Semantic Search: Starting next episode retrieval...');
@@ -804,47 +534,19 @@ class TvWebViewClient(
           } catch(e) {}
         }
 
-        function cleanseDOM() {
+        function cleanseAds() {
           try {
-            var els = document.querySelectorAll('div, a, iframe, span');
-            els.forEach(function(el) {
-              if (el.closest('#player') || el.closest('#movie-player') || el.closest('.movie-player-wrap') || el.closest('.player--iframe') || el.closest('.jwplayer') || el.closest('.vjs-tech') || el.closest('video')) {
-                return;
-              }
-              var style = window.getComputedStyle(el);
-              var zIndex = parseInt(style.zIndex, 10);
-              if (zIndex > 99 && (style.position === 'fixed' || style.position === 'absolute')) {
-                var width = el.offsetWidth;
-                var height = el.offsetHeight;
-                var winW = window.innerWidth;
-                var winH = window.innerHeight;
-                if (width > winW * 0.5 && height > winH * 0.5 && !el.innerText.trim()) {
-                  console.log('DOM Cleanser removed overlay:', el);
-                  el.remove();
-                }
-              }
-              if (el.tagName === 'A' && el.href) {
-                var href = el.href.toLowerCase();
-                if (href.indexOf('luugy') !== -1 || href.indexOf('adsterra') !== -1 || href.indexOf('propeller') !== -1 || href.indexOf('onclick') !== -1 || href.indexOf('doubleclick') !== -1) {
-                  el.remove();
-                }
+            var ads = document.querySelectorAll('a[href*="luugy"], a[href*="adsterra"], a[href*="propeller"], div[id*="popunder"]');
+            ads.forEach(function(el) {
+              if (!el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('.player--iframe') && !el.closest('iframe')) {
+                el.remove();
               }
             });
           } catch(e) {}
         }
 
         function setupPlayers() {
-          cleanseDOM();
-          
-          try {
-            var ads = document.querySelectorAll('a[href*="luugy"], a[href*="adsterra"], a[href*="propeller"], div[id*="popunder"]');
-            ads.forEach(function(el) {
-              if (!el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('.player--iframe')) {
-                el.remove();
-              }
-            });
-          } catch(e) {}
-
+          cleanseAds();
           try {
             var clickableItems = document.querySelectorAll(
               '.servers .server-item, .server--item, .watch--servers--list li, ' +
@@ -873,15 +575,12 @@ class TvWebViewClient(
               playBtn.style.pointerEvents = 'auto';
             }
 
-            hookPlayerSettings(document);
             hookVideoEnded(document);
-            
             var iframes = document.querySelectorAll('iframe');
             iframes.forEach(function(ifr) {
               try {
                 var doc = ifr.contentDocument || ifr.contentWindow.document;
                 if (doc) {
-                  hookPlayerSettings(doc);
                   hookVideoEnded(doc);
                 }
               } catch(e) {}
@@ -889,34 +588,17 @@ class TvWebViewClient(
 
             if (!window.hasTvMutationObserver) {
               window.hasTvMutationObserver = true;
-              var observer = new MutationObserver(function(mutations) {
-                var needsSetup = false;
-                mutations.forEach(function(mut) {
-                  if (mut.addedNodes) {
-                    mut.addedNodes.forEach(function(node) {
-                      if (node.nodeType === 1) {
-                        if (node.tagName === 'VIDEO' || node.tagName === 'IFRAME') {
-                          needsSetup = true;
-                        } else if (node.querySelector && (node.querySelector('video') || node.querySelector('iframe'))) {
-                          needsSetup = true;
-                        }
-                      }
-                    });
-                  }
+              var observer = new MutationObserver(function() {
+                hookVideoEnded(document);
+                var currentIfrs = document.querySelectorAll('iframe');
+                currentIfrs.forEach(function(ifr) {
+                  try {
+                    var doc = ifr.contentDocument || ifr.contentWindow.document;
+                    if (doc) {
+                      hookVideoEnded(doc);
+                    }
+                  } catch(e) {}
                 });
-                if (needsSetup) {
-                  hookVideoEnded(document);
-                  var currentIfrs = document.querySelectorAll('iframe');
-                  currentIfrs.forEach(function(ifr) {
-                    try {
-                      var doc = ifr.contentDocument || ifr.contentWindow.document;
-                      if (doc) {
-                        hookPlayerSettings(doc);
-                        hookVideoEnded(doc);
-                      }
-                    } catch(e) {}
-                  });
-                }
               });
               observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
             }

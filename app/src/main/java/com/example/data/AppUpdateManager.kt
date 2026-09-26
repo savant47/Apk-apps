@@ -85,7 +85,7 @@ class AppUpdateManager(private val context: Context) {
       val apiUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
       val request = Request.Builder()
         .url(apiUrl)
-        .header("User-Agent", "SavantTV-Android-App")
+        .header("User-Agent", "AsserTV-Android-App")
         .header("Accept", "application/vnd.github.v3+json")
         .build()
 
@@ -104,12 +104,12 @@ class AppUpdateManager(private val context: Context) {
       val json = JSONObject(bodyStr)
       val tagName = json.optString("tag_name", "v1.0")
       val title = json.optString("name", tagName)
-      val notes = json.optString("body", "تحديث جديد لتطبيق SavantTV مع تحسينات في الأداء ومشغلات الفيديو.")
+      val notes = json.optString("body", "تحديث جديد لتطبيق AsserTV مع تحسينات في الأداء ومشغلات الفيديو.")
       val publishedAt = json.optString("published_at", "")
 
       // Search for .apk asset
       var apkUrl: String? = null
-      var apkName = "SavantTV_Update.apk"
+      var apkName = "AsserTV_Update.apk"
       var fileSize = -1L
 
       val assets = json.optJSONArray("assets")
@@ -160,7 +160,7 @@ class AppUpdateManager(private val context: Context) {
     try {
       val request = Request.Builder()
         .url(downloadUrl)
-        .header("User-Agent", "Mozilla/5.0 (Linux; Android) SavantTV-Downloader")
+        .header("User-Agent", "Mozilla/5.0 (Linux; Android) AsserTV-Downloader")
         .build()
 
       val response = httpClient.newCall(request).execute()
@@ -181,7 +181,7 @@ class AppUpdateManager(private val context: Context) {
         downloadDir.mkdirs()
       }
 
-      val outputFile = File(downloadDir, "SavantTV_Update.apk")
+      val outputFile = File(downloadDir, "AsserTV_Update.apk")
       if (outputFile.exists()) {
         outputFile.delete()
       }

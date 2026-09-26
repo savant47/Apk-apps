@@ -199,18 +199,20 @@ fun HomeDashboardScreen(
           modifier = Modifier.weight(1f, fill = false)
         ) {
           Image(
-            painter = painterResource(id = R.drawable.ic_savant_logo),
-            contentDescription = "SavantTV Logo",
+            painter = painterResource(id = R.drawable.ic_assertv_logo),
+            contentDescription = "AsserTV Logo",
             modifier = Modifier
               .size(38.dp)
               .clip(RoundedCornerShape(8.dp))
           )
           Spacer(modifier = Modifier.width(8.dp))
           Text(
-            text = "SavantTV",
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
+            text = "AsserTV",
+            color = Color(0xFFE50914),
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Black,
+            fontFamily = androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(R.font.bebas_neue)),
+            letterSpacing = 1.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )

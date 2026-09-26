@@ -69,8 +69,8 @@ fun SplashScreen(
     ) {
       // Display the beautiful logo with a rounded clip
       Image(
-        painter = painterResource(id = R.drawable.ic_savant_logo),
-        contentDescription = "SavantTV Logo",
+        painter = painterResource(id = R.drawable.ic_assertv_logo),
+        contentDescription = "AsserTV Logo",
         contentScale = ContentScale.Fit,
         modifier = Modifier
           .size(240.dp)
@@ -81,13 +81,14 @@ fun SplashScreen(
 
       Spacer(modifier = Modifier.height(18.dp))
 
-      // Elegant Subtitle / App name text below
+      // Elegant Subtitle / App name text below in Netflix style
       Text(
-        text = "SavantTV",
-        color = Color.White,
-        fontSize = 28.sp,
-        fontWeight = FontWeight.ExtraBold,
-        fontFamily = FontFamily.SansSerif,
+        text = "AsserTV",
+        color = Color(0xFFE50914),
+        fontSize = 36.sp,
+        fontWeight = FontWeight.Black,
+        fontFamily = androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(R.font.bebas_neue)),
+        letterSpacing = 2.sp,
         modifier = Modifier.alpha(alpha.value)
       )
 
@@ -95,7 +96,7 @@ fun SplashScreen(
 
       Text(
         text = "بوابة المشاهدة السينمائية الذكية",
-        color = Color.Gray,
+        color = Color(0xFFB3B3B3),
         fontSize = 14.sp,
         fontWeight = FontWeight.Medium,
         modifier = Modifier.alpha(alpha.value)

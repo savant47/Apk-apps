@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "SavantTV"
+rootProject.name = "AsserTV"
 
 include(":app")

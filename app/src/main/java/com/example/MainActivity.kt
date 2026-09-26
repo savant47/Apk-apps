@@ -32,13 +32,16 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
 
   companion object {
     init {
-      // Configure Mesa software rasterizer environment to avoid searching for non-existent DRM rendernodes (/dev/dri/renderD128)
+      // Silence Mesa driver logs and avoid searching for non-existent DRM rendernodes
       try {
-        android.system.Os.setenv("LIBGL_ALWAYS_SOFTWARE", "1", true)
-        android.system.Os.setenv("MESA_LOADER_DRIVER_OVERRIDE", "swrast", true)
+        android.system.Os.setenv("MESA_LOG_LEVEL", "none", true)
+        android.system.Os.setenv("EGL_LOG_LEVEL", "none", true)
+        android.system.Os.setenv("MESA_NO_ERROR", "1", true)
         android.system.Os.setenv("MESA_LOG_FILE", "/dev/null", true)
-        android.system.Os.setenv("EGL_LOG_LEVEL", "fatal", true)
+        android.system.Os.unsetenv("MESA_LOADER_DRIVER_OVERRIDE")
+        android.system.Os.unsetenv("GALLIUM_DRIVER")
         android.system.Os.unsetenv("MESA_DEBUG")
+        android.system.Os.unsetenv("LIBGL_DEBUG")
       } catch (_: Throwable) {}
     }
   }

@@ -3,6 +3,6 @@
     <item
         android:width="72dp"
         android:height="72dp"
-        android:drawable="@drawable/ic_savant_logo"
+        android:drawable="@drawable/ic_assertv_logo"
         android:gravity="center" />
 </layer-list>

@@ -10,15 +10,15 @@ class TvCinemaApplication : Application() {
   companion object {
     init {
       try {
-        // Direct Mesa to use software rasterizer and mute Mesa error logging
-        Os.setenv("LIBGL_ALWAYS_SOFTWARE", "1", true)
-        Os.setenv("MESA_LOADER_DRIVER_OVERRIDE", "swrast", true)
+        // Completely silence Mesa error logging and avoid triggering DRI rendernode lookups
+        Os.setenv("MESA_LOG_LEVEL", "none", true)
+        Os.setenv("EGL_LOG_LEVEL", "none", true)
         Os.setenv("MESA_NO_ERROR", "1", true)
         Os.setenv("MESA_LOG_FILE", "/dev/null", true)
-        Os.setenv("EGL_LOG_LEVEL", "fatal", true)
+        Os.unsetenv("MESA_LOADER_DRIVER_OVERRIDE")
+        Os.unsetenv("GALLIUM_DRIVER")
         Os.unsetenv("MESA_DEBUG")
         Os.unsetenv("LIBGL_DEBUG")
-        Os.setenv("GALLIUM_DRIVER", "softpipe", true)
       } catch (_: Throwable) {}
     }
   }
