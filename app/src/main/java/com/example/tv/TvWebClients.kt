@@ -350,11 +350,90 @@ class TvWebViewClient(
             reader.close()
             var html = sb.toString()
             
-            // Injected script inside the same-origin of the iframe
+            // Injected styles and script inside the same-origin of the iframe
             val scriptToInject = """
+              <style>
+              /* TV Optimized Video Player & Quality Menu for BeoutQ / Android TV */
+              .jw-settings-menu, .jw-settings-submenu, .vjs-menu, .plyr__menu__container, .art-settings,
+              [class*="settings-menu"], [class*="settings-submenu"], [class*="quality-menu"] {
+                min-width: 220px !important;
+                background: #0B132B !important;
+                background-color: #0B132B !important;
+                border: 2px solid #38bdf8 !important;
+                border-radius: 10px !important;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.85) !important;
+                z-index: 2147483647 !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+              }
+              .jw-settings-item, .vjs-menu-item, .plyr__menu__container [role="menuitem"], .art-setting-item,
+              .jw-settings-content li, .jw-reset.jw-settings-item, [class*="settings-item"], [class*="quality-item"],
+              .jw-settings-submenu-item, .jw-text, .jw-reset {
+                font-size: 16px !important;
+                line-height: 24px !important;
+                padding: 10px 16px !important;
+                min-height: 44px !important;
+                color: #ffffff !important;
+                background: #0B132B !important;
+                background-color: #0B132B !important;
+                cursor: pointer !important;
+                pointer-events: auto !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: space-between !important;
+                text-shadow: none !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+              }
+              .jw-settings-item:hover, .jw-settings-item:focus, .jw-settings-item[aria-checked="true"],
+              .vjs-menu-item:hover, .vjs-menu-item:focus, .vjs-selected, .art-setting-item:hover,
+              [class*="settings-item"]:hover, [class*="quality-item"]:hover {
+                background: #0284c7 !important;
+                background-color: #0284c7 !important;
+                color: #ffffff !important;
+                font-weight: bold !important;
+              }
+              .jw-settings-submenu-quality, [class*="submenu-quality"] {
+                display: block !important;
+                opacity: 1 !important;
+                visibility: visible !important;
+                background: #0B132B !important;
+              }
+              </style>
               <script>
               (function() {
                 console.log("TvAutoPlay: Frame loaded!");
+                function hookSettings() {
+                  var buttons = document.querySelectorAll(
+                    '.jw-icon-settings, button[aria-label*="Settings"], button[aria-label*="إعدادات"], ' +
+                    '.vjs-menu-button-popup, .plyr__controls [data-plyr="settings"], .art-control-setting, ' +
+                    '[class*="settings-btn"], [class*="gear"]'
+                  );
+                  buttons.forEach(function(btn) {
+                    if (btn.getAttribute('data-tv-hooked')) return;
+                    btn.setAttribute('data-tv-hooked', 'true');
+                    btn.addEventListener('click', function() {
+                      setTimeout(function() {
+                        try {
+                          var qualityItem = document.querySelector('.jw-settings-item[aria-controls*="quality"], .jw-settings-item[aria-label*="Quality"], [data-jw-submenu-name="quality"]');
+                          if (qualityItem) {
+                            qualityItem.click();
+                          } else {
+                            var qSubmenu = document.querySelector('.jw-settings-submenu[data-jw-submenu-name="quality"], .jw-settings-submenu-quality');
+                            var mainSubmenu = document.querySelector('.jw-settings-submenu[data-jw-submenu-name="main"]');
+                            if (qSubmenu) {
+                              if (mainSubmenu) mainSubmenu.classList.remove('jw-settings-submenu-active');
+                              qSubmenu.classList.add('jw-settings-submenu-active');
+                              qSubmenu.style.display = 'block';
+                              qSubmenu.style.visibility = 'visible';
+                            }
+                          }
+                        } catch(e) {}
+                      }, 100);
+                    });
+                  });
+                }
+
                 function checkVideo() {
                   var videos = document.querySelectorAll('video');
                   videos.forEach(function(video) {
@@ -381,7 +460,12 @@ class TvWebViewClient(
                     });
                   });
                 }
-                setInterval(checkVideo, 1000);
+
+                hookSettings();
+                checkVideo();
+                setTimeout(function() { hookSettings(); checkVideo(); }, 500);
+                setTimeout(function() { hookSettings(); checkVideo(); }, 1500);
+                setTimeout(function() { hookSettings(); checkVideo(); }, 3000);
               })();
               </script>
             """.trimIndent()
@@ -457,31 +541,33 @@ class TvWebViewClient(
             var style = doc.createElement('style');
             style.id = 'cinema-tv-quality-style';
             style.innerHTML = `
-              /* High-visibility TV Settings & Quality Menu styling */
+              /* Ultra-compatible Android TV / BeoutQ Settings & Quality Menu styling */
               .jw-settings-menu, .jw-settings-submenu, .vjs-menu, .plyr__menu__container, .art-settings {
-                min-width: 190px !important;
-                background: rgba(15, 23, 42, 0.96) !important;
-                border: 1px solid #38bdf8 !important;
+                min-width: 220px !important;
+                background: #0B132B !important;
+                border: 2px solid #38bdf8 !important;
                 border-radius: 12px !important;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.85) !important;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.95) !important;
                 z-index: 2147483647 !important;
                 opacity: 1 !important;
                 visibility: visible !important;
               }
-              .jw-settings-item, .vjs-menu-item, .plyr__menu__container [role="menuitem"], .art-setting-item {
+              .jw-settings-item, .vjs-menu-item, .plyr__menu__container [role="menuitem"], .art-setting-item, .jw-text, .jw-reset {
                 font-size: 16px !important;
                 line-height: 24px !important;
-                padding: 10px 16px !important;
-                min-height: 42px !important;
+                padding: 12px 18px !important;
+                min-height: 46px !important;
                 color: #ffffff !important;
+                background: #0B132B !important;
                 cursor: pointer !important;
                 pointer-events: auto !important;
                 display: flex !important;
                 align-items: center !important;
                 justify-content: space-between !important;
+                text-shadow: none !important;
               }
               .jw-settings-item:hover, .jw-settings-item:focus, .jw-settings-item[aria-checked="true"],
-              .vjs-menu-item:hover, .vjs-menu-item:focus, .vjs-selected {
+              .vjs-menu-item:hover, .vjs-menu-item:focus, .vjs-selected, .art-setting-item:hover {
                 background: #0284c7 !important;
                 color: #ffffff !important;
                 font-weight: bold !important;
@@ -489,8 +575,9 @@ class TvWebViewClient(
               .jw-settings-submenu-quality {
                 display: block !important;
                 opacity: 1 !important;
+                background: #0B132B !important;
               }
-              /* Ensure player iframe container on TopCinema has enough height on TV/landscape */
+              /* Ensure player iframe container has enough height on TV */
               @media screen and (min-width: 600px) {
                 .player--iframe {
                   min-height: 460px !important;

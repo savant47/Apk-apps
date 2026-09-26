@@ -1351,9 +1351,22 @@ fun ContinueWatchingCard(
 
         IconButton(
           onClick = onDelete,
-          modifier = Modifier.size(20.dp)
+          modifier = Modifier.size(32.dp)
         ) {
-          Icon(Icons.Default.Delete, contentDescription = "حذف", tint = Color.Gray, modifier = Modifier.size(14.dp))
+          Box(
+            modifier = Modifier
+              .size(24.dp)
+              .background(Color(0xFFD32F2F).copy(alpha = 0.2f), RoundedCornerShape(6.dp))
+              .border(1.dp, Color(0xFFD32F2F).copy(alpha = 0.4f), RoundedCornerShape(6.dp)),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(
+              imageVector = Icons.Default.Delete,
+              contentDescription = "حذف العنصر",
+              tint = Color(0xFFFF5252),
+              modifier = Modifier.size(13.dp)
+            )
+          }
         }
       }
 

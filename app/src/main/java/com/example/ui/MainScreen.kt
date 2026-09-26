@@ -309,6 +309,7 @@ fun MainScreen(
           },
           onOpenGuide = { showGuideDialog = true },
           onOpenAdBlockSettings = { showAdBlockDialog = true },
+          onOpenQuality = { showQualityDialog = true },
           onToggleBarVisibility = { isBarVisible = !isBarVisible },
           modifier = if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding() else Modifier
         )
@@ -467,6 +468,9 @@ fun MainScreen(
 
                   userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
                 }
+
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
 
                 val chromeClient = TvWebChromeClient(
                   fullscreenContainer = fsContainer,
@@ -645,6 +649,48 @@ fun MainScreen(
 
   if (showGuideDialog) {
     RemoteGuideDialog(onDismiss = { showGuideDialog = false })
+  }
+
+  if (showQualityDialog) {
+    VideoQualityDialog(
+      currentQuality = currentVideoQuality,
+      onSelectQuality = { qualityId, qualityLabel ->
+        currentVideoQuality = qualityId
+        showQualityDialog = false
+        val js = """
+          (function() {
+            var qId = '$qualityId';
+            try {
+              if (typeof jwplayer !== 'undefined' && jwplayer().setCurrentQuality) {
+                var levels = jwplayer().getQualityLevels();
+                for (var i = 0; i < levels.length; i++) {
+                  if (qId === 'auto' || levels[i].label.indexOf(qId) !== -1 || (levels[i].height && levels[i].height.toString() === qId)) {
+                    jwplayer().setCurrentQuality(i);
+                    break;
+                  }
+                }
+              }
+            } catch(e) {}
+            try {
+              var items = document.querySelectorAll('.jw-settings-item, .vjs-menu-item, .art-setting-item');
+              for (var j = 0; j < items.length; j++) {
+                var text = items[j].innerText || items[j].textContent || '';
+                if (qId === 'auto' && (text.indexOf('Auto') !== -1 || text.indexOf('تلقائي') !== -1)) {
+                  items[j].click();
+                  break;
+                } else if (text.indexOf(qId) !== -1) {
+                  items[j].click();
+                  break;
+                }
+              }
+            } catch(e) {}
+          })();
+        """.trimIndent()
+        webViewRef?.evaluateJavascript(js, null)
+        Toast.makeText(context, "تم تطبيق جودة الفيديو: $qualityLabel", Toast.LENGTH_SHORT).show()
+      },
+      onDismiss = { showQualityDialog = false }
+    )
   }
 
   if (showDisplayModeDialog) {

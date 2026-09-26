@@ -1,73 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-
-    <!-- TV Outer Frame (centered inside 66dp safe zone, approx bounds 24 to 84) -->
-    <path
-        android:pathData="M26,30 h56 a4,4 0 0,1 4,4 v38 a4,4 0 0,1 -4,4 h-56 a4,4 0 0,1 -4,-4 v-38 a4,4 0 0,1 4,-4 z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:startX="22"
-                android:startY="30"
-                android:endX="86"
-                android:endY="76"
-                android:type="linear">
-                <item android:color="#334155" android:offset="0.0" />
-                <item android:color="#1E293B" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-
-    <!-- TV Screen Inner Display -->
-    <path
-        android:pathData="M28,33 h52 a2,2 0 0,1 2,2 v32 a2,2 0 0,1 -2,2 h-52 a2,2 0 0,1 -2,-2 v-32 a2,2 0 0,1 2,-2 z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:startX="28"
-                android:startY="33"
-                android:endX="80"
-                android:endY="67"
-                android:type="linear">
-                <item android:color="#0B132B" android:offset="0.0" />
-                <item android:color="#1C2541" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-
-    <!-- TV Stand Base -->
-    <path
-        android:fillColor="#64748B"
-        android:pathData="M51,76 h6 v5 h-6 z M42,81 h24 a2,2 0 0,0 2,-2 h-28 a2,2 0 0,0 2,2 z" />
-
-    <!-- Cinema Film strip marks on top of screen -->
-    <path
-        android:fillColor="#F59E0B"
-        android:pathData="M30,34 h3 v2 h-3 z M36,34 h3 v2 h-3 z M42,34 h3 v2 h-3 z M48,34 h3 v2 h-3 z M54,34 h3 v2 h-3 z M60,34 h3 v2 h-3 z M66,34 h3 v2 h-3 z M72,34 h3 v2 h-3 z" />
-
-    <!-- Cinema Glowing Play Triangle -->
-    <path
-        android:pathData="M48,43 L64,51 L48,59 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:startX="48"
-                android:startY="43"
-                android:endX="64"
-                android:endY="59"
-                android:type="linear">
-                <item android:color="#F43F5E" android:offset="0.0" />
-                <item android:color="#FB923C" android:offset="0.5" />
-                <item android:color="#FBBF24" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-
-    <!-- Cyan Signal Accent / QS285 TV indicator -->
-    <path
-        android:fillColor="#06B6D4"
-        android:pathData="M78,72 m-1.5,0 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0" />
-
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="72dp"
+        android:height="72dp"
+        android:drawable="@drawable/ic_savant_logo"
+        android:gravity="center" />
+</layer-list>

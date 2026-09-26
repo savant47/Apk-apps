@@ -107,6 +107,7 @@ fun TvTopBar(
   onToggleFullscreen: () -> Unit,
   onOpenGuide: () -> Unit,
   onOpenAdBlockSettings: () -> Unit = {},
+  onOpenQuality: () -> Unit = {},
   onToggleBarVisibility: () -> Unit,
   modifier: Modifier = Modifier
 ) {
@@ -304,6 +305,13 @@ fun TvTopBar(
                 tint = CinemaAccent,
                 onClick = onOpenSubtitles,
                 testTag = "btn_topbar_subtitles"
+              )
+              TvTopBarIconButton(
+                icon = Icons.Default.HighQuality,
+                contentDescription = "اختيار جودة الفيديو (Quality)",
+                tint = Color(0xFF38BDF8),
+                onClick = onOpenQuality,
+                testTag = "btn_topbar_quality"
               )
 
               TvTopBarIconButton(
