@@ -65,6 +65,8 @@ class TvWebChromeClient(
           ViewGroup.LayoutParams.MATCH_PARENT,
           ViewGroup.LayoutParams.MATCH_PARENT
         )
+        // Ensure hardware layer acceleration for smooth 60fps video playback on Mali-450 GPU
+        fullscreenContainer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         fullscreenContainer.addView(view)
         fullscreenContainer.visibility = View.VISIBLE
         fullscreenContainer.bringToFront()
@@ -81,6 +83,7 @@ class TvWebChromeClient(
     try {
       fullscreenContainer.removeView(view)
       fullscreenContainer.visibility = View.GONE
+      fullscreenContainer.setLayerType(View.LAYER_TYPE_NONE, null)
       customView = null
       customViewCallback?.onCustomViewHidden()
       customViewCallback = null
@@ -243,6 +246,17 @@ class TvWebViewClient(
       clean.contains("mp4upload") ||
       clean.contains("rabbitstream") ||
       clean.contains("mixdrop") ||
+      clean.contains("streamhg") ||
+      clean.contains("megamax") ||
+      clean.contains("voe") ||
+      clean.contains("earnvids") ||
+      clean.contains("streamhide") ||
+      clean.contains("uqload") ||
+      clean.contains("upstream") ||
+      clean.contains("embedwish") ||
+      clean.contains("sbplay") ||
+      clean.contains("embedsito") ||
+      clean.contains("calslot") ||
       clean.contains("boredflix") ||
       clean.contains("flixbaba") ||
       clean.contains("moviepire") ||
@@ -291,6 +305,28 @@ class TvWebViewClient(
     return true
   }
 
+  // Android 7 (Nougat API 24/25) legacy iframe shouldInterceptRequest overload
+  @Deprecated("Deprecated in Java")
+  override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
+    if (url.isNullOrBlank()) return null
+    if (isAdBlockEnabled()) {
+      val lower = url.lowercase()
+      for (ad in adHostKeywords) {
+        if (lower.contains(ad)) {
+          val host = try { Uri.parse(url).host?.lowercase() ?: "" } catch (_: Exception) { "" }
+          if (!isStreamingOrCdnHost(host)) {
+            return WebResourceResponse(
+              "text/plain",
+              "UTF-8",
+              ByteArrayInputStream("".toByteArray())
+            )
+          }
+        }
+      }
+    }
+    return super.shouldInterceptRequest(view, url)
+  }
+
   override fun shouldInterceptRequest(
     view: WebView?,
     request: WebResourceRequest?
@@ -323,9 +359,63 @@ class TvWebViewClient(
 
   override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
     super.onPageStarted(view, url, favicon)
+    // Polyfills for legacy Chromium (v53-58 on Android 7) + Popup Blocker
     val preInjectJs = """
       (function() {
         try {
+          // 1. Element.prototype.matches & closest polyfills for Chromium < 55
+          if (!Element.prototype.matches) {
+            Element.prototype.matches = Element.prototype.msMatchesSelector || 
+                                        Element.prototype.webkitMatchesSelector || 
+                                        function(s) {
+                                          var matches = (this.document || this.ownerDocument).querySelectorAll(s),
+                                              i = matches.length;
+                                          while (--i >= 0 && matches.item(i) !== this) {}
+                                          return i > -1;            
+                                        };
+          }
+          if (!Element.prototype.closest) {
+            Element.prototype.closest = function(s) {
+              var el = this;
+              do {
+                if (el.matches(s)) return el;
+                el = el.parentElement || el.parentNode;
+              } while (el !== null && el.nodeType === 1);
+              return null;
+            };
+          }
+
+          // 2. Object.assign polyfill
+          if (typeof Object.assign !== 'function') {
+            Object.assign = function(target) {
+              if (target == null) throw new TypeError('Cannot convert undefined or null to object');
+              var to = Object(target);
+              for (var index = 1; index < arguments.length; index++) {
+                var nextSource = arguments[index];
+                if (nextSource != null) {
+                  for (var nextKey in nextSource) {
+                    if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
+                      to[nextKey] = nextSource[nextKey];
+                    }
+                  }
+                }
+              }
+              return to;
+            };
+          }
+
+          // 3. CustomEvent polyfill
+          if (typeof window.CustomEvent !== 'function') {
+            function CustomEvent(event, params) {
+              params = params || { bubbles: false, cancelable: false, detail: null };
+              var evt = document.createEvent('CustomEvent');
+              evt.initCustomEvent(event, params.bubbles, params.cancelable, params.detail);
+              return evt;
+            }
+            window.CustomEvent = CustomEvent;
+          }
+
+          // 4. Safe window.open and popup suppressor
           var safeDummyWindow = {
             closed: false,
             focus: function() {},
@@ -370,7 +460,8 @@ class TvWebViewClient(
           var nextSelectors = [
             'a.next', 'a.next-episode', '.next-episode a', 'a[href*="/next"]', 'a[title*="التالية"]', 'a[title*="Next"]',
             'button.next', 'button.next-episode', '.btn-next', '.plyr__controls [data-plyr="next"]',
-            'a.next_episode', '.episode-nav .next', 'a[href*="/watch/"]:contains("التالية")', 'a:contains("الحلقة التالية")', 'a:contains("التالي")'
+            'a.next_episode', '.episode-nav .next', 'a[title*="الحلقة التالية"]', 'a[title*="الحلقه التاليه"]', 'a[aria-label*="Next"]',
+            '.episodes-list a.active + a', '.episodes-list li.active + li a', '.episodes-nav a.next'
           ];
           for (var i = 0; i < nextSelectors.length; i++) {
             var el = document.querySelector(nextSelectors[i]);
@@ -536,18 +627,128 @@ class TvWebViewClient(
 
         function cleanseAds() {
           try {
-            var ads = document.querySelectorAll('a[href*="luugy"], a[href*="adsterra"], a[href*="propeller"], div[id*="popunder"]');
+            window.open = function() { return null; };
+            var ads = document.querySelectorAll('a[href*="luugy"], a[href*="adsterra"], a[href*="propeller"], div[id*="popunder"], div[class*="popup"], div[class*="ads-box"]');
             ads.forEach(function(el) {
               if (!el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('.player--iframe') && !el.closest('iframe')) {
                 el.remove();
               }
             });
+            // Remove transparent overlay divs and invisible click-jacking anchor overlays
+            var overlays = document.querySelectorAll('div[style*="position: fixed"], div[style*="position:absolute"], a[target="_blank"]');
+            overlays.forEach(function(el) {
+              if (!el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('iframe') && !el.closest('video') && !el.closest('.servers')) {
+                var rect = el.getBoundingClientRect();
+                if (rect.width > 200 && rect.height > 200) {
+                  el.style.pointerEvents = 'none';
+                  el.style.display = 'none';
+                }
+              }
+            });
+          } catch(e) {}
+        }
+
+        function isExplicitControl(target) {
+          if (!target) return false;
+          return !!target.closest(
+            '.jw-controls, .jw-controlbar, .vjs-control-bar, .art-bottom, .plyr__controls, ' +
+            '.jw-icon-playback, .vjs-play-control, .art-icon-play, button, input, ' +
+            '.jw-icon-settings, .art-icon-setting, .vjs-menu-button, .plyr__menu, ' +
+            '.servers, .server-item, .server--item, .watch--servers--list, ' +
+            '.btn-play, .vjs-big-play-button, .jw-display-icon-container, [role="button"], [role="menuitem"], ' +
+            'a[href], select, option, .settings-menu, .vjs-menu'
+          );
+        }
+
+        function setupVideoClickFilter(doc) {
+          if (!doc) return;
+          try {
+            var root = doc.body || doc.documentElement;
+            if (!root || root.getAttribute('data-tv-click-filter-ready')) return;
+            root.setAttribute('data-tv-click-filter-ready', 'true');
+
+            function filterPlayerClick(e) {
+              var target = e.target;
+              if (!target) return;
+
+              // Explicit interactive controls are never filtered
+              if (isExplicitControl(target)) {
+                if (window.AndroidTvBridge && typeof window.AndroidTvBridge.onPlayerClicked === 'function') {
+                  window.AndroidTvBridge.onPlayerClicked(target.tagName || 'CONTROL', false, false);
+                }
+                return;
+              }
+
+              // Locate video element or player container
+              var video = target.tagName === 'VIDEO' ? target : (target.querySelector ? target.querySelector('video') : null);
+              if (!video) {
+                var playerWrap = target.closest('#player, #movie-player, .movie-player-wrap, .jwplayer, .video-js, .artplayer-app, .plyr, .player--iframe');
+                if (playerWrap) {
+                  video = playerWrap.querySelector('video');
+                }
+              }
+
+              if (!video) return;
+
+              var rect = (video.getBoundingClientRect && video.getBoundingClientRect()) || (target.getBoundingClientRect && target.getBoundingClientRect());
+              if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+              var clickX = e.clientX - rect.left;
+              var clickY = e.clientY - rect.top;
+              var xRatio = clickX / rect.width;
+              var yRatio = clickY / rect.height;
+              var isPlaying = !video.paused && !video.ended && video.readyState > 2;
+
+              var shouldFilter = false;
+              if (window.AndroidTvBridge && typeof window.AndroidTvBridge.filterCenterClick === 'function') {
+                try {
+                  shouldFilter = window.AndroidTvBridge.filterCenterClick(target.tagName || 'VIDEO', xRatio, yRatio, isPlaying);
+                } catch(err) {
+                  shouldFilter = isPlaying && (xRatio >= 0.12 && xRatio <= 0.88 && yRatio >= 0.12 && yRatio <= 0.85);
+                }
+              } else {
+                shouldFilter = isPlaying && (xRatio >= 0.12 && xRatio <= 0.88 && yRatio >= 0.12 && yRatio <= 0.85);
+              }
+
+              if (shouldFilter) {
+                // Intercept accidental pause/play click from TV remote center click
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                if (window.AndroidTvBridge && typeof window.AndroidTvBridge.onPlayerClicked === 'function') {
+                  window.AndroidTvBridge.onPlayerClicked(target.tagName || 'VIDEO', true, true);
+                }
+
+                // Show player controls without toggling playback state
+                var controlBar = doc.querySelector('.jw-controlbar, .vjs-control-bar, .art-bottom, .plyr__controls');
+                if (controlBar) {
+                  controlBar.style.opacity = '1';
+                  controlBar.style.visibility = 'visible';
+                  setTimeout(function() {
+                    controlBar.style.opacity = '';
+                    controlBar.style.visibility = '';
+                  }, 3500);
+                }
+                return false;
+              }
+            }
+
+            doc.addEventListener('click', filterPlayerClick, true);
           } catch(e) {}
         }
 
         function setupPlayers() {
           cleanseAds();
           try {
+            // Force video controls and gear/settings menus visible on Android TV
+            if (!document.getElementById('tv-quality-fix-style')) {
+              var css = document.createElement('style');
+              css.id = 'tv-quality-fix-style';
+              css.innerHTML = '.jw-controlbar, .jw-icon-settings, .vjs-control-bar, .art-bottom, .plyr__controls, .jw-settings-menu, .jw-settings-content, .jw-settings-submenu, .vjs-menu, .vjs-menu-content, .art-setting-panel, .art-setting, .plyr__menu { display: flex !important; opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; z-index: 999999 !important; }';
+              (document.head || document.documentElement).appendChild(css);
+            }
+
             var clickableItems = document.querySelectorAll(
               '.servers .server-item, .server--item, .watch--servers--list li, ' +
               '#movie-player, #player, .movie-player-wrap, .btn-play, ' +
@@ -556,6 +757,8 @@ class TvWebViewClient(
             clickableItems.forEach(function(el) {
               el.style.pointerEvents = 'auto';
             });
+
+            setupVideoClickFilter(document);
 
             var tcServers = document.querySelectorAll('.watch--servers--list li.server--item');
             tcServers.forEach(function(item) {
@@ -575,6 +778,23 @@ class TvWebViewClient(
               playBtn.style.pointerEvents = 'auto';
             }
 
+            try {
+              if (window.jwplayer && typeof window.jwplayer === 'function') {
+                var p = window.jwplayer();
+                if (p && p.getQualityLevels && !window.hasOptimizedQuality) {
+                  window.hasOptimizedQuality = true;
+                  var levels = p.getQualityLevels();
+                  for (var i = 0; i < levels.length; i++) {
+                    var l = (levels[i].label || '').toLowerCase();
+                    if (l.indexOf('720') !== -1 || l.indexOf('hd') !== -1) {
+                      p.setCurrentQuality(i);
+                      break;
+                    }
+                  }
+                }
+              }
+            } catch(e) {}
+
             hookVideoEnded(document);
             var iframes = document.querySelectorAll('iframe');
             iframes.forEach(function(ifr) {
@@ -582,6 +802,13 @@ class TvWebViewClient(
                 var doc = ifr.contentDocument || ifr.contentWindow.document;
                 if (doc) {
                   hookVideoEnded(doc);
+                  setupVideoClickFilter(doc);
+                  if (!doc.getElementById('tv-quality-fix-style-iframe')) {
+                    var icss = doc.createElement('style');
+                    icss.id = 'tv-quality-fix-style-iframe';
+                    icss.innerHTML = '.jw-controlbar, .jw-icon-settings, .vjs-control-bar, .art-bottom, .plyr__controls, .jw-settings-menu, .jw-settings-content, .jw-settings-submenu, .vjs-menu, .vjs-menu-content, .art-setting-panel, .art-setting, .plyr__menu { display: flex !important; opacity: 1 !important; visibility: visible !important; pointer-events: auto !important; z-index: 999999 !important; }';
+                    (doc.head || doc.documentElement).appendChild(icss);
+                  }
                 }
               } catch(e) {}
             });
@@ -590,12 +817,14 @@ class TvWebViewClient(
               window.hasTvMutationObserver = true;
               var observer = new MutationObserver(function() {
                 hookVideoEnded(document);
+                setupVideoClickFilter(document);
                 var currentIfrs = document.querySelectorAll('iframe');
                 currentIfrs.forEach(function(ifr) {
                   try {
                     var doc = ifr.contentDocument || ifr.contentWindow.document;
                     if (doc) {
                       hookVideoEnded(doc);
+                      setupVideoClickFilter(doc);
                     }
                   } catch(e) {}
                 });
@@ -649,31 +878,44 @@ class TvWebViewClient(
                 }
               }
 
-              // C. DOM click
-              var items = w.document.querySelectorAll('.jw-settings-item, .vjs-menu-item, [data-plyr="quality"] button, .art-setting-item');
-              for (var k = 0; k < items.length; k++) {
-                var text = (items[k].innerText || items[k].textContent || '').toLowerCase();
-                if (t === 'auto' && text.indexOf('auto') !== -1) {
-                  items[k].click();
-                  return true;
-                }
-                if (text.indexOf(t) !== -1) {
-                  items[k].click();
-                  return true;
-                }
+              // C. DOM click: First click settings gear/button to open quality menu, then click item
+              var doc = w.document;
+              var gearBtns = doc.querySelectorAll('.jw-icon-settings, .vjs-menu-button-popup, .art-icon-setting, button[data-plyr="settings"], .jw-settings-gear, [class*="gear"], [class*="setting"]');
+              for (var g = 0; g < gearBtns.length; g++) {
+                gearBtns[g].click();
               }
+
+              setTimeout(function() {
+                try {
+                  var items = doc.querySelectorAll('.jw-settings-item, .vjs-menu-item, .art-setting-item, .plyr__menu__container button, li, div');
+                  for (var k = 0; k < items.length; k++) {
+                    var text = (items[k].innerText || items[k].textContent || '').toLowerCase();
+                    if (text.length < 35) {
+                      if (t === 'auto' && (text.indexOf('auto') !== -1 || text.indexOf('تلقائي') !== -1)) {
+                        items[k].click();
+                        break;
+                      } else if (text.indexOf(t) !== -1) {
+                        items[k].click();
+                        break;
+                      }
+                    }
+                  }
+                } catch(e2) {}
+              }, 250);
+
+              return true;
             } catch(e) {}
             return false;
           }
 
-          if (apply(window)) return 'APPLIED_ROOT';
+          if (apply(window)) found = true;
           var ifrs = document.querySelectorAll('iframe');
           for (var j = 0; j < ifrs.length; j++) {
             try {
-              if (apply(ifrs[j].contentWindow)) return 'APPLIED_IFRAME';
+              if (apply(ifrs[j].contentWindow)) found = true;
             } catch(e) {}
           }
-          return 'NOT_FOUND';
+          return found ? 'APPLIED' : 'NOT_FOUND';
         };
 
         setupPlayers();
@@ -690,17 +932,38 @@ class TvWebViewClient(
   }
 }
 
-class TvAutoPlayBridge(
-  private val onVideoEnded: () -> Unit,
-  private val onVideoTimeUpdate: (currentTime: Float, duration: Float) -> Unit
+open class TvPlayerBridge(
+  private val onVideoEnded: () -> Unit = {},
+  private val onVideoTimeUpdate: (currentTime: Float, duration: Float) -> Unit = { _, _ -> },
+  private val onCenterClickFiltered: (target: String, isPlaying: Boolean) -> Unit = { _, _ -> }
 ) {
   @android.webkit.JavascriptInterface
-  fun onVideoFinished() {
-    onVideoEnded()
+  open fun onVideoFinished() {
+    this.onVideoEnded.invoke()
   }
 
   @android.webkit.JavascriptInterface
-  fun onVideoTimeUpdate(currentTime: Float, duration: Float) {
-    onVideoTimeUpdate(currentTime, duration)
+  open fun onVideoTimeUpdate(currentTime: Float, duration: Float) {
+    this.onVideoTimeUpdate.invoke(currentTime, duration)
+  }
+
+  @android.webkit.JavascriptInterface
+  open fun filterCenterClick(target: String, xRatio: Float, yRatio: Float, isPlaying: Boolean): Boolean {
+    // If video is playing on TV, filter accidental clicks in center dead-zone (12% to 88%)
+    val isCenter = xRatio in 0.12f..0.88f && yRatio in 0.12f..0.85f
+    val shouldFilter = isPlaying && isCenter
+    if (shouldFilter) {
+      this.onCenterClickFiltered.invoke(target, isPlaying)
+    }
+    return shouldFilter
+  }
+
+  @android.webkit.JavascriptInterface
+  open fun onPlayerClicked(target: String, isCenter: Boolean, isBlocked: Boolean) {
+    if (isBlocked) {
+      this.onCenterClickFiltered.invoke(target, true)
+    }
   }
 }
+
+typealias TvAutoPlayBridge = TvPlayerBridge

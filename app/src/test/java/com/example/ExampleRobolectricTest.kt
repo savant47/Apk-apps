@@ -8,6 +8,8 @@ import com.example.model.ControlMode
 import com.example.model.StreamingPortal
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,7 +35,7 @@ class ExampleRobolectricTest {
 
     // WatchSeries search URL for Z Nation
     val watchSeriesSearchUrl = StreamingPortal.WATCH_SERIES.buildSearchUrl("Z Nation")
-    assertTrue("Search URL should format keyword correctly", watchSeriesSearchUrl.startsWith("https://watchseries.bar/search/"))
+    assertTrue("Search URL should format keyword correctly", watchSeriesSearchUrl.startsWith("https://watchseries.bar/search"))
     assertTrue("Search URL should contain keyword", watchSeriesSearchUrl.contains("Nation"))
 
     // Query with spaces and Arabic characters
@@ -87,7 +89,7 @@ class ExampleRobolectricTest {
     // Multi-season TV Series (e.g. Breaking Bad, Game of Thrones, Silo)
     val seriesQuery = "Breaking Bad"
     val seriesSearchUrl = StreamingPortal.WATCH_SERIES.buildSearchUrl(seriesQuery)
-    assertTrue("Search URL should point to WatchSeries search", seriesSearchUrl.contains("watchseries.bar/search/"))
+    assertTrue("Search URL should point to WatchSeries search", seriesSearchUrl.contains("watchseries.bar/search"))
     assertTrue("Search URL should contain encoded title", seriesSearchUrl.contains("Breaking"))
 
     // Direct multi-season series path pattern
@@ -199,5 +201,57 @@ class ExampleRobolectricTest {
       assertTrue("Legitimate streaming URL should be recognized as safe: $safe", isSafe)
     }
   }
+
+  @Test
+  fun `verify TvPlayerBridge click filtering and lifecycle events`() {
+    var endedCalled = false
+    var timeUpdateCalled = false
+    var centerFilteredCalled = false
+
+    val bridge = com.example.tv.TvPlayerBridge(
+      onVideoEnded = { endedCalled = true },
+      onVideoTimeUpdate = { _, _ -> timeUpdateCalled = true },
+      onCenterClickFiltered = { _, _ -> centerFilteredCalled = true }
+    )
+
+    // Test video lifecycle events
+    bridge.onVideoFinished()
+    assertTrue("onVideoFinished should trigger onVideoEnded callback", endedCalled)
+
+    bridge.onVideoTimeUpdate(12.5f, 120.0f)
+    assertTrue("onVideoTimeUpdate should trigger callback", timeUpdateCalled)
+
+    // Test center click filtering when video is playing
+    // Center point (50% x, 50% y) while playing -> MUST be filtered
+    val centerBlocked = bridge.filterCenterClick(target = "VIDEO", xRatio = 0.5f, yRatio = 0.5f, isPlaying = true)
+    assertTrue("Center click on playing video must be filtered", centerBlocked)
+    assertTrue("Callback for filtered center click should be triggered", centerFilteredCalled)
+
+    // Edge point (bottom controls: 50% x, 95% y) while playing -> MUST NOT be filtered
+    val bottomAllowed = bridge.filterCenterClick(target = "CONTROL", xRatio = 0.5f, yRatio = 0.95f, isPlaying = true)
+    assertFalse("Bottom control click on playing video should be allowed", bottomAllowed)
+
+    // Center point while video is PAUSED -> MUST NOT be filtered (allow initial play)
+    val pausedCenterAllowed = bridge.filterCenterClick(target = "VIDEO", xRatio = 0.5f, yRatio = 0.5f, isPlaying = false)
+    assertFalse("Center click when paused should not be filtered", pausedCenterAllowed)
+  }
+
+  @Test
+  fun `verify Android 7 legacy shouldInterceptRequest blocks ads and allows streams`() {
+    val client = com.example.tv.TvWebViewClient(
+      isAdBlockEnabled = { true },
+      onPageFinishedCallback = {}
+    )
+
+    // Legacy overload test with string URLs
+    val adUrl = "https://luugy.com/script/ad.js"
+    val interceptedAd = client.shouldInterceptRequest(null, adUrl)
+    assertNotNull("Legacy shouldInterceptRequest must intercept ad URL", interceptedAd)
+
+    val safeUrl = "https://watchseries.bar/player/embed"
+    val allowedSafe = client.shouldInterceptRequest(null, safeUrl)
+    assertNull("Legacy shouldInterceptRequest should not block legitimate video player stream", allowedSafe)
+  }
 }
+
 

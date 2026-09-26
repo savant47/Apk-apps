@@ -50,4 +50,21 @@ class TvCinemaApplication : Application() {
       } catch (_: Throwable) {}
     }
   }
+
+  override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    try {
+      if (level >= TRIM_MEMORY_MODERATE) {
+        // Clean up memory cache on low-memory 2GB RAM TV boxes
+        coil.Coil.imageLoader(this).memoryCache?.clear()
+      }
+    } catch (_: Throwable) {}
+  }
+
+  override fun onLowMemory() {
+    super.onLowMemory()
+    try {
+      coil.Coil.imageLoader(this).memoryCache?.clear()
+    } catch (_: Throwable) {}
+  }
 }

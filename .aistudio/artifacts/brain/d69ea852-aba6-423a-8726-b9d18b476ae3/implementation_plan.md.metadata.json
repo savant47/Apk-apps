@@ -1,6 +1,6 @@
 {
-  "summary":  "An implementation plan to add a Hybrid Web Auto-Play Next feature inside WebView. It includes injecting a robust JavaScript controller to monitor HTML5 video states and click next buttons, alongside a custom JavascriptInterface bridging WebView events with Android code.",
-  "updatedAt":  "2026-09-25T17:13:43.799157684Z",
+  "summary":  "خطة شاملة لمراجعة ومحاكاة توافق التطبيق مع نظام أندرويد 7.1.2 (Nougat) ورسيفر BeoutQ TV Box ومعالجة كافة مشكلات الـ WebView والـ SSL وعتاد Mali-450 وذاكرة 2GB RAM.",
+  "updatedAt":  "2026-09-26T20:24:36.578501121Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

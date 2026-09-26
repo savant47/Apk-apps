@@ -64,6 +64,7 @@ import com.example.tv.TvKeyHandler
 import com.example.tv.TvWebChromeClient
 import com.example.tv.TvWebViewClient
 import com.example.tv.TvAutoPlayBridge
+import com.example.tv.TvPlayerBridge
 import com.example.ui.theme.CinemaDarkBackground
 import com.example.ui.theme.CinemaPrimary
 import com.example.ui.theme.CinemaSecondary
@@ -318,7 +319,7 @@ fun MainScreen(
       }
     },
     bottomBar = {
-      if (!isHomeActive && isBarVisible && !isFullscreenVideo) {
+      if (isBarVisible && !isFullscreenVideo) {
         TvNavBar(
           activePortal = activePortal,
           controlMode = controlMode,
@@ -471,6 +472,15 @@ fun MainScreen(
 
                   userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
                 }
+
+                addJavascriptInterface(
+                  TvPlayerBridge(
+                    onVideoEnded = {},
+                    onVideoTimeUpdate = { _, _ -> },
+                    onCenterClickFiltered = { _, _ -> }
+                  ),
+                  "AndroidTvBridge"
+                )
 
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false

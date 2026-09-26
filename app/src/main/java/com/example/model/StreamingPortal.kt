@@ -24,7 +24,7 @@ enum class StreamingPortal(
     displayNameArabic = "ووتش سيريز",
     displayNameEnglish = "WatchSeries",
     homeUrl = "https://watchseries.bar/home",
-    searchBaseUrl = "https://watchseries.bar/search/",
+    searchBaseUrl = "https://watchseries.bar/search",
     description = "أحدث المسلسلات التلفزيونية العالمية والحلقات كاملة بجميع المواسم"
   ),
   LAROZA(
