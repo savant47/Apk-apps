@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -72,9 +73,10 @@ fun TvNavBar(
   Box(
     modifier = modifier
       .fillMaxWidth()
-      .height(52.dp)
+      .heightIn(min = 54.dp)
       .background(CinemaDarkBackground)
-      .border(width = 1.dp, color = CinemaSurfaceVariant),
+      .border(width = 1.dp, color = CinemaSurfaceVariant)
+      .padding(vertical = 6.dp),
     contentAlignment = Alignment.CenterStart
   ) {
     // Scrollable single-line LazyRow so all buttons fit cleanly on Mobile phones AND TV screens without wrapping or clipping!
@@ -193,7 +195,7 @@ private fun TvNavActionButton(
 
   Box(
     modifier = Modifier
-      .height(38.dp)
+      .heightIn(min = 40.dp)
       .clip(RoundedCornerShape(8.dp))
       .background(
         when {
@@ -209,7 +211,7 @@ private fun TvNavActionButton(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 10.dp)
+      .padding(horizontal = 10.dp, vertical = 6.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
   ) {
@@ -247,7 +249,7 @@ private fun TvNavUtilityButton(
 
   Box(
     modifier = Modifier
-      .height(38.dp)
+      .heightIn(min = 40.dp)
       .clip(RoundedCornerShape(8.dp))
       .background(
         if (isActive) activeColor.copy(alpha = 0.25f)
@@ -261,7 +263,7 @@ private fun TvNavUtilityButton(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 10.dp)
+      .padding(horizontal = 10.dp, vertical = 6.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
   ) {

@@ -20,8 +20,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
@@ -186,23 +190,57 @@ fun TvTopBar(
                 testTag = "btn_topbar_refresh"
               )
 
-              TextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = {
-                  Text(
-                    text = pageTitle.ifBlank { "ابحث في جوجل أو اكتب رابطاً..." },
-                    color = Color.LightGray,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                  )
-                },
-                trailingIcon = {
+              Box(
+                modifier = Modifier
+                  .weight(1f)
+                  .heightIn(min = 40.dp)
+                  .clip(RoundedCornerShape(8.dp))
+                  .background(CinemaSurface)
+                  .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+                  .padding(horizontal = 10.dp, vertical = 6.dp)
+                  .testTag("topbar_search_input"),
+                contentAlignment = Alignment.CenterStart
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                  ) {
+                    if (searchQuery.isEmpty()) {
+                      Text(
+                        text = pageTitle.ifBlank { "ابحث في جوجل أو اكتب رابطاً..." },
+                        color = Color.LightGray,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                      )
+                    }
+                    BasicTextField(
+                      value = searchQuery,
+                      onValueChange = { searchQuery = it },
+                      singleLine = true,
+                      textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 13.sp
+                      ),
+                      cursorBrush = SolidColor(Color(0xFF38BDF8)),
+                      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                      keyboardActions = KeyboardActions(
+                        onSearch = {
+                          if (isGeneralBrowserMode) executeGoogleOrUrlOmnibox()
+                          else executePortalSearch(activePortal)
+                        }
+                      ),
+                      modifier = Modifier.fillMaxWidth()
+                    )
+                  }
                   if (searchQuery.isNotEmpty()) {
                     IconButton(
                       onClick = { searchQuery = "" },
-                      modifier = Modifier.size(20.dp)
+                      modifier = Modifier.size(22.dp)
                     ) {
                       Icon(
                         imageVector = Icons.Default.Clear,
@@ -212,30 +250,8 @@ fun TvTopBar(
                       )
                     }
                   }
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(
-                  onSearch = {
-                    if (isGeneralBrowserMode) executeGoogleOrUrlOmnibox()
-                    else executePortalSearch(activePortal)
-                  }
-                ),
-                colors = TextFieldDefaults.colors(
-                  focusedContainerColor = CinemaSurface,
-                  unfocusedContainerColor = CinemaSurface,
-                  focusedTextColor = Color.White,
-                  unfocusedTextColor = Color.White,
-                  focusedIndicatorColor = Color(0xFF38BDF8),
-                  unfocusedIndicatorColor = Color.Transparent
-                ),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                  .weight(1f)
-                  .height(42.dp)
-                  .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-                  .testTag("topbar_search_input")
-              )
+                }
+              }
 
               Button(
                 onClick = {
@@ -244,9 +260,9 @@ fun TvTopBar(
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
                 shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 modifier = Modifier
-                  .height(36.dp)
+                  .heightIn(min = 38.dp)
                   .testTag("topbar_btn_search_google")
               ) {
                 Icon(Icons.Default.Search, contentDescription = "بحث", modifier = Modifier.size(16.dp), tint = Color.White)
@@ -381,27 +397,61 @@ fun TvTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
-                TextField(
-                  value = searchQuery,
-                  onValueChange = { searchQuery = it },
-                  placeholder = {
-                    Text(
-                      text = "ابحث في جوجل، اكتب رابط موقع، أو اسم فيلم...",
-                      color = Color.Gray,
-                      fontSize = 12.sp,
-                      maxLines = 1,
-                      overflow = TextOverflow.Ellipsis
-                    )
-                  },
-                  leadingIcon = {
+                Box(
+                  modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 42.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(CinemaSurface)
+                    .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+                    .clickable { keyboardController?.show() }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .testTag("topbar_search_input"),
+                  contentAlignment = Alignment.CenterStart
+                ) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
                     Icon(
                       imageVector = Icons.Default.Search,
                       contentDescription = "بحث",
                       tint = Color(0xFF38BDF8),
                       modifier = Modifier.size(18.dp)
                     )
-                  },
-                  trailingIcon = {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                      modifier = Modifier.weight(1f),
+                      contentAlignment = Alignment.CenterStart
+                    ) {
+                      if (searchQuery.isEmpty()) {
+                        Text(
+                          text = "ابحث في جوجل، اكتب رابط موقع، أو اسم فيلم...",
+                          color = Color.Gray,
+                          fontSize = 12.sp,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                        )
+                      }
+                      BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        singleLine = true,
+                        textStyle = TextStyle(
+                          color = Color.White,
+                          fontSize = 13.sp
+                        ),
+                        cursorBrush = SolidColor(Color(0xFF38BDF8)),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(
+                          onSearch = {
+                            if (isGeneralBrowserMode) executeGoogleOrUrlOmnibox()
+                            else executePortalSearch(activePortal)
+                          }
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                      )
+                    }
                     if (searchQuery.isNotEmpty()) {
                       IconButton(
                         onClick = { searchQuery = "" },
@@ -415,39 +465,16 @@ fun TvTopBar(
                         )
                       }
                     }
-                  },
-                  singleLine = true,
-                  keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                  keyboardActions = KeyboardActions(
-                    onSearch = {
-                      if (isGeneralBrowserMode) executeGoogleOrUrlOmnibox()
-                      else executePortalSearch(activePortal)
-                    }
-                  ),
-                  colors = TextFieldDefaults.colors(
-                    focusedContainerColor = CinemaSurface,
-                    unfocusedContainerColor = CinemaSurface,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedIndicatorColor = Color(0xFF38BDF8),
-                    unfocusedIndicatorColor = Color.Transparent
-                  ),
-                  shape = RoundedCornerShape(8.dp),
-                  modifier = Modifier
-                    .weight(1f)
-                    .height(44.dp)
-                    .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-                    .testTag("topbar_search_input")
-                    .clickable { keyboardController?.show() }
-                )
+                  }
+                }
 
                 Button(
                   onClick = { executeGoogleOrUrlOmnibox() },
                   colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
                   shape = RoundedCornerShape(6.dp),
-                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                   modifier = Modifier
-                    .height(38.dp)
+                    .heightIn(min = 38.dp)
                     .testTag("topbar_btn_search_google")
                 ) {
                   Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
@@ -467,14 +494,14 @@ fun TvTopBar(
                     onClick = { executePortalSearch(portal) },
                     colors = ButtonDefaults.buttonColors(containerColor = btnColor),
                     shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                     modifier = Modifier
-                      .height(38.dp)
+                      .heightIn(min = 38.dp)
                       .testTag("topbar_btn_search_${portal.id}")
                   ) {
                     Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color.White)
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(portal.displayNameArabic, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
+                    Text(portal.displayNameArabic, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
                   }
                 }
               }

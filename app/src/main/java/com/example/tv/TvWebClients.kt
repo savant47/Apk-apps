@@ -210,9 +210,17 @@ class TvWebViewClient(
       return true
     }
 
-    // 3. Check known malicious ad keywords in URL
+    // 3. Never block Google Search, reCAPTCHA, hCaptcha, or Cloudflare verification URLs
     val lower = url.lowercase()
-    if (isAdBlockEnabled()) {
+    val isTrustedVerificationOrSearch = lower.contains("google.") ||
+      lower.contains("gstatic.") ||
+      lower.contains("googleapis.") ||
+      lower.contains("recaptcha") ||
+      lower.contains("hcaptcha") ||
+      lower.contains("cloudflare") ||
+      lower.contains("/sorry/")
+
+    if (isAdBlockEnabled() && !isTrustedVerificationOrSearch) {
       for (ad in adHostKeywords) {
         if (lower.contains(ad)) {
           onAdBlockedCallback?.invoke(url)
@@ -429,8 +437,18 @@ class TvWebViewClient(
       }
     }
 
-    // 1. Core Ad Blocker Integration
-    if (isAdBlockEnabled()) {
+    // 1. Core Ad Blocker Integration (Never block Google, reCAPTCHA, hCaptcha, or Cloudflare)
+    val isTrustedCaptchaOrSearch = host.contains("google.") ||
+      host.contains("gstatic.") ||
+      host.contains("googleapis.") ||
+      host.contains("recaptcha") ||
+      host.contains("hcaptcha") ||
+      host.contains("cloudflare") ||
+      urlLower.contains("recaptcha") ||
+      urlLower.contains("captcha") ||
+      urlLower.contains("/sorry/")
+
+    if (isAdBlockEnabled() && !isTrustedCaptchaOrSearch) {
       var isAd = false
       for (ad in adHostKeywords) {
         if (host.contains(ad)) {
@@ -452,6 +470,17 @@ class TvWebViewClient(
 
   override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
     super.onPageStarted(view, url, favicon)
+    val urlLower = (url ?: "").lowercase()
+    // Do not tamper with window.open/alert/confirm on Google Search, reCAPTCHA, or Cloudflare verification pages
+    if (urlLower.contains("google.") ||
+        urlLower.contains("gstatic.") ||
+        urlLower.contains("recaptcha") ||
+        urlLower.contains("hcaptcha") ||
+        urlLower.contains("cloudflare") ||
+        urlLower.contains("/sorry/")
+    ) {
+      return
+    }
     // Polyfills for legacy Chromium (v53-58 on Android 7) + Popup Blocker
     val preInjectJs = """
       (function() {
@@ -580,6 +609,26 @@ class TvWebViewClient(
   override fun onPageFinished(view: WebView?, url: String?) {
     super.onPageFinished(view, url)
     if (url.isNullOrBlank() || url == "about:blank" || url.startsWith("data:")) {
+      return
+    }
+
+    try {
+      android.webkit.CookieManager.getInstance().flush()
+    } catch (_: Exception) {}
+
+    val urlLower = url.lowercase()
+    val isGoogleOrCaptchaOrGeneralWeb = urlLower.contains("google.") ||
+      urlLower.contains("gstatic.") ||
+      urlLower.contains("recaptcha") ||
+      urlLower.contains("hcaptcha") ||
+      urlLower.contains("cloudflare") ||
+      urlLower.contains("/sorry/") ||
+      urlLower.contains("youtube.com") ||
+      urlLower.contains("wikipedia.org") ||
+      isGeneralBrowserMode()
+
+    if (isGoogleOrCaptchaOrGeneralWeb) {
+      onPageFinishedCallback(url)
       return
     }
 
@@ -916,19 +965,43 @@ class TvWebViewClient(
           } catch(e) {}
         }
 
+        function isCaptchaOrVerificationElement(el) {
+          if (!el) return false;
+          try {
+            var idAndClass = ((el.id || '') + ' ' + (el.className || '')).toLowerCase();
+            if (idAndClass.indexOf('recaptcha') !== -1 ||
+                idAndClass.indexOf('g-recaptcha') !== -1 ||
+                idAndClass.indexOf('rc-') !== -1 ||
+                idAndClass.indexOf('hcaptcha') !== -1 ||
+                idAndClass.indexOf('cf-turnstile') !== -1 ||
+                idAndClass.indexOf('captcha') !== -1 ||
+                idAndClass.indexOf('challenge') !== -1) {
+              return true;
+            }
+            if (el.querySelector && el.querySelector('iframe[src*="recaptcha"], iframe[src*="captcha"], iframe[src*="cloudflare"], iframe[title*="reCAPTCHA"], iframe[title*="challenge"], .g-recaptcha')) {
+              return true;
+            }
+          } catch(e) {}
+          return false;
+        }
+
         function cleanseAds() {
           try {
+            // Never run DOM ad stripping if the page is currently showing a CAPTCHA challenge
+            if (document.querySelector('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="cloudflare"], .g-recaptcha, #captcha-form, #recaptcha')) {
+              return;
+            }
             window.open = function() { return null; };
             var ads = document.querySelectorAll('a[href*="luugy"], a[href*="adsterra"], a[href*="propeller"], div[id*="popunder"], div[class*="popup"], div[class*="ads-box"]');
             ads.forEach(function(el) {
-              if (!el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('.player--iframe') && !el.closest('iframe')) {
+              if (!isCaptchaOrVerificationElement(el) && !el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('.player--iframe') && !el.closest('iframe')) {
                 el.remove();
               }
             });
-            // Remove transparent overlay divs and invisible click-jacking anchor overlays
+            // Remove transparent overlay divs and invisible click-jacking anchor overlays (never touch elements containing iframes or CAPTCHAs)
             var overlays = document.querySelectorAll('div[style*="position: fixed"], div[style*="position:absolute"], a[target="_blank"]');
             overlays.forEach(function(el) {
-              if (!el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('iframe') && !el.closest('video') && !el.closest('.servers')) {
+              if (!isCaptchaOrVerificationElement(el) && !el.querySelector('iframe') && !el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('iframe') && !el.closest('video') && !el.closest('.servers')) {
                 var rect = el.getBoundingClientRect();
                 if (rect.width > 200 && rect.height > 200) {
                   el.style.pointerEvents = 'none';

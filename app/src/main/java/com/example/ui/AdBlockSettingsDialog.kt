@@ -12,14 +12,19 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
@@ -91,7 +96,8 @@ fun AdBlockSettingsDialog(
       Column(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(20.dp)
+          .verticalScroll(rememberScrollState())
+          .padding(18.dp)
       ) {
         // Header
         Row(
@@ -99,7 +105,10 @@ fun AdBlockSettingsDialog(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+          ) {
             Box(
               modifier = Modifier
                 .size(40.dp)
@@ -115,18 +124,22 @@ fun AdBlockSettingsDialog(
               )
             }
             Spacer(modifier = Modifier.width(10.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "درع مانع الإعلانات & AdGuard DNS",
+                text = "درع مانع الإعلانات & AdGuard",
                 color = Color.White,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
               Text(
                 text = "حظر الإعلانات المنبثقة والتحويلات الإجبارية 100%",
                 color = CinemaSuccess,
                 fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
             }
           }
@@ -301,8 +314,12 @@ fun AdBlockSettingsDialog(
                 text = adguardDnsHost,
                 color = CinemaAccent,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
               )
+              Spacer(modifier = Modifier.width(8.dp))
               Button(
                 onClick = {
                   val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -312,12 +329,12 @@ fun AdBlockSettingsDialog(
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = CinemaSecondary),
                 shape = RoundedCornerShape(6.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                modifier = Modifier.height(30.dp)
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.heightIn(min = 34.dp)
               ) {
                 Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("نسخ", fontSize = 10.sp)
+                Text("نسخ", fontSize = 11.sp, maxLines = 1, softWrap = false)
               }
             }
 
@@ -344,11 +361,14 @@ fun AdBlockSettingsDialog(
               },
               border = BorderStroke(1.dp, CinemaBorder),
               shape = RoundedCornerShape(6.dp),
-              modifier = Modifier.fillMaxWidth()
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+              modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 42.dp)
             ) {
               Icon(Icons.Default.Settings, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(14.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("فتح إعدادات DNS الخاص في الأندرويد ⚙️", color = Color.White, fontSize = 11.sp)
+              Text("فتح إعدادات DNS الخاص في الأندرويد ⚙️", color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
           }
         }
@@ -363,14 +383,15 @@ fun AdBlockSettingsDialog(
           },
           colors = ButtonDefaults.buttonColors(containerColor = CinemaSuccess),
           shape = RoundedCornerShape(8.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .height(44.dp)
+            .heightIn(min = 46.dp)
             .testTag("btn_save_adblock_settings")
         ) {
           Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text("تم وحفظ الإعدادات", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+          Text("تم وحفظ الإعدادات", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
         }
       }
     }

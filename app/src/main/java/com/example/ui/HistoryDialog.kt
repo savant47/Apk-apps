@@ -9,10 +9,12 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -89,7 +91,10 @@ fun HistoryDialog(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+          ) {
             Icon(
               imageVector = Icons.Default.History,
               contentDescription = null,
@@ -97,20 +102,26 @@ fun HistoryDialog(
               modifier = Modifier.size(24.dp)
             )
             Spacer(modifier = Modifier.width(10.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
               Text(
                 text = "سجل التصفح والمشاهدة",
                 color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
               Text(
                 text = "${history.size} صفحة تمت زيارتها",
                 color = Color.Gray,
-                fontSize = 12.sp
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
             }
           }
+
+          Spacer(modifier = Modifier.width(8.dp))
 
           Row(verticalAlignment = Alignment.CenterVertically) {
             if (history.isNotEmpty()) {
@@ -118,8 +129,9 @@ fun HistoryDialog(
                 onClick = onClearHistory,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B0000)),
                 shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 modifier = Modifier
-                  .height(34.dp)
+                  .heightIn(min = 38.dp)
                   .testTag("clear_history_btn")
               ) {
                 Icon(
@@ -128,9 +140,9 @@ fun HistoryDialog(
                   modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("مسح الكل", fontSize = 11.sp, color = Color.White)
+                Text("مسح الكل", fontSize = 11.sp, color = Color.White, maxLines = 1, softWrap = false)
               }
-              Spacer(modifier = Modifier.width(8.dp))
+              Spacer(modifier = Modifier.width(6.dp))
             }
 
             IconButton(

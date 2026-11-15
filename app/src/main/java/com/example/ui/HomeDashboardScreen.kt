@@ -16,14 +16,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -191,7 +194,7 @@ fun HomeDashboardScreen(
           )
           Spacer(modifier = Modifier.width(8.dp))
           Text(
-            text = "Asser TV • بوابة الأفلام والمسلسلات",
+            text = "بوابة الأفلام والمسلسلات",
             color = Color.White,
             fontSize = 15.sp,
             fontWeight = FontWeight.ExtraBold,
@@ -353,7 +356,7 @@ fun HomeDashboardScreen(
               onValueChange = { searchQuery = it },
               placeholder = {
                 Text(
-                  text = "اكتب اسم الفيلم أو المسلسل (مثل Silo)...",
+                  text = "ابحث عن فيلم أو مسلسل...",
                   color = Color.Gray,
                   fontSize = 12.sp,
                   maxLines = 1,
@@ -556,12 +559,13 @@ fun SourcesManagementDialog(
       Column(
         modifier = Modifier
           .fillMaxWidth()
+          .verticalScroll(rememberScrollState())
           .padding(16.dp)
       ) {
         if (selectedPortalForEdit == null) {
           // Main Portal List View
           Text(
-            text = "⚙️ إدارة وبوابات مصادر الفيديو:",
+            text = "⚙️ إدارة وبوابات مصادر الفيديو",
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
@@ -570,20 +574,21 @@ fun SourcesManagementDialog(
           )
           Spacer(modifier = Modifier.height(4.dp))
           Text(
-            text = "يمكنك تعديل روابط المواقع الافتراضية، أو تفعيل وتخصيص المصادر الإضافية 4 و 5 بأي اسم وموقع من دماغك!",
-            color = Color.Gray,
+            text = "يمكنك تعديل روابط المواقع الافتراضية أو تفعيل وتخصيص المصدر الإضافي:",
+            color = Color.LightGray,
             fontSize = 11.sp,
+            lineHeight = 16.sp,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Start
           )
-          Spacer(modifier = Modifier.height(14.dp))
+          Spacer(modifier = Modifier.height(12.dp))
 
           Column(
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
           ) {
             StreamingPortal.values().forEach { portal ->
-               val isCustom = portal == StreamingPortal.PORTAL_5
+              val isCustom = portal == StreamingPortal.PORTAL_5
               Card(
                 shape = RoundedCornerShape(10.dp),
                 colors = CardDefaults.cardColors(containerColor = CinemaDarkBackground),
@@ -593,7 +598,7 @@ fun SourcesManagementDialog(
                 Row(
                   modifier = Modifier
                     .fillMaxWidth()
-                    .padding(10.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -607,19 +612,15 @@ fun SourcesManagementDialog(
                       )
                       Spacer(modifier = Modifier.width(6.dp))
                       Text(
-                        text = portal.displayNameArabic,
+                        text = "${portal.displayNameArabic} (${portal.displayNameEnglish})",
                         color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                      )
-                      Spacer(modifier = Modifier.width(6.dp))
-                      Text(
-                        text = "(${portal.displayNameEnglish})",
-                        color = Color.Gray,
-                        fontSize = 11.sp
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                       )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                       text = if (portal.homeUrl.isNotBlank()) portal.homeUrl else "غير مهيأ بعد (مغلق)",
                       color = if (portal.isEnabled) CinemaAccent else Color.Gray,
@@ -628,6 +629,8 @@ fun SourcesManagementDialog(
                       overflow = TextOverflow.Ellipsis
                     )
                   }
+
+                  Spacer(modifier = Modifier.width(6.dp))
 
                   Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isCustom) {
@@ -663,11 +666,11 @@ fun SourcesManagementDialog(
                       colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
                       shape = RoundedCornerShape(6.dp),
                       contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                      modifier = Modifier.height(28.dp)
+                      modifier = Modifier.heightIn(min = 34.dp)
                     ) {
                       Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(12.dp), tint = Color.White)
                       Spacer(modifier = Modifier.width(4.dp))
-                      Text("تعديل", fontSize = 10.sp, color = Color.White)
+                      Text("تعديل", fontSize = 11.sp, color = Color.White, maxLines = 1, softWrap = false)
                     }
                   }
                 }
@@ -675,14 +678,24 @@ fun SourcesManagementDialog(
             }
           }
 
-          Spacer(modifier = Modifier.height(16.dp))
+          Spacer(modifier = Modifier.height(14.dp))
           Button(
             onClick = onDismiss,
             colors = ButtonDefaults.buttonColors(containerColor = CinemaSecondary),
             shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth().height(42.dp)
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .heightIn(min = 46.dp)
           ) {
-            Text("إغلاق", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text(
+              text = "إغلاق",
+              fontSize = 14.sp,
+              fontWeight = FontWeight.Bold,
+              color = Color.White,
+              maxLines = 1,
+              softWrap = false
+            )
           }
         } else {
           // Edit Portal Form View
@@ -782,9 +795,10 @@ fun SourcesManagementDialog(
               onClick = { selectedPortalForEdit = null },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
               shape = RoundedCornerShape(8.dp),
-              modifier = Modifier.weight(1f).height(40.dp)
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              modifier = Modifier.weight(1f).heightIn(min = 44.dp)
             ) {
-              Text("إلغاء", fontSize = 12.sp, color = Color.White)
+              Text("إلغاء", fontSize = 13.sp, color = Color.White, maxLines = 1, softWrap = false)
             }
 
             Button(
@@ -803,9 +817,10 @@ fun SourcesManagementDialog(
               },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
               shape = RoundedCornerShape(8.dp),
-              modifier = Modifier.weight(1f).height(40.dp)
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              modifier = Modifier.weight(1f).heightIn(min = 44.dp)
             ) {
-              Text("حفظ 💾", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+              Text("حفظ 💾", fontSize = 13.sp, color = Color.Black, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
             }
           }
         }
@@ -897,9 +912,10 @@ fun PortalResultsSection(
               onClick = { onSearchSuggestion(spellingSuggestion) },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent, contentColor = Color.Black),
               shape = RoundedCornerShape(8.dp),
-              modifier = Modifier.height(32.dp)
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              modifier = Modifier.heightIn(min = 38.dp)
             ) {
-              Text(text = "👉 $spellingSuggestion", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+              Text(text = "👉 $spellingSuggestion", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
             Spacer(modifier = Modifier.height(12.dp))
           }
@@ -917,9 +933,10 @@ fun PortalResultsSection(
               onClick = { onLaunchManualUrl(portal.buildSearchUrl(query)) },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
               shape = RoundedCornerShape(6.dp),
-              modifier = Modifier.height(32.dp)
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              modifier = Modifier.heightIn(min = 38.dp)
             ) {
-              Text("البحث اليدوي المباشر في الموقع 🔍", fontSize = 11.sp, color = Color.White)
+              Text("البحث اليدوي المباشر في الموقع 🔍", fontSize = 11.sp, color = Color.White, maxLines = 1)
             }
           }
         }
@@ -1035,14 +1052,14 @@ fun SearchResultCard(
           onClick = onClick,
           colors = ButtonDefaults.buttonColors(containerColor = badgeColor),
           shape = RoundedCornerShape(6.dp),
-          contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .height(28.dp)
+            .heightIn(min = 34.dp)
         ) {
-          Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(12.dp))
-          Spacer(modifier = Modifier.width(3.dp))
-          Text("مشاهدة الآن", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+          Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(13.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("مشاهدة الآن", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
         }
       }
     }
@@ -1128,7 +1145,10 @@ fun ContinueWatchingSection(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.weight(1f)
+      ) {
         Icon(
           imageVector = Icons.Default.PlayArrow,
           contentDescription = null,
@@ -1137,10 +1157,12 @@ fun ContinueWatchingSection(
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-          text = "متابعة المشاهدة (Continue Watching):",
+          text = "متابعة المشاهدة",
           color = Color.White,
           fontSize = 14.sp,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
       }
       if (history.isNotEmpty()) {
@@ -1151,10 +1173,12 @@ fun ContinueWatchingSection(
           Text(
             text = "${history.size} عنصر",
             color = Color.Gray,
-            fontSize = 11.sp
+            fontSize = 11.sp,
+            maxLines = 1,
+            softWrap = false
           )
 
-          // Button to Clear All History
+          // Button to Clear All History (Fixed: single-line unwrapped so it never stretches vertically)
           Surface(
             onClick = { showConfirmClearDialog = true },
             color = Color(0xFFD32F2F).copy(alpha = 0.15f),
@@ -1163,7 +1187,7 @@ fun ContinueWatchingSection(
             modifier = Modifier.testTag("btn_clear_continue_watching")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -1177,7 +1201,9 @@ fun ContinueWatchingSection(
                 text = "مسح السجل",
                 color = Color(0xFFFF8A80),
                 fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
               )
             }
           }
@@ -1330,14 +1356,14 @@ fun ContinueWatchingCard(
         onClick = onResume,
         colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent, contentColor = Color.Black),
         shape = RoundedCornerShape(8.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
         modifier = Modifier
           .fillMaxWidth()
-          .height(30.dp)
+          .heightIn(min = 36.dp)
       ) {
-        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(12.dp))
+        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(13.dp))
         Spacer(modifier = Modifier.width(4.dp))
-        Text("متابعة المشاهدة", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+        Text("متابعة المشاهدة", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
       }
     }
   }

@@ -84,7 +84,10 @@ fun FavoritesDialog(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+          ) {
             Icon(
               imageVector = Icons.Default.Bookmark,
               contentDescription = null,
@@ -94,9 +97,11 @@ fun FavoritesDialog(
             Spacer(modifier = Modifier.width(10.dp))
             Text(
               text = "قائمة المفضلة المحفوظة",
-              fontSize = 18.sp,
+              fontSize = 17.sp,
               fontWeight = FontWeight.Bold,
-              color = Color.White
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
             )
           }
 

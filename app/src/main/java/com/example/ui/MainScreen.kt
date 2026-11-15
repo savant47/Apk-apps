@@ -253,6 +253,17 @@ fun MainScreen(
     }
   }
 
+  val cleanAndroidChromeUa = remember(context) {
+    try {
+      WebSettings.getDefaultUserAgent(context)
+        .replace("; wv", "")
+        .replace("Version/4.0 ", "")
+    } catch (_: Exception) {
+      "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+    }
+  }
+  val desktopChromeUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
   fun navigateTo(
     url: String,
     portal: StreamingPortal? = null,
@@ -270,6 +281,9 @@ fun MainScreen(
       repository.setActivePortal(portal)
     }
     isHomeActive = false
+    // Use genuine Android Chrome User-Agent on Google/general websites or in Mobile mode to prevent bot/CAPTCHA flags
+    val useAndroidUa = isGeneralBrowser || cleanUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE
+    webViewRef?.settings?.userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
     webViewRef?.loadUrl(cleanUrl)
   }
 
@@ -556,7 +570,8 @@ fun MainScreen(
                     safeBrowsingEnabled = false
                   }
 
-                  userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                  val useAndroidUa = isGeneralBrowserSession || currentUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE
+                  userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
                 }
 
                 addJavascriptInterface(
@@ -889,15 +904,14 @@ fun MainScreen(
       onModeSelected = { mode ->
         repository.setDisplayMode(mode)
         showDisplayModeDialog = false
-        // Keep Desktop user agent across both TV and Phone so video servers always expose all bitrates (240p - 1080p)
-        webViewRef?.settings?.userAgentString =
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        val useAndroidUa = isGeneralBrowserSession || currentUrl.contains("google.") || mode == AppDisplayMode.MOBILE
+        webViewRef?.settings?.userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
         if (mode == AppDisplayMode.TV) {
           activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-          Toast.makeText(context, "تم التحويل إلى وضع شاشة أندرويد تي في (أفقي 16:9) 📺", Toast.LENGTH_SHORT).show()
+          Toast.makeText(context, "تم التحويل إلى منظور الشاشة أو التابلت (أفقي 16:9) 📺", Toast.LENGTH_SHORT).show()
         } else {
           activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-          Toast.makeText(context, "تم التحويل إلى وضع الهاتف المحمول (رأسي/لمس) 📱", Toast.LENGTH_SHORT).show()
+          Toast.makeText(context, "تم التحويل إلى منظور الهاتف المحمول (رأسي/لمس) 📱", Toast.LENGTH_SHORT).show()
         }
         webViewRef?.reload()
       },

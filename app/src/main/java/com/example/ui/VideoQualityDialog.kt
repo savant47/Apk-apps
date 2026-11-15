@@ -6,11 +6,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -105,9 +108,17 @@ fun VideoQualityDialog(
         id = "480",
         title = "جودة متوسطة 480p (SD)",
         subtitle = "تعمل بسلاسة فائقة وتمنع التقطيع مع سرعات الإنترنت المتوسطة",
-        badge = "SD",
+        badge = "480p",
         icon = Icons.Default.NetworkCheck,
         color = Color(0xFFFFB300)
+      ),
+      VideoQualityOption(
+        id = "360",
+        title = "جودة موفرة 360p (Data Saver)",
+        subtitle = "توفير عالي لباقة الإنترنت مع صورة واضحة وتشغيل فوري بدون انتظار",
+        badge = "360p",
+        icon = Icons.Default.Speed,
+        color = Color(0xFF4CAF50)
       ),
       VideoQualityOption(
         id = "240",
@@ -145,7 +156,10 @@ fun VideoQualityDialog(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+          ) {
             Box(
               modifier = Modifier
                 .size(40.dp)
@@ -160,17 +174,21 @@ fun VideoQualityDialog(
               )
             }
             Spacer(modifier = Modifier.width(12.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
               Text(
                 text = "جودة الفيديو (Video Quality)",
                 color = Color.White,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
               Text(
                 text = "اختر الجودة المناسبة لسرعة اتصالك",
                 color = Color.LightGray,
-                fontSize = 12.sp
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
               )
             }
           }
@@ -314,11 +332,12 @@ fun VideoQualityDialog(
           onClick = onDismiss,
           colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
           shape = RoundedCornerShape(8.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .height(44.dp)
+            .heightIn(min = 46.dp)
         ) {
-          Text("إغلاق النافذة", color = Color.White, fontSize = 14.sp)
+          Text("إغلاق النافذة", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
         }
       }
     }

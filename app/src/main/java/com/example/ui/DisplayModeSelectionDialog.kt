@@ -10,10 +10,12 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -191,9 +193,10 @@ fun DisplayModeSelectionDialog(
             contentColor = Color.Black
           ),
           shape = RoundedCornerShape(10.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .height(46.dp)
+            .heightIn(min = 48.dp)
             .testTag("confirm_display_mode_btn")
         ) {
           Text(
@@ -201,6 +204,7 @@ fun DisplayModeSelectionDialog(
             fontSize = 14.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis
           )
         }
@@ -311,15 +315,17 @@ private fun ModeOptionCard(
           contentColor = Color.White
         ),
         shape = RoundedCornerShape(8.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier
           .fillMaxWidth()
-          .height(36.dp)
+          .heightIn(min = 40.dp)
       ) {
         Text(
           text = if (isCurrent) "مفعّل حالياً ✓" else "تفعيل هذا المنظور فوراً ⚡",
           fontSize = 12.sp,
           fontWeight = FontWeight.Bold,
           maxLines = 1,
+          softWrap = false,
           overflow = TextOverflow.Ellipsis
         )
       }
