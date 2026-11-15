@@ -169,20 +169,6 @@ fun HomeDashboardScreen(
     modifier = modifier
       .fillMaxSize()
       .background(CinemaDarkBackground)
-      .drawBehind {
-        drawCircle(
-          brush = Brush.radialGradient(
-            colors = listOf(
-              CinemaPrimary.copy(alpha = 0.12f),
-              Color.Transparent
-            ),
-            center = Offset(size.width / 2f, 0f),
-            radius = size.width * 0.9f
-          ),
-          center = Offset(size.width / 2f, 0f),
-          radius = size.width * 0.9f
-        )
-      }
       .padding(horizontal = 16.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(18.dp)
   ) {
@@ -200,22 +186,29 @@ fun HomeDashboardScreen(
         ) {
           Image(
             painter = painterResource(id = R.drawable.ic_assertv_logo),
-            contentDescription = "AsserTV Logo",
+            contentDescription = "Asser TV Logo",
             modifier = Modifier
               .size(38.dp)
               .clip(RoundedCornerShape(8.dp))
           )
           Spacer(modifier = Modifier.width(8.dp))
-          Text(
-            text = "AsserTV",
-            color = Color(0xFFE50914),
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Black,
-            fontFamily = androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(R.font.bebas_neue)),
-            letterSpacing = 1.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-          )
+          Column {
+            Text(
+              text = "Asser TV",
+              color = Color(0xFFE50914),
+              fontSize = 20.sp,
+              fontWeight = FontWeight.Black,
+              fontFamily = androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(R.font.bebas_neue)),
+              letterSpacing = 1.sp,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
+            )
+            Text(
+              text = "بوابة الأفلام والمسلسلات الموحدة",
+              color = Color.LightGray,
+              fontSize = 10.sp
+            )
+          }
         }
 
         // Action Buttons: Mode Badge, Bookmarks, History
@@ -918,6 +911,7 @@ fun PortalResultsSection(
     StreamingPortal.WATCH_SERIES -> CinemaSecondary
     StreamingPortal.LAROZA -> CinemaAccent
     StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50) // Beautiful green for EgyDead
+    StreamingPortal.FLIXER -> Color(0xFF9C27B0) // Beautiful Purple for Flixer
     else -> CinemaSurfaceVariant
   }
 
@@ -1056,7 +1050,6 @@ fun SearchResultCard(
     ),
     modifier = Modifier
       .width(170.dp)
-      .scale(if (isFocused) 1.04f else 1f)
       .focusable(interactionSource = interactionSource)
       .clickable { onClick() }
       .testTag("result_card_${item.id}")
@@ -1327,8 +1320,14 @@ fun ContinueWatchingCard(
   onResume: () -> Unit,
   onDelete: () -> Unit
 ) {
-  val isTopCinema = entry.portal == StreamingPortal.TOP_CINEMA
-  val portalColor = if (isTopCinema) CinemaPrimary else CinemaSecondary
+  val portalColor = when (entry.portal) {
+    StreamingPortal.TOP_CINEMA -> CinemaPrimary
+    StreamingPortal.WATCH_SERIES -> CinemaSecondary
+    StreamingPortal.LAROZA -> CinemaAccent
+    StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50)
+    StreamingPortal.FLIXER -> Color(0xFF9C27B0)
+    else -> CinemaSecondary
+  }
   val formattedDate = remember(entry.timestamp) {
     try {
       val sdf = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault())

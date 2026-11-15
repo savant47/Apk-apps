@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">AsserTV</string>
+    <string name="app_name">Asser Browser</string>
     <string name="portal_topcinema">توب سينما TopCinema</string>
     <string name="portal_watchseries">ووتش سيريز WatchSeries</string>
     <string name="nav_home">الرئيسية</string>
@@ -15,8 +15,8 @@
     <string name="nav_zoom_out">تصغير -</string>
     <string name="remote_tips">الريموت: الأسهم للتحرك • OK للنقر • زر القائمة Menu لإظهار/إخفاء الشريط • Back للرجوع</string>
     <string name="adblock_enabled">مانع الإعلانات المنبثقة: مفعّل</string>
-    <string name="high_quality_media">جودة الوسائط: عالية (Hardware Accelerated)</string>
+    <string name="high_quality_media">جودة الوسائط: خفيفة وسريعة (Hardware Accelerated)</string>
     <string name="empty_favorites">لا توجد عناصر محفوظة في المفضلة بعد</string>
-    <string name="empty_history">سجل المشاهدة فارغ</string>
-    <string name="device_qs285_ready">متوافق مع أجهزة BeoutQ QS285 و Android TV 7+</string>
+    <string name="empty_history">سجل التصفح والمشاهدة فارغ</string>
+    <string name="device_qs285_ready">متوافق مع الهواتف وأجهزة التلفاز والرسيفر (Android 4+ / TV Box)</string>
 </resources>

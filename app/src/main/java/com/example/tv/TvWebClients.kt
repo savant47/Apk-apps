@@ -65,8 +65,16 @@ class TvWebChromeClient(
           ViewGroup.LayoutParams.MATCH_PARENT,
           ViewGroup.LayoutParams.MATCH_PARENT
         )
-        // Ensure hardware layer acceleration for smooth 60fps video playback on Mali-450 GPU
-        fullscreenContainer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        // Ensure hardware layer acceleration for smooth 60fps video playback on Mali-450 GPU, but fallback to software on emulator to prevent Mesa errors
+        val isEmu = android.os.Build.HARDWARE.lowercase().contains("goldfish") || 
+                    android.os.Build.HARDWARE.lowercase().contains("ranchu") ||
+                    android.os.Build.HARDWARE.lowercase().contains("cuttlefish") ||
+                    android.os.Build.FINGERPRINT.lowercase().startsWith("generic")
+        if (isEmu) {
+          fullscreenContainer.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        } else {
+          fullscreenContainer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        }
         fullscreenContainer.addView(view)
         fullscreenContainer.visibility = View.VISIBLE
         fullscreenContainer.bringToFront()
@@ -83,7 +91,15 @@ class TvWebChromeClient(
     try {
       fullscreenContainer.removeView(view)
       fullscreenContainer.visibility = View.GONE
-      fullscreenContainer.setLayerType(View.LAYER_TYPE_NONE, null)
+      val isEmu = android.os.Build.HARDWARE.lowercase().contains("goldfish") || 
+                  android.os.Build.HARDWARE.lowercase().contains("ranchu") ||
+                  android.os.Build.HARDWARE.lowercase().contains("cuttlefish") ||
+                  android.os.Build.FINGERPRINT.lowercase().startsWith("generic")
+      if (isEmu) {
+        fullscreenContainer.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+      } else {
+        fullscreenContainer.setLayerType(View.LAYER_TYPE_NONE, null)
+      }
       customView = null
       customViewCallback?.onCustomViewHidden()
       customViewCallback = null
@@ -116,13 +132,40 @@ class TvWebChromeClient(
     result?.cancel()
     return true
   }
+
+  override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
+    try {
+      val resources = request?.resources ?: emptyArray()
+      if (resources.isNotEmpty()) {
+        request?.grant(resources)
+      } else {
+        request?.deny()
+      }
+    } catch (_: Exception) {}
+  }
+
+  override fun onGeolocationPermissionsShowPrompt(
+    origin: String?,
+    callback: android.webkit.GeolocationPermissions.Callback?
+  ) {
+    try {
+      callback?.invoke(origin, true, false)
+    } catch (_: Exception) {}
+  }
+
+  override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+    // Suppress noisy web console logs for ultra-lightweight performance on TV boxes and phones
+    return true
+  }
 }
 
 class TvWebViewClient(
   private val isAdBlockEnabled: () -> Boolean,
   private val onPageFinishedCallback: (String) -> Unit,
   private val onRenderProcessGoneCallback: (() -> Unit)? = null,
-  private val onAdBlockedCallback: ((String) -> Unit)? = null
+  private val onAdBlockedCallback: ((String) -> Unit)? = null,
+  private val onVideoDetectedCallback: ((String) -> Unit)? = null,
+  private val isGeneralBrowserMode: () -> Boolean = { false }
 ) : WebViewClient() {
 
   // Known malicious ad / popunder / redirect domains
@@ -132,7 +175,8 @@ class TvWebViewClient(
     "adtrue", "juicyads", "histats", "trackvoluum", "monetag",
     "hilltopads", "richpush", "clickadu", "realsrv", "ero-advertising",
     "yllix", "directrev", "poppush", "pushnoti", "popunder", "popcash",
-    "adkeeper", "adcash", "adcolony", "cpalead", "trafficstars"
+    "adkeeper", "adcash", "adcolony", "cpalead", "trafficstars",
+    "onclickads", "adexchangeclear", "doubleclick.net"
   )
 
   override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -177,17 +221,26 @@ class TvWebViewClient(
       }
     }
 
-    // 4. Strict MainFrame Protection: When the main page URL is attempting to navigate,
-    // ensure it only goes to authorized streaming portals or video embed hosts.
-    // If it's an unauthorized third-party redirect (like luugy.com, scam sites, etc.), BLOCK IT!
-    if (isForMainFrame && isAdBlockEnabled()) {
-      val host = try {
-        Uri.parse(url).host?.lowercase() ?: ""
-      } catch (_: Exception) { "" }
+    // 4. Smart MainFrame Protection:
+    // If we are in general Asser Browser mode, allow navigating to any normal website (Google results, YouTube, news, etc.).
+    // If we are inside an Asser TV streaming portal and not in general browser mode, protect against unauthorized popunder redirects.
+    if (isForMainFrame && isAdBlockEnabled() && !isGeneralBrowserMode()) {
+      val currentPageUrl = (view?.url ?: "").lowercase()
+      val isCurrentlyOnStreamingPortal = currentPageUrl.contains("topcinema") ||
+        currentPageUrl.contains("watchseries") ||
+        currentPageUrl.contains("laroza") ||
+        currentPageUrl.contains("egydead") ||
+        currentPageUrl.contains("flixer")
 
-      if (host.isNotBlank() && !isAllowedMainFrameHost(host)) {
-        onAdBlockedCallback?.invoke(host)
-        return true // Cancel navigation and keep user on the streaming page
+      if (isCurrentlyOnStreamingPortal) {
+        val host = try {
+          Uri.parse(url).host?.lowercase() ?: ""
+        } catch (_: Exception) { "" }
+
+        if (host.isNotBlank() && !isAllowedMainFrameHost(host)) {
+          onAdBlockedCallback?.invoke(host)
+          return true // Cancel popunder redirect while inside streaming portal
+        }
       }
     }
 
@@ -204,13 +257,20 @@ class TvWebViewClient(
 
     return isStreamingOrCdnHost(clean) ||
       clean.contains("player") ||
-      clean.contains("embed")
+      clean.contains("embed") ||
+      clean.contains("google") ||
+      clean.contains("youtube") ||
+      clean.contains("wikipedia") ||
+      clean.contains("kooora") ||
+      clean.contains("yallakora") ||
+      clean.contains("facebook")
   }
 
   private fun isStreamingOrCdnHost(host: String): Boolean {
     val clean = host.lowercase()
     return clean.contains("watchseries") ||
       clean.contains("topcinema") ||
+      clean.contains("flixer") ||
       clean.contains("laroza") ||
       clean.contains("llaroza") ||
       clean.contains("larooza") ||
@@ -309,11 +369,27 @@ class TvWebViewClient(
   @Deprecated("Deprecated in Java")
   override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? {
     if (url.isNullOrBlank()) return null
+    val urlLower = url.lowercase()
+    val host = try { Uri.parse(url).host?.lowercase() ?: "" } catch (_: Exception) { "" }
+    if ((urlLower.contains(".m3u8") || urlLower.contains(".mp4") || urlLower.contains("videoplayback") || urlLower.contains("/m3u8")) && !urlLower.contains(".ts")) {
+      var isBlockedAd = false
+      for (ad in adHostKeywords) {
+        if (host.contains(ad)) { isBlockedAd = true; break }
+      }
+      if (!isBlockedAd) {
+        if (view != null) {
+          view.post {
+            onVideoDetectedCallback?.invoke(url)
+          }
+        } else {
+          onVideoDetectedCallback?.invoke(url)
+        }
+      }
+    }
     if (isAdBlockEnabled()) {
       val lower = url.lowercase()
       for (ad in adHostKeywords) {
         if (lower.contains(ad)) {
-          val host = try { Uri.parse(url).host?.lowercase() ?: "" } catch (_: Exception) { "" }
           if (!isStreamingOrCdnHost(host)) {
             return WebResourceResponse(
               "text/plain",
@@ -335,6 +411,23 @@ class TvWebViewClient(
     val urlStr = uri.toString()
     val host = uri.host?.lowercase() ?: ""
     val method = request.method ?: "GET"
+
+    val urlLower = urlStr.lowercase()
+    if ((urlLower.contains(".m3u8") || urlLower.contains(".mp4") || urlLower.contains("videoplayback") || urlLower.contains("/m3u8")) && !urlLower.contains(".ts")) {
+      var isBlockedAd = false
+      for (ad in adHostKeywords) {
+        if (host.contains(ad)) { isBlockedAd = true; break }
+      }
+      if (!isBlockedAd) {
+        if (view != null) {
+          view.post {
+            onVideoDetectedCallback?.invoke(urlStr)
+          }
+        } else {
+          onVideoDetectedCallback?.invoke(urlStr)
+        }
+      }
+    }
 
     // 1. Core Ad Blocker Integration
     if (isAdBlockEnabled()) {
@@ -415,6 +508,53 @@ class TvWebViewClient(
             window.CustomEvent = CustomEvent;
           }
 
+          // 3b. Modern JS & DOM Polyfills for Android 4.4 / 5 / 7+ WebViews
+          if (typeof window.globalThis === 'undefined') { window.globalThis = window; }
+          if (window.NodeList && !NodeList.prototype.forEach) {
+            NodeList.prototype.forEach = Array.prototype.forEach;
+          }
+          if (!String.prototype.includes) {
+            String.prototype.includes = function(search, start) {
+              if (typeof start !== 'number') start = 0;
+              if (start + search.length > this.length) return false;
+              return this.indexOf(search, start) !== -1;
+            };
+          }
+          if (!String.prototype.startsWith) {
+            String.prototype.startsWith = function(search, rawPos) {
+              var pos = rawPos > 0 ? rawPos | 0 : 0;
+              return this.substring(pos, pos + search.length) === search;
+            };
+          }
+          if (!Array.prototype.includes) {
+            Array.prototype.includes = function(searchElement, fromIndex) {
+              return this.indexOf(searchElement, fromIndex) !== -1;
+            };
+          }
+          if (!Object.entries) {
+            Object.entries = function(obj) {
+              var ownProps = Object.keys(obj), i = ownProps.length, resArray = new Array(i);
+              while (i--) resArray[i] = [ownProps[i], obj[ownProps[i]]];
+              return resArray;
+            };
+          }
+          if (!Object.values) {
+            Object.values = function(obj) {
+              var ownProps = Object.keys(obj), i = ownProps.length, resArray = new Array(i);
+              while (i--) resArray[i] = obj[ownProps[i]];
+              return resArray;
+            };
+          }
+          if (typeof Promise !== 'undefined' && !Promise.prototype.finally) {
+            Promise.prototype.finally = function(callback) {
+              var P = this.constructor;
+              return this.then(
+                function(value) { return P.resolve(callback()).then(function() { return value; }); },
+                function(reason) { return P.resolve(callback()).then(function() { throw reason; }); }
+              );
+            };
+          }
+
           // 4. Safe window.open and popup suppressor
           var safeDummyWindow = {
             closed: false,
@@ -445,6 +585,157 @@ class TvWebViewClient(
 
     val enhancePlayerJs = """
       (function() {
+        // 1. Programmatic Pause Blocker to prevent mouse click-to-pause bug
+        try {
+          if (!HTMLVideoElement.prototype.originalPause) {
+            HTMLVideoElement.prototype.originalPause = HTMLVideoElement.prototype.pause;
+            HTMLVideoElement.prototype.pause = function() {
+              if (window.blockPauseNextClick) {
+                console.log('Blocked accidental video.pause() command via mouse/remote click!');
+                window.blockPauseNextClick = false;
+                return (window.Promise && window.Promise.resolve) ? window.Promise.resolve() : undefined;
+              }
+              return this.originalPause.apply(this, arguments);
+            };
+          }
+        } catch(e) {}
+
+        // 2. Click/Touch/Mouse Listener in Capture Phase to intercept accidental click pauses
+        window.addEventListener('mousedown', function(e) {
+          var target = e.target;
+          if (!target) return;
+          if (typeof isExplicitControl === 'function' && isExplicitControl(target)) return;
+
+          // Check if click lies in player element or video player
+          var playerWrap = target.closest('#player, #movie-player, .movie-player-wrap, .jwplayer, .video-js, .artplayer-app, .plyr, .player--iframe, video');
+          if (playerWrap) {
+            var rect = playerWrap.getBoundingClientRect();
+            if (rect && rect.width > 0 && rect.height > 0) {
+              var clickX = e.clientX - rect.left;
+              var clickY = e.clientY - rect.top;
+              var xRatio = clickX / rect.width;
+              var yRatio = clickY / rect.height;
+              // Central dead zone
+              var isCenter = xRatio >= 0.12 && xRatio <= 0.88 && yRatio >= 0.12 && yRatio <= 0.85;
+              if (isCenter) {
+                window.blockPauseNextClick = true;
+                setTimeout(function() { window.blockPauseNextClick = false; }, 350);
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                console.log('Central mousedown click intercepted on video. Prevented playback toggle!');
+              }
+            }
+          }
+        }, true);
+
+        window.addEventListener('click', function(e) {
+          var target = e.target;
+          if (!target) return;
+          if (typeof isExplicitControl === 'function' && isExplicitControl(target)) return;
+
+          // Check if click lies in player element or video player
+          var playerWrap = target.closest('#player, #movie-player, .movie-player-wrap, .jwplayer, .video-js, .artplayer-app, .plyr, .player--iframe, video');
+          if (playerWrap) {
+            var rect = playerWrap.getBoundingClientRect();
+            if (rect && rect.width > 0 && rect.height > 0) {
+              var clickX = e.clientX - rect.left;
+              var clickY = e.clientY - rect.top;
+              var xRatio = clickX / rect.width;
+              var yRatio = clickY / rect.height;
+              // Central dead zone
+              var isCenter = xRatio >= 0.12 && xRatio <= 0.88 && yRatio >= 0.12 && yRatio <= 0.85;
+              if (isCenter) {
+                window.blockPauseNextClick = true;
+                setTimeout(function() { window.blockPauseNextClick = false; }, 350);
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                console.log('Central click intercepted on video. Prevented playback toggle!');
+                
+                // Show control bar overlay temporarily
+                var controlBar = document.querySelector('.jw-controlbar, .vjs-control-bar, .art-bottom, .plyr__controls');
+                if (controlBar) {
+                  controlBar.style.opacity = '1';
+                  controlBar.style.visibility = 'visible';
+                  setTimeout(function() {
+                    controlBar.style.opacity = '';
+                    controlBar.style.visibility = '';
+                  }, 3500);
+                }
+              }
+            }
+          }
+        }, true); // Capture!
+
+        // 3. Media Buffer Keeper: keep-alive connection poking when video is paused
+        setInterval(function() {
+          try {
+            var vids = document.querySelectorAll('video');
+            vids.forEach(function(v) {
+              if (v.paused && !v.ended && v.readyState > 1) {
+                // Micro-nudge current time to keep media streaming connection alive and cached
+                if (v.currentTime > 0.1) {
+                  v.currentTime = v.currentTime + 0.0001;
+                  v.currentTime = v.currentTime - 0.0001;
+                }
+              }
+            });
+          } catch(e) {}
+        }, 3000);
+
+        // 4. Force Low-Quality (240p/360p/480p) Automatic Selection in Web Players:
+        function enforceLowQuality() {
+          try {
+            // A. JWPlayer quality selector
+            if (window.jwplayer && typeof window.jwplayer === 'function') {
+              var p = window.jwplayer();
+              if (p && p.getQualityLevels) {
+                var levels = p.getQualityLevels();
+                if (levels && levels.length > 0) {
+                  // Target lowest available (usually level index 0 is lowest or index with 360p/480p)
+                  var bestIdx = 0;
+                  for (var i = 0; i < levels.length; i++) {
+                    var lbl = (levels[i].label || '').toLowerCase();
+                    if (lbl.indexOf('360') !== -1 || lbl.indexOf('480') !== -1 || lbl.indexOf('240') !== -1 || lbl.indexOf('sd') !== -1) {
+                      bestIdx = i;
+                      break;
+                    }
+                  }
+                  p.setCurrentQuality(bestIdx);
+                }
+              }
+            }
+            // B. HLS.js cap
+            if (window.Hls) {
+              window.Hls.DefaultConfig = window.Hls.DefaultConfig || {};
+              window.Hls.DefaultConfig.maxMaxBufferLength = 10;
+              window.Hls.DefaultConfig.capLevelToPlayerSize = true;
+            }
+          } catch(e) {}
+        }
+        setInterval(enforceLowQuality, 2000);
+
+        // 5. Video Source Sniffer to feed Native ExoPlayer Bridge
+        function sniffVideoUrls() {
+          try {
+            var vids = document.querySelectorAll('video');
+            vids.forEach(function(v) {
+              var src = v.src || '';
+              if (!src) {
+                var source = v.querySelector('source');
+                if (source) src = source.src || '';
+              }
+              if (src && src.startsWith('http') && src.indexOf('.ts') === -1) {
+                if (window.AndroidTvBridge && typeof window.AndroidTvBridge.onVideoDetected === 'function') {
+                  window.AndroidTvBridge.onVideoDetected(src);
+                }
+              }
+            });
+          } catch(e) {}
+        }
+        setInterval(sniffVideoUrls, 1500);
+
         // Listen to postMessage from cross-origin iframes
         window.addEventListener('message', function(event) {
           if (event.data === 'video_ended') {
@@ -935,8 +1226,16 @@ class TvWebViewClient(
 open class TvPlayerBridge(
   private val onVideoEnded: () -> Unit = {},
   private val onVideoTimeUpdate: (currentTime: Float, duration: Float) -> Unit = { _, _ -> },
-  private val onCenterClickFiltered: (target: String, isPlaying: Boolean) -> Unit = { _, _ -> }
+  private val onCenterClickFiltered: (target: String, isPlaying: Boolean) -> Unit = { _, _ -> },
+  private val onVideoDetected: (String) -> Unit = {}
 ) {
+  @android.webkit.JavascriptInterface
+  open fun onVideoDetected(src: String) {
+    if (!src.isNullOrBlank() && src.startsWith("http")) {
+      this.onVideoDetected.invoke(src)
+    }
+  }
+
   @android.webkit.JavascriptInterface
   open fun onVideoFinished() {
     this.onVideoEnded.invoke()

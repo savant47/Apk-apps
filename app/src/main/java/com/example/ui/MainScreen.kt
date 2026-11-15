@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.AppDisplayMode
 import com.example.data.TvPreferencesRepository
+import com.example.model.AppMainTab
 import com.example.model.ControlMode
 import com.example.model.StreamingPortal
 import com.example.tv.TvKeyHandler
@@ -100,6 +101,8 @@ fun MainScreen(
   var showUpdateDialog by remember { mutableStateOf(false) }
   var currentVideoQuality by remember { mutableStateOf("auto") }
   var isHomeActive by remember { mutableStateOf(true) }
+  var selectedMainTab by remember { mutableStateOf(AppMainTab.BROWSER) }
+  var isGeneralBrowserSession by remember { mutableStateOf(true) }
 
   // Portal & Control Mode
   var activePortal by remember { mutableStateOf(repository.getActivePortal()) }
@@ -129,6 +132,8 @@ fun MainScreen(
 
   var lastBackPressTime by remember { mutableStateOf(0L) }
   var webViewRecreateKey by remember { mutableIntStateOf(0) }
+  var detectedVideoUrl by remember { mutableStateOf<String?>(null) }
+  var playNativeVideoUrl by remember { mutableStateOf<String?>(null) }
 
   // Key Handler for Android TV Remote / D-pad / Keyboard
   val tvKeyHandler = remember {
@@ -200,10 +205,15 @@ fun MainScreen(
   }
 
   // Hook Activity KeyEvent to TV Key Handler
-  DisposableEffect(activity) {
+  DisposableEffect(activity, playNativeVideoUrl) {
     val keyEventProvider = activity as? KeyEventProvider
     keyEventProvider?.setKeyEventCallback { event ->
-      tvKeyHandler.handleKeyEvent(event)
+      if (playNativeVideoUrl != null) {
+        // Let the Native ExoPlayer view handle remote keys natively!
+        false
+      } else {
+        tvKeyHandler.handleKeyEvent(event)
+      }
     }
     onDispose {
       keyEventProvider?.setKeyEventCallback(null)
@@ -243,9 +253,17 @@ fun MainScreen(
     }
   }
 
-  fun navigateTo(url: String, portal: StreamingPortal? = null, title: String? = null) {
+  fun navigateTo(
+    url: String,
+    portal: StreamingPortal? = null,
+    title: String? = null,
+    isGeneralBrowser: Boolean = false
+  ) {
     val cleanUrl = url.replace("topcinema.site", "topcinema.io")
     currentUrl = cleanUrl
+    isGeneralBrowserSession = isGeneralBrowser
+    detectedVideoUrl = null
+    playNativeVideoUrl = null
     if (title != null) pageTitle = title
     if (portal != null) {
       activePortal = portal
@@ -263,6 +281,7 @@ fun MainScreen(
         TvTopBar(
           activePortal = activePortal,
           currentUrl = currentUrl,
+          isGeneralBrowserMode = isGeneralBrowserSession,
           isBarVisible = isBarVisible,
           loadingProgress = loadingProgress,
           pageTitle = pageTitle,
@@ -271,14 +290,21 @@ fun MainScreen(
           onOpenSubtitles = { showSubtitlesDialog = true },
           onSearchDirect = { portal, query ->
             val searchUrl = portal.buildSearchUrl(query)
-            navigateTo(searchUrl, portal, "بحث: $query")
+            navigateTo(searchUrl, portal, "بحث: $query", isGeneralBrowser = false)
             Toast.makeText(context, "جاري البحث عن $query في ${portal.displayNameArabic}...", Toast.LENGTH_SHORT).show()
           },
+          onOmniboxNavigate = { url, title ->
+            navigateTo(url, null, title, isGeneralBrowser = true)
+          },
           onPortalSelected = { portal ->
-            navigateTo(portal.homeUrl, portal, portal.displayNameArabic)
+            navigateTo(portal.homeUrl, portal, portal.displayNameArabic, isGeneralBrowser = false)
           },
           onHomeClick = {
-            navigateTo(activePortal.homeUrl, activePortal, activePortal.displayNameArabic)
+            if (isGeneralBrowserSession) {
+              navigateTo("https://www.google.com", null, "Google", isGeneralBrowser = true)
+            } else {
+              navigateTo(activePortal.homeUrl, activePortal, activePortal.displayNameArabic, isGeneralBrowser = false)
+            }
           },
           onBackClick = {
             if (webViewRef?.canGoBack() == true) webViewRef?.goBack()
@@ -291,7 +317,7 @@ fun MainScreen(
             webViewRef?.reload()
           },
           onBookmarkClick = {
-            val title = pageTitle.ifBlank { activePortal.displayNameArabic }
+            val title = pageTitle.ifBlank { if (isGeneralBrowserSession) currentUrl else activePortal.displayNameArabic }
             if (repository.isBookmarked(currentUrl)) {
               val currentBookmarks = repository.getBookmarks()
               currentBookmarks.find { it.url == currentUrl }?.let {
@@ -322,11 +348,20 @@ fun MainScreen(
       if (isBarVisible && !isFullscreenVideo) {
         TvNavBar(
           activePortal = activePortal,
+          isHomeActive = isHomeActive,
+          selectedMainTab = selectedMainTab,
           controlMode = controlMode,
           currentDisplayMode = displayMode,
-          onGoToHome = { isHomeActive = true },
+          onGoToBrowserHome = {
+            selectedMainTab = AppMainTab.BROWSER
+            isHomeActive = true
+          },
+          onGoToAsserTvHome = {
+            selectedMainTab = AppMainTab.ASSER_TV
+            isHomeActive = true
+          },
           onSelectPortal = { portal ->
-            navigateTo(portal.homeUrl, portal, portal.displayNameArabic)
+            navigateTo(portal.homeUrl, portal, portal.displayNameArabic, isGeneralBrowser = false)
           },
           onOpenBookmarks = { showFavoritesDialog = true },
           onOpenHistory = { showHistoryDialog = true },
@@ -344,21 +379,65 @@ fun MainScreen(
     }
   ) { innerPadding ->
     if (isHomeActive) {
-      HomeDashboardScreen(
-        repository = repository,
-        onLaunchUrl = { url, portal, title ->
-          navigateTo(url, portal, title)
-        },
-        onOpenBookmarks = { showFavoritesDialog = true },
-        onOpenHistory = { showHistoryDialog = true },
-        onOpenDisplayMode = { showDisplayModeDialog = true },
-        onOpenAdBlockSettings = { showAdBlockDialog = true },
-        onOpenUpdate = { showUpdateDialog = true },
+      Column(
         modifier = Modifier
           .fillMaxSize()
           .padding(innerPadding)
           .then(if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding() else Modifier)
-      )
+      ) {
+        AppMainTabSwitcherBar(
+          selectedTab = selectedMainTab,
+          onSelectTab = { tab -> selectedMainTab = tab },
+          controlMode = controlMode,
+          displayMode = displayMode,
+          onToggleControlMode = {
+            val newMode = if (controlMode == ControlMode.VIRTUAL_MOUSE) ControlMode.DPAD_NAV else ControlMode.VIRTUAL_MOUSE
+            controlMode = newMode
+            repository.setControlMode(newMode)
+            val msg = if (newMode == ControlMode.VIRTUAL_MOUSE) "تم تفعيل وضع الماوس (تحريك بالأسهم + نقر بـ OK)" else "تم تفعيل وضع الأسهم للتصفح والتمرير"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+          },
+          onOpenDisplayMode = { showDisplayModeDialog = true },
+          onOpenBookmarks = { showFavoritesDialog = true },
+          onOpenHistory = { showHistoryDialog = true },
+          onOpenAdBlock = { showAdBlockDialog = true }
+        )
+
+        if (selectedMainTab == AppMainTab.BROWSER) {
+          BrowserHomeScreen(
+            repository = repository,
+            onOpenWebUrl = { url, title ->
+              val detectedPortal = StreamingPortal.values().firstOrNull { p ->
+                p.homeUrl.isNotBlank() && url.contains(p.homeUrl.removePrefix("https://").removePrefix("http://").trimEnd('/'))
+              }
+              if (detectedPortal != null) {
+                navigateTo(url, detectedPortal, title, isGeneralBrowser = false)
+              } else {
+                navigateTo(url, null, title, isGeneralBrowser = true)
+              }
+            },
+            onSwitchToAsserTv = {
+              selectedMainTab = AppMainTab.ASSER_TV
+            },
+            onOpenBookmarks = { showFavoritesDialog = true },
+            onOpenHistory = { showHistoryDialog = true },
+            modifier = Modifier.weight(1f)
+          )
+        } else {
+          HomeDashboardScreen(
+            repository = repository,
+            onLaunchUrl = { url, portal, title ->
+              navigateTo(url, portal, title, isGeneralBrowser = false)
+            },
+            onOpenBookmarks = { showFavoritesDialog = true },
+            onOpenHistory = { showHistoryDialog = true },
+            onOpenDisplayMode = { showDisplayModeDialog = true },
+            onOpenAdBlockSettings = { showAdBlockDialog = true },
+            onOpenUpdate = { showUpdateDialog = true },
+            modifier = Modifier.weight(1f)
+          )
+        }
+      }
     } else {
       Box(
         modifier = Modifier
@@ -424,8 +503,14 @@ fun MainScreen(
                     manufacturer.contains("android") ||
                     (brand.contains("google") && !hardware.contains("pixel") && !hardware.contains("nexus") && !hardware.contains("shiba") && !hardware.contains("husky") && !hardware.contains("felix"))
 
-                // Keep hardware acceleration enabled (LAYER_TYPE_NONE) so HTML5 video textures and controls render correctly.
-                setLayerType(View.LAYER_TYPE_NONE, null)
+                // Set Software layer in emulators to completely avoid initializing EGL/Mesa drivers, 
+                // preventing 'Failed to open rendernode' errors in container logs. Physical TV devices (ARM) keep LAYER_TYPE_NONE
+                // for full hardware acceleration.
+                if (isEmulator) {
+                  setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                } else {
+                  setLayerType(View.LAYER_TYPE_NONE, null)
+                }
 
                 isClickable = true
                 isLongClickable = true
@@ -477,7 +562,12 @@ fun MainScreen(
                   TvPlayerBridge(
                     onVideoEnded = {},
                     onVideoTimeUpdate = { _, _ -> },
-                    onCenterClickFiltered = { _, _ -> }
+                    onCenterClickFiltered = { _, _ -> },
+                    onVideoDetected = { url ->
+                      if (url.startsWith("http") && url != detectedVideoUrl) {
+                        detectedVideoUrl = url
+                      }
+                    }
                   ),
                   "AndroidTvBridge"
                 )
@@ -499,6 +589,7 @@ fun MainScreen(
 
                 webViewClient = TvWebViewClient(
                   isAdBlockEnabled = { repository.isAdBlockEnabled() },
+                  isGeneralBrowserMode = { isGeneralBrowserSession },
                   onPageFinishedCallback = { url ->
                     currentUrl = url
                     val detected = StreamingPortal.fromUrl(url)
@@ -512,6 +603,11 @@ fun MainScreen(
                   },
                   onAdBlockedCallback = { blockedHostOrUrl ->
                     Toast.makeText(context, "🚫 تم منع إعلان منبثق ($blockedHostOrUrl)", Toast.LENGTH_SHORT).show()
+                  },
+                  onVideoDetectedCallback = { url ->
+                    if (url.startsWith("http") && url != detectedVideoUrl) {
+                      detectedVideoUrl = url
+                    }
                   }
                 )
 
@@ -542,7 +638,63 @@ fun MainScreen(
           )
         }
 
+        // Floating Data-Saver Player Banner (Arabic UI)
+        if (detectedVideoUrl != null && playNativeVideoUrl == null) {
+          Box(
+            modifier = Modifier
+              .align(Alignment.BottomCenter)
+              .padding(bottom = 24.dp)
+              .background(Color(0xEE111111), RoundedCornerShape(12.dp))
+              .padding(12.dp)
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+              Column {
+                Text(
+                  text = "🎬 تم رصد رابط فيديو البث المباشر!",
+                  color = Color.White,
+                  fontSize = 14.sp,
+                  fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "اضغط لتشغيله بالمشغل الأصلي الموفر للباقة (جودة 480p تلقائياً)",
+                  color = CinemaAccent,
+                  fontSize = 11.sp
+                )
+              }
+              androidx.compose.material3.Button(
+                onClick = {
+                  // Pause the webview video player so we don't have dual audio streams running in background
+                  webViewRef?.evaluateJavascript(
+                    "(function() { document.querySelectorAll('video').forEach(function(v) { v.pause(); }); })()",
+                    null
+                  )
+                  playNativeVideoUrl = detectedVideoUrl
+                },
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = CinemaAccent),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.testTag("play_native_video_button")
+              ) {
+                Text("شغل الآن بالمشغل الأصلي", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+              }
+            }
+          }
+        }
 
+        // Fullscreen Native ExoPlayer Overlay with strict 480p cap to save internet quota
+        if (playNativeVideoUrl != null) {
+          NativeTvExoPlayer(
+            videoUrl = playNativeVideoUrl!!,
+            title = pageTitle,
+            refererUrl = currentUrl,
+            onDismiss = {
+              playNativeVideoUrl = null
+            },
+            modifier = Modifier.fillMaxSize()
+          )
+        }
       }
     }
   }

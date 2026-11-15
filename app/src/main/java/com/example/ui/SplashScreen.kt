@@ -1,7 +1,5 @@
 package com.example.ui
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -14,15 +12,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -36,25 +32,9 @@ fun SplashScreen(
   onSplashFinished: () -> Unit,
   modifier: Modifier = Modifier
 ) {
-  // Animatable states for elegant scaling and fading in/out
-  val scale = remember { Animatable(0.8f) }
-  val alpha = remember { Animatable(0f) }
-
-  LaunchedEffect(key1 = true) {
-    // Elegant parallel fade and scale animation
-    scale.animateTo(
-      targetValue = 1f,
-      animationSpec = tween(durationMillis = 1000)
-    )
-  }
-
-  LaunchedEffect(key1 = true) {
-    alpha.animateTo(
-      targetValue = 1f,
-      animationSpec = tween(durationMillis = 800)
-    )
-    // Delay for 2.5 seconds total as requested
-    delay(2500)
+  LaunchedEffect(Unit) {
+    // Ultra-fast startup without heavy GPU frame animations for older TV boxes and phones
+    delay(300)
     onSplashFinished()
   }
 
@@ -67,39 +47,33 @@ fun SplashScreen(
     Column(
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
-      // Display the beautiful logo with a rounded clip
       Image(
         painter = painterResource(id = R.drawable.ic_assertv_logo),
-        contentDescription = "AsserTV Logo",
+        contentDescription = "Asser Browser Logo",
         contentScale = ContentScale.Fit,
         modifier = Modifier
-          .size(240.dp)
-          .scale(scale.value)
-          .alpha(alpha.value)
+          .size(160.dp)
           .clip(RoundedCornerShape(24.dp))
       )
 
-      Spacer(modifier = Modifier.height(18.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
-      // Elegant Subtitle / App name text below in Netflix style
       Text(
-        text = "AsserTV",
-        color = Color(0xFFE50914),
-        fontSize = 36.sp,
+        text = "Asser Browser",
+        color = Color(0xFF38BDF8),
+        fontSize = 34.sp,
         fontWeight = FontWeight.Black,
-        fontFamily = androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(R.font.bebas_neue)),
-        letterSpacing = 2.sp,
-        modifier = Modifier.alpha(alpha.value)
+        fontFamily = FontFamily(Font(R.font.bebas_neue)),
+        letterSpacing = 2.sp
       )
 
-      Spacer(modifier = Modifier.height(6.dp))
+      Spacer(modifier = Modifier.height(4.dp))
 
       Text(
-        text = "بوابة المشاهدة السينمائية الذكية",
+        text = "متصفح الويب السريع وبوابة Asser TV الذكية",
         color = Color(0xFFB3B3B3),
-        fontSize = 14.sp,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.alpha(alpha.value)
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium
       )
     }
   }

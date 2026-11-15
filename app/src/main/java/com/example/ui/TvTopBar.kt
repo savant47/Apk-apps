@@ -1,10 +1,5 @@
 package com.example.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,24 +30,23 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.HelpOutline
-import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -66,7 +59,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
@@ -77,6 +69,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.SmartOmniboxResolver
 import com.example.model.StreamingPortal
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
@@ -92,6 +85,7 @@ import com.example.ui.theme.CinemaSurfaceVariant
 fun TvTopBar(
   activePortal: StreamingPortal,
   currentUrl: String,
+  isGeneralBrowserMode: Boolean = false,
   isBarVisible: Boolean,
   loadingProgress: Int,
   pageTitle: String,
@@ -99,6 +93,7 @@ fun TvTopBar(
   onGoToHome: () -> Unit,
   onOpenSubtitles: () -> Unit,
   onSearchDirect: (portal: StreamingPortal, query: String) -> Unit,
+  onOmniboxNavigate: (url: String, title: String) -> Unit = { _, _ -> },
   onPortalSelected: (StreamingPortal) -> Unit,
   onHomeClick: () -> Unit,
   onBackClick: () -> Unit,
@@ -114,24 +109,31 @@ fun TvTopBar(
   modifier: Modifier = Modifier
 ) {
   var searchQuery by remember { mutableStateOf("") }
-  var isSearchExpanded by remember { mutableStateOf(false) }
 
   val keyboardController = LocalSoftwareKeyboardController.current
   val focusManager = LocalFocusManager.current
 
   val quickSuggestions = listOf(
+    "google.com",
+    "youtube.com",
     "Silo",
     "Z Nation",
-    "The Walking Dead",
     "Breaking Bad",
     "Game of Thrones",
-    "Peaky Blinders",
     "From",
-    "Severance",
     "الحشاشين"
   )
 
-  fun executeSearch(portal: StreamingPortal) {
+  fun executeGoogleOrUrlOmnibox() {
+    val q = searchQuery.trim()
+    keyboardController?.hide()
+    focusManager.clearFocus()
+    val resolvedUrl = SmartOmniboxResolver.resolveInputToUrl(q)
+    val title = if (q.isBlank()) "Google" else "بحث: $q"
+    onOmniboxNavigate(resolvedUrl, title)
+  }
+
+  fun executePortalSearch(portal: StreamingPortal) {
     val q = searchQuery.trim().ifBlank { "Silo" }
     keyboardController?.hide()
     focusManager.clearFocus()
@@ -139,14 +141,9 @@ fun TvTopBar(
   }
 
   Column(modifier = modifier.fillMaxWidth()) {
-    AnimatedVisibility(
-      visible = isBarVisible,
-      enter = expandVertically() + fadeIn(),
-      exit = shrinkVertically() + fadeOut()
-    ) {
+    if (isBarVisible) {
       Surface(
-        color = CinemaDarkBackground.copy(alpha = 0.95f),
-        shadowElevation = 8.dp,
+        color = CinemaDarkBackground,
         border = androidx.compose.foundation.BorderStroke(1.dp, CinemaSurfaceVariant)
       ) {
         Column(
@@ -154,21 +151,21 @@ fun TvTopBar(
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
-          // Row 1: Browser Controls, Live Search Bar, and Portal Tabs
+          // Row 1: Browser Controls, Smart Omnibox / Live Search Bar, and Action Buttons
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            // Left: Home Dashboard, Back, Forward, Reload, Home Portal
+            // Left: Home, Back, Forward, Reload
             Row(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
               TvTopBarIconButton(
-                icon = Icons.Default.Tv,
-                contentDescription = "الواجهة الرئيسية (بحث ومتابعة)",
-                tint = CinemaAccent,
+                icon = Icons.Default.Public,
+                contentDescription = "الواجهة الرئيسية (Asser Browser / Asser TV)",
+                tint = Color(0xFF38BDF8),
                 onClick = onGoToHome,
                 testTag = "btn_topbar_home_dashboard"
               )
@@ -192,7 +189,7 @@ fun TvTopBar(
               )
             }
 
-            // Center: Live Search Field
+            // Center: Unified Search & URL Omnibox
             Row(
               modifier = Modifier
                 .weight(1f)
@@ -205,7 +202,7 @@ fun TvTopBar(
                 onValueChange = { searchQuery = it },
                 placeholder = {
                   Text(
-                    text = "ابحث عن أي مسلسل أو فيلم (مثل Silo أو Z Nation)...",
+                    text = "ابحث في جوجل، اكتب رابط موقع، أو اسم فيلم...",
                     color = Color.Gray,
                     fontSize = 12.sp,
                     maxLines = 1
@@ -215,7 +212,7 @@ fun TvTopBar(
                   Icon(
                     imageVector = Icons.Default.Search,
                     contentDescription = "بحث",
-                    tint = CinemaAccent,
+                    tint = Color(0xFF38BDF8),
                     modifier = Modifier.size(18.dp)
                   )
                 },
@@ -237,14 +234,20 @@ fun TvTopBar(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
-                  onSearch = { executeSearch(activePortal) }
+                  onSearch = {
+                    if (isGeneralBrowserMode) {
+                      executeGoogleOrUrlOmnibox()
+                    } else {
+                      executePortalSearch(activePortal)
+                    }
+                  }
                 ),
                 colors = TextFieldDefaults.colors(
                   focusedContainerColor = CinemaSurface,
                   unfocusedContainerColor = CinemaSurface,
                   focusedTextColor = Color.White,
                   unfocusedTextColor = Color.White,
-                  focusedIndicatorColor = CinemaAccent,
+                  focusedIndicatorColor = Color(0xFF38BDF8),
                   unfocusedIndicatorColor = Color.Transparent
                 ),
                 shape = RoundedCornerShape(8.dp),
@@ -256,8 +259,23 @@ fun TvTopBar(
                   .clickable { keyboardController?.show() }
               )
 
-              // Render direct search buttons dynamically for all enabled portals!
-              StreamingPortal.values().filter { it.isEnabled }.forEach { portal ->
+              // Direct Google / URL Go button
+              Button(
+                onClick = { executeGoogleOrUrlOmnibox() },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                shape = RoundedCornerShape(6.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier
+                  .height(38.dp)
+                  .testTag("topbar_btn_search_google")
+              ) {
+                Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("جوجل / رابط", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+              }
+
+              // Render direct search buttons dynamically for enabled streaming portals
+              StreamingPortal.values().filter { it.isEnabled }.take(3).forEach { portal ->
                 val btnColor = when (portal) {
                   StreamingPortal.TOP_CINEMA -> CinemaPrimary
                   StreamingPortal.WATCH_SERIES -> CinemaSecondary
@@ -274,22 +292,22 @@ fun TvTopBar(
                 }
 
                 Button(
-                  onClick = { executeSearch(portal) },
+                  onClick = { executePortalSearch(portal) },
                   colors = ButtonDefaults.buttonColors(containerColor = btnColor),
                   shape = RoundedCornerShape(6.dp),
-                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                   modifier = Modifier
                     .height(38.dp)
                     .testTag("topbar_btn_search_${portal.id}")
                 ) {
-                  Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = textColor)
+                  Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = textColor)
                   Spacer(modifier = Modifier.width(4.dp))
-                  Text(portal.displayNameArabic, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = textColor)
+                  Text(portal.displayNameArabic, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = textColor)
                 }
               }
             }
 
-            // Right: AdBlock Shield, Subtitles, Bookmark, Guide, Fullscreen
+            // Right: AdBlock Shield, Subtitles, Quality, Update, Bookmark, Guide, Fullscreen
             Row(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -317,12 +335,11 @@ fun TvTopBar(
               )
               TvTopBarIconButton(
                 icon = Icons.Default.SystemUpdate,
-                contentDescription = "تحديث التطبيق المباشر (OTA Update)",
+                contentDescription = "تحديث التطبيق المباشر",
                 tint = CinemaSuccess,
                 onClick = onOpenUpdate,
                 testTag = "btn_topbar_update"
               )
-
               TvTopBarIconButton(
                 icon = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                 contentDescription = "إضافة للمفضلة",
@@ -352,7 +369,6 @@ fun TvTopBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            // URL / Page Title Indicator
             Row(
               verticalAlignment = Alignment.CenterVertically,
               modifier = Modifier.weight(0.45f)
@@ -360,11 +376,15 @@ fun TvTopBar(
               Box(
                 modifier = Modifier
                   .clip(RoundedCornerShape(4.dp))
-                  .background(if (activePortal == StreamingPortal.TOP_CINEMA) CinemaPrimary.copy(alpha = 0.3f) else CinemaSecondary.copy(alpha = 0.3f))
+                  .background(
+                    if (isGeneralBrowserMode) Color(0xFF0284C7).copy(alpha = 0.3f)
+                    else if (activePortal == StreamingPortal.TOP_CINEMA) CinemaPrimary.copy(alpha = 0.3f)
+                    else CinemaSecondary.copy(alpha = 0.3f)
+                  )
                   .padding(horizontal = 6.dp, vertical = 2.dp)
               ) {
                 Text(
-                  text = activePortal.displayNameArabic,
+                  text = if (isGeneralBrowserMode) "Asser Browser" else activePortal.displayNameArabic,
                   color = Color.White,
                   fontSize = 10.sp,
                   fontWeight = FontWeight.Bold
@@ -396,7 +416,11 @@ fun TvTopBar(
                     .border(1.dp, if (isFocused) CinemaFocusGlow else Color.Transparent, RoundedCornerShape(4.dp))
                     .clickable(interactionSource = interactionSource, indication = null) {
                       searchQuery = suggestion
-                      executeSearch(activePortal)
+                      if (suggestion.contains(".")) {
+                        executeGoogleOrUrlOmnibox()
+                      } else {
+                        executePortalSearch(activePortal)
+                      }
                     }
                     .focusable(interactionSource = interactionSource)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
@@ -421,7 +445,7 @@ fun TvTopBar(
         modifier = Modifier
           .fillMaxWidth()
           .height(3.dp),
-        color = CinemaAccent,
+        color = Color(0xFF38BDF8),
         trackColor = Color.Transparent
       )
     }
@@ -436,7 +460,7 @@ fun TvTopBar(
       Surface(
         onClick = onToggleBarVisibility,
         shape = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp),
-        color = CinemaSurface.copy(alpha = 0.7f),
+        color = CinemaSurface,
         border = androidx.compose.foundation.BorderStroke(1.dp, CinemaBorder)
       ) {
         Icon(
@@ -466,7 +490,6 @@ private fun TvTopBarIconButton(
   Box(
     modifier = Modifier
       .size(34.dp)
-      .scale(if (isFocused) 1.15f else 1.0f)
       .clip(RoundedCornerShape(6.dp))
       .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.3f) else CinemaSurfaceVariant)
       .border(

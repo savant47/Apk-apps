@@ -44,6 +44,15 @@ enum class StreamingPortal(
     description = "سيرفر إيجي ديد السريع للأفلام والمسلسلات العربية والأجنبية المترجمة",
     isEnabled = true
   ),
+  FLIXER(
+    id = "flixer",
+    displayNameArabic = "فليكسر",
+    displayNameEnglish = "Flixer",
+    homeUrl = "https://flixer.gd/",
+    searchBaseUrl = "https://flixer.gd/search/",
+    description = "مكتبة فليكسر الشاملة لأحدث الأفلام والمسلسلات العالمية المترجمة بجودة ممتازة",
+    isEnabled = true
+  ),
   PORTAL_5(
     id = "portal5",
     displayNameArabic = "مصدر مخصص 2",
@@ -82,6 +91,9 @@ enum class StreamingPortal(
       EGY_DEAD -> {
         "${homeUrl.trimEnd('/')}/?s=$encoded"
       }
+      FLIXER -> {
+        "https://flixer.gd/search/$encoded"
+      }
       PORTAL_5 -> {
         if (searchBaseUrl.isNotBlank()) {
           if (searchBaseUrl.contains("%s")) searchBaseUrl.replace("%s", encoded) else "$searchBaseUrl$encoded"
@@ -97,6 +109,8 @@ enum class StreamingPortal(
       val lower = url.lowercase()
       return if (lower.contains("watchseries")) {
         WATCH_SERIES
+      } else if (lower.contains("flixer")) {
+        FLIXER
       } else if (lower.contains("laroza") || lower.contains("llaroza") || lower.contains("roza")) {
         LAROZA
       } else if (lower.contains("egydead") || lower.contains("egy-dead")) {
@@ -113,6 +127,7 @@ enum class StreamingPortal(
         "watchseries" -> WATCH_SERIES
         "laroza" -> LAROZA
         "egydead" -> EGY_DEAD
+        "flixer" -> FLIXER
         "portal5" -> PORTAL_5
         else -> TOP_CINEMA
       }
@@ -140,3 +155,44 @@ enum class ControlMode {
   DPAD_NAV,
   VIRTUAL_MOUSE
 }
+
+enum class AppMainTab {
+  BROWSER,
+  ASSER_TV
+}
+
+data class QuickWebSite(
+  val id: String,
+  val titleArabic: String,
+  val titleEnglish: String,
+  val url: String,
+  val accentColorHex: Long
+)
+
+object SmartOmniboxResolver {
+  fun resolveInputToUrl(input: String): String {
+    val trimmed = input.trim()
+    if (trimmed.isBlank()) return "https://www.google.com"
+    if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+      return trimmed
+    }
+    // Check if it looks like a valid domain or URL without spaces
+    val domainRegex = "^([a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}(/.*)?$".toRegex()
+    if (!trimmed.contains(" ") && domainRegex.matches(trimmed)) {
+      return "https://$trimmed"
+    }
+    return buildGoogleSearchUrl(trimmed)
+  }
+
+  fun buildGoogleSearchUrl(query: String): String {
+    val clean = query.trim()
+    if (clean.isBlank()) return "https://www.google.com"
+    val encoded = try {
+      URLEncoder.encode(clean, "UTF-8")
+    } catch (_: Exception) {
+      clean.replace(" ", "+")
+    }
+    return "https://www.google.com/search?q=$encoded"
+  }
+}
+

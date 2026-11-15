@@ -79,7 +79,9 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
         manufacturer.contains("android") ||
         (brand.contains("google") && !hardware.contains("pixel") && !hardware.contains("nexus") && !hardware.contains("shiba") && !hardware.contains("husky") && !hardware.contains("felix"))
 
-
+    if (isEmulator) {
+      window.clearFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
+    }
 
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()

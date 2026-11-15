@@ -24,7 +24,19 @@ class ExampleRobolectricTest {
   fun `read string from context`() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("AsserTV", appName)
+    assertEquals("Asser Browser", appName)
+  }
+
+  @Test
+  fun `verify SmartOmniboxResolver resolves Google search queries and direct URLs`() {
+    val domainUrl = com.example.model.SmartOmniboxResolver.resolveInputToUrl("youtube.com")
+    assertEquals("https://youtube.com", domainUrl)
+
+    val fullUrl = com.example.model.SmartOmniboxResolver.resolveInputToUrl("https://flixer.gd/")
+    assertEquals("https://flixer.gd/", fullUrl)
+
+    val googleSearch = com.example.model.SmartOmniboxResolver.resolveInputToUrl("أخبار اليوم في مصر")
+    assertTrue("Should resolve search text to Google search URL", googleSearch.startsWith("https://www.google.com/search?q="))
   }
 
   @Test
@@ -251,6 +263,30 @@ class ExampleRobolectricTest {
     val safeUrl = "https://watchseries.bar/player/embed"
     val allowedSafe = client.shouldInterceptRequest(null, safeUrl)
     assertNull("Legacy shouldInterceptRequest should not block legitimate video player stream", allowedSafe)
+  }
+
+  @Test
+  fun `verify TvPlayerBridge video detection triggers callback`() {
+    var detectedUrl: String? = null
+    val bridge = com.example.tv.TvPlayerBridge(
+      onVideoDetected = { detectedUrl = it }
+    )
+    bridge.onVideoDetected("https://cdn.com/stream.mp4")
+    assertEquals("https://cdn.com/stream.mp4", detectedUrl)
+  }
+
+  @Test
+  fun `verify TvWebViewClient intercepts video stream requests and triggers callback`() {
+    var detectedUrl: String? = null
+    val client = com.example.tv.TvWebViewClient(
+      isAdBlockEnabled = { true },
+      onPageFinishedCallback = {},
+      onVideoDetectedCallback = { detectedUrl = it }
+    )
+
+    val videoUrl = "https://cdn.com/stream.m3u8"
+    client.shouldInterceptRequest(null, videoUrl)
+    assertEquals("https://cdn.com/stream.m3u8", detectedUrl)
   }
 }
 

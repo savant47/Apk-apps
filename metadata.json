@@ -1,6 +1,6 @@
 {
-  "name": "AsserTV",
-  "description": "تطبيق تلفزيون متكامل لأجهزة أندرويد TV و BeoutQ QS285 لتصفح ومشاهدة الأفلام والمسلسلات بجودة عالية وسلاسة من AsserTV مع دعم كامل لريموت التحكم وتشغيل الفيديو بملء الشاشة.",
+  "name": "Asser Browser",
+  "description": "متصفح ويب فائق الخفة والسرعة (Asser Browser) بواجهة بحث جوجل وتصفح شامل مع تبويب Asser TV المدمج لمشاهدة الأفلام والمسلسلات، متوافق مع الهواتف وشاشات التلفاز والرسيفرات بالريموت والماوس واللمس.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
