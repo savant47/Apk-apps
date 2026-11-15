@@ -14,8 +14,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 enum class AppDisplayMode(val arabicTitle: String, val subtitle: String) {
-  MOBILE("📱 وضع الهاتف المحمول", "تحكم كامل باللمس، يدعم الوضعين الرأسي والأفقي وشريط تنقل سفلي مرن"),
-  TV("📺 وضع التلفاز والرسيفر", "واجهة سينمائية 16:9، تحكم كامل بالريموت D-pad ومؤشر الفأرة الافتراضية")
+  MOBILE("📱 منظور الهاتف المحمول", "واجهة رأسية متناسقة تعمل باللمس ومصممة خصيصاً لشاشات الهواتف المحمولة"),
+  TV("📺 منظور الشاشة أو التابلت", "واجهة أفقية عريضة للشاشات والرسيفرات والتابلت مع دعم الريموت والماوس")
 }
 
 class TvPreferencesRepository(context: Context) {
@@ -330,7 +330,7 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_BOOKMARKS_JSON = "bookmarks_json"
     private const val KEY_HISTORY_JSON = "history_json"
     private const val KEY_DISPLAY_MODE = "display_mode"
-    private const val KEY_HAS_SELECTED_MODE = "has_selected_mode"
+    private const val KEY_HAS_SELECTED_MODE = "has_selected_asser_browser_mode_v2"
     private const val KEY_CONTROL_MODE = "control_mode"
     private const val KEY_ACTIVE_PORTAL = "active_portal"
     private const val KEY_AD_BLOCK = "ad_block_enabled"

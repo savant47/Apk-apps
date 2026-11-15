@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,11 +39,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.AppDisplayMode
@@ -65,14 +65,14 @@ fun DisplayModeSelectionDialog(
 ) {
   var selected by remember { mutableStateOf(currentMode) }
 
-  val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-  val isNarrow = configuration.screenWidthDp < 500
+  val configuration = LocalConfiguration.current
+  val isNarrow = configuration.screenWidthDp < 560
 
   BasicAlertDialog(
     onDismissRequest = onDismiss,
     modifier = Modifier
       .widthIn(max = 520.dp)
-      .fillMaxWidth(0.94f)
+      .fillMaxWidth(0.95f)
       .padding(8.dp)
   ) {
     Surface(
@@ -84,29 +84,28 @@ fun DisplayModeSelectionDialog(
         modifier = Modifier
           .fillMaxWidth()
           .verticalScroll(rememberScrollState())
-          .padding(20.dp),
+          .padding(18.dp),
         horizontalAlignment = Alignment.CenterHorizontally
       ) {
-        // Dialog Title
         Text(
-          text = "🎯 اختر طريقة العرض والتحكم المفضلة",
+          text = "🎯 اختر منظور العرض المناسب لجهازك",
           color = Color.White,
-          fontSize = 18.sp,
-          fontWeight = FontWeight.Bold,
+          fontSize = 17.sp,
+          fontWeight = FontWeight.ExtraBold,
           textAlign = TextAlign.Center
         )
 
         Spacer(modifier = Modifier.height(6.dp))
 
         Text(
-          text = "التطبيق يدعم اللمس والماوس وأزرار الريموت في كلا الوضعين معاً، اختر الواجهة الأنسب لشاشتك:",
+          text = "يحتوي Asser Browser على منظورين مخصصين لضمان تنسيق مثالي بدون أي فراغات أو تزاحم:",
           color = Color.LightGray,
           fontSize = 12.sp,
           textAlign = TextAlign.Center,
           lineHeight = 17.sp
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         if (isNarrow) {
           Column(
@@ -114,12 +113,12 @@ fun DisplayModeSelectionDialog(
             verticalArrangement = Arrangement.spacedBy(10.dp)
           ) {
             ModeOptionCard(
-              title = "📱 وضع الهاتف المحمول",
-              subtitle = "تحكم كامل وسلس باللمس، يدعم الوضعين الرأسي والأفقي مع شريط تنقل سفلي مناسب للهواتف والتابلت",
+              title = "📱 منظور الهاتف المحمول",
+              subtitle = "واجهة رأسية متناسقة 100% مع شاشة الهاتف المحمول، قوائم وأزرار واضحة تعمل باللمس بسرعة فائقة",
               icon = Icons.Default.PhoneAndroid,
               isCurrent = currentMode == AppDisplayMode.MOBILE,
               isSelected = selected == AppDisplayMode.MOBILE,
-              activeColor = CinemaPrimary,
+              activeColor = Color(0xFF0284C7),
               modifier = Modifier.fillMaxWidth(),
               onSelect = { selected = AppDisplayMode.MOBILE },
               onApplyImmediate = {
@@ -129,12 +128,12 @@ fun DisplayModeSelectionDialog(
             )
 
             ModeOptionCard(
-              title = "📺 وضع التلفاز والرسيفر",
-              subtitle = "واجهة سينمائية أفقية 16:9، حدود تركيز بارزة لأزرار الريموت D-Pad، وضع الفأرة الافتراضية لشاشات التلفاز",
+              title = "📺 منظور الشاشة أو التابلت",
+              subtitle = "واجهة أفقية عريضة (16:9) مخصصة لشاشات التلفاز Android TV والرسيفرات والتابلت بالريموت أو الماوس",
               icon = Icons.Default.Tv,
               isCurrent = currentMode == AppDisplayMode.TV,
               isSelected = selected == AppDisplayMode.TV,
-              activeColor = CinemaSecondary,
+              activeColor = CinemaPrimary,
               modifier = Modifier.fillMaxWidth(),
               onSelect = { selected = AppDisplayMode.TV },
               onApplyImmediate = {
@@ -146,15 +145,15 @@ fun DisplayModeSelectionDialog(
         } else {
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
           ) {
             ModeOptionCard(
-              title = "📱 وضع الهاتف المحمول",
-              subtitle = "تحكم كامل وسلس باللمس، يدعم الوضعين الرأسي والأفقي مع شريط تنقل سفلي مناسب للهواتف والتابلت",
+              title = "📱 منظور الهاتف المحمول",
+              subtitle = "واجهة رأسية متناسقة 100% مع شاشة الهاتف المحمول، قوائم وأزرار واضحة تعمل باللمس بسرعة فائقة",
               icon = Icons.Default.PhoneAndroid,
               isCurrent = currentMode == AppDisplayMode.MOBILE,
               isSelected = selected == AppDisplayMode.MOBILE,
-              activeColor = CinemaPrimary,
+              activeColor = Color(0xFF0284C7),
               modifier = Modifier.weight(1f),
               onSelect = { selected = AppDisplayMode.MOBILE },
               onApplyImmediate = {
@@ -164,12 +163,12 @@ fun DisplayModeSelectionDialog(
             )
 
             ModeOptionCard(
-              title = "📺 وضع التلفاز والرسيفر",
-              subtitle = "واجهة سينمائية أفقية 16:9، حدود تركيز بارزة لأزرار الريموت D-Pad، وضع الفأرة الافتراضية لشاشات التلفاز",
+              title = "📺 منظور الشاشة أو التابلت",
+              subtitle = "واجهة أفقية عريضة (16:9) مخصصة لشاشات التلفاز Android TV والرسيفرات والتابلت بالريموت أو الماوس",
               icon = Icons.Default.Tv,
               isCurrent = currentMode == AppDisplayMode.TV,
               isSelected = selected == AppDisplayMode.TV,
-              activeColor = CinemaSecondary,
+              activeColor = CinemaPrimary,
               modifier = Modifier.weight(1f),
               onSelect = { selected = AppDisplayMode.TV },
               onApplyImmediate = {
@@ -180,9 +179,8 @@ fun DisplayModeSelectionDialog(
           }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // Bottom Confirmation Button
         Button(
           onClick = {
             onModeSelected(selected)
@@ -195,13 +193,15 @@ fun DisplayModeSelectionDialog(
           shape = RoundedCornerShape(10.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(46.dp)
             .testTag("confirm_display_mode_btn")
         ) {
           Text(
-            text = "تأكيد واستخدام ${selected.arabicTitle}",
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold
+            text = "تأكيد وتشغيل ${selected.arabicTitle}",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
           )
         }
       }
@@ -226,7 +226,6 @@ private fun ModeOptionCard(
 
   Box(
     modifier = modifier
-      .scale(if (isFocused) 1.03f else 1.0f)
       .clip(RoundedCornerShape(12.dp))
       .background(if (isSelected) activeColor.copy(alpha = 0.18f) else CinemaSurfaceVariant)
       .border(
@@ -255,7 +254,7 @@ private fun ModeOptionCard(
           imageVector = icon,
           contentDescription = null,
           tint = if (isSelected) activeColor else Color.LightGray,
-          modifier = Modifier.size(28.dp)
+          modifier = Modifier.size(26.dp)
         )
 
         if (isCurrent) {
@@ -264,11 +263,11 @@ private fun ModeOptionCard(
             shape = RoundedCornerShape(6.dp)
           ) {
             Text(
-              text = "الوضع الحالي",
-              color = activeColor,
+              text = "المنظور الحالي",
+              color = Color.White,
               fontSize = 10.sp,
               fontWeight = FontWeight.Bold,
-              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
             )
           }
         } else if (isSelected) {
@@ -281,14 +280,16 @@ private fun ModeOptionCard(
         }
       }
 
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(8.dp))
 
       Text(
         text = title,
         color = Color.White,
         fontSize = 15.sp,
         fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
       )
 
       Spacer(modifier = Modifier.height(4.dp))
@@ -307,7 +308,7 @@ private fun ModeOptionCard(
         onClick = onApplyImmediate,
         colors = ButtonDefaults.buttonColors(
           containerColor = if (isSelected) activeColor else CinemaSurface,
-          contentColor = if (isSelected) Color.White else Color.LightGray
+          contentColor = Color.White
         ),
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier
@@ -315,9 +316,11 @@ private fun ModeOptionCard(
           .height(36.dp)
       ) {
         Text(
-          text = if (isCurrent) "مفعّل حالياً ✓" else "تفعيل هذا الوضع الآن ⚡",
+          text = if (isCurrent) "مفعّل حالياً ✓" else "تفعيل هذا المنظور فوراً ⚡",
           fontSize = 12.sp,
-          fontWeight = FontWeight.Bold
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
       }
     }

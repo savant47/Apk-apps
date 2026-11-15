@@ -89,9 +89,9 @@ fun MainScreen(
   val configuration = LocalConfiguration.current
   val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
 
-  // Display Mode & Dialogs
+  // Display Mode & Dialogs (Prompts user on first launch to choose Mobile vs TV/Tablet perspective)
   val displayMode by repository.displayModeFlow.collectAsState()
-  var showDisplayModeDialog by remember { mutableStateOf(false) }
+  var showDisplayModeDialog by remember { mutableStateOf(!repository.hasSelectedDisplayMode()) }
   var showAdBlockDialog by remember { mutableStateOf(false) }
   var showFavoritesDialog by remember { mutableStateOf(false) }
   var showHistoryDialog by remember { mutableStateOf(false) }
@@ -282,6 +282,7 @@ fun MainScreen(
           activePortal = activePortal,
           currentUrl = currentUrl,
           isGeneralBrowserMode = isGeneralBrowserSession,
+          currentDisplayMode = displayMode,
           isBarVisible = isBarVisible,
           loadingProgress = loadingProgress,
           pageTitle = pageTitle,
@@ -638,35 +639,44 @@ fun MainScreen(
           )
         }
 
-        // Floating Data-Saver Player Banner (Arabic UI)
-        if (detectedVideoUrl != null && playNativeVideoUrl == null) {
+        // Floating Data-Saver Player Banner (Responsive with weight(1f) so button never wraps vertically)
+        val isSocialOrSearchFeed = currentUrl.contains("facebook.com") ||
+            currentUrl.contains("google.com") ||
+            currentUrl.contains("instagram.com") ||
+            currentUrl.contains("youtube.com")
+        if (detectedVideoUrl != null && playNativeVideoUrl == null && !isSocialOrSearchFeed) {
           Box(
             modifier = Modifier
               .align(Alignment.BottomCenter)
-              .padding(bottom = 24.dp)
-              .background(Color(0xEE111111), RoundedCornerShape(12.dp))
-              .padding(12.dp)
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 14.dp)
+              .background(Color(0xF2111622), RoundedCornerShape(12.dp))
+              .padding(horizontal = 12.dp, vertical = 10.dp)
           ) {
             Row(
+              modifier = Modifier.fillMaxWidth(),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp)
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-              Column {
+              Column(modifier = Modifier.weight(1f)) {
                 Text(
-                  text = "🎬 تم رصد رابط فيديو البث المباشر!",
+                  text = "🎬 تم رصد رابط الفيديو!",
                   color = Color.White,
-                  fontSize = 14.sp,
-                  fontWeight = FontWeight.Bold
+                  fontSize = 13.sp,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
                 Text(
-                  text = "اضغط لتشغيله بالمشغل الأصلي الموفر للباقة (جودة 480p تلقائياً)",
+                  text = "مشغل موفر للباقة (جودة 480p كحد أقصى)",
                   color = CinemaAccent,
-                  fontSize = 11.sp
+                  fontSize = 11.sp,
+                  maxLines = 1,
+                  overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
               }
               androidx.compose.material3.Button(
                 onClick = {
-                  // Pause the webview video player so we don't have dual audio streams running in background
                   webViewRef?.evaluateJavascript(
                     "(function() { document.querySelectorAll('video').forEach(function(v) { v.pause(); }); })()",
                     null
@@ -675,9 +685,24 @@ fun MainScreen(
                 },
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = CinemaAccent),
                 shape = RoundedCornerShape(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 modifier = Modifier.testTag("play_native_video_button")
               ) {
-                Text("شغل الآن بالمشغل الأصلي", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Text(
+                  text = "▶ تشغيل 480p",
+                  color = Color.Black,
+                  fontWeight = FontWeight.Bold,
+                  fontSize = 12.sp,
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
+              androidx.compose.material3.TextButton(
+                onClick = { detectedVideoUrl = null },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
+                modifier = Modifier.size(32.dp)
+              ) {
+                Text("✕", color = Color.LightGray, fontSize = 14.sp, fontWeight = FontWeight.Bold)
               }
             }
           }

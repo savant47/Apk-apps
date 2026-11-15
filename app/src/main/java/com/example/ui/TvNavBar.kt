@@ -8,7 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -69,22 +72,20 @@ fun TvNavBar(
   Box(
     modifier = modifier
       .fillMaxWidth()
-      .height(54.dp)
+      .height(52.dp)
       .background(CinemaDarkBackground)
-      .border(width = 1.dp, color = CinemaSurfaceVariant)
-      .padding(horizontal = 8.dp)
+      .border(width = 1.dp, color = CinemaSurfaceVariant),
+    contentAlignment = Alignment.CenterStart
   ) {
-    Row(
+    // Scrollable single-line LazyRow so all buttons fit cleanly on Mobile phones AND TV screens without wrapping or clipping!
+    LazyRow(
       modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
+      contentPadding = PaddingValues(horizontal = 8.dp),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
       verticalAlignment = Alignment.CenterVertically
     ) {
-      // Main Tab Switchers (Asser Browser & Asser TV) + Direct Portal Switchers
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-      ) {
-        // 1. Asser Browser (Google Search) Button
+      // 1. Asser Browser (Google Search) Button
+      item {
         TvNavUtilityButton(
           label = "بحث جوجل",
           icon = Icons.Default.Public,
@@ -93,8 +94,10 @@ fun TvNavBar(
           onClick = onGoToBrowserHome,
           testTag = "btn_nav_home"
         )
+      }
 
-        // 2. Asser TV Main Tab Button
+      // 2. Asser TV Main Tab Button
+      item {
         TvNavUtilityButton(
           label = "Asser TV",
           icon = Icons.Default.LiveTv,
@@ -103,55 +106,55 @@ fun TvNavBar(
           onClick = onGoToAsserTvHome,
           testTag = "btn_nav_asser_tv"
         )
-
-        // 3. Direct Portal Switch Buttons
-        StreamingPortal.values().filter { it.isEnabled }.forEach { portal ->
-          val btnColor = when (portal) {
-            StreamingPortal.TOP_CINEMA -> CinemaPrimary
-            StreamingPortal.WATCH_SERIES -> CinemaSecondary
-            StreamingPortal.LAROZA -> CinemaAccent
-            StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50)
-            StreamingPortal.FLIXER -> Color(0xFF9C27B0)
-            else -> CinemaSurfaceVariant
-          }
-          val icon = when (portal) {
-            StreamingPortal.TOP_CINEMA -> Icons.Default.Movie
-            StreamingPortal.WATCH_SERIES -> Icons.Default.LiveTv
-            StreamingPortal.EGY_DEAD -> Icons.Default.Tv
-            else -> Icons.Default.Tv
-          }
-
-          TvNavActionButton(
-            label = portal.displayNameArabic,
-            subLabel = portal.displayNameEnglish,
-            icon = icon,
-            isSelected = !isHomeActive && activePortal == portal,
-            activeColor = btnColor,
-            onClick = { onSelectPortal(portal) },
-            testTag = "btn_nav_${portal.id}"
-          )
-        }
       }
 
-      // Secondary Utilities: Bookmarks, History, Virtual Mouse, Mode
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-      ) {
+      // 3. Direct Portal Switch Buttons
+      items(StreamingPortal.values().filter { it.isEnabled }) { portal ->
+        val btnColor = when (portal) {
+          StreamingPortal.TOP_CINEMA -> CinemaPrimary
+          StreamingPortal.WATCH_SERIES -> CinemaSecondary
+          StreamingPortal.LAROZA -> CinemaAccent
+          StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50)
+          StreamingPortal.FLIXER -> Color(0xFF9C27B0)
+          else -> CinemaSurfaceVariant
+        }
+        val icon = when (portal) {
+          StreamingPortal.TOP_CINEMA -> Icons.Default.Movie
+          StreamingPortal.WATCH_SERIES -> Icons.Default.LiveTv
+          StreamingPortal.EGY_DEAD -> Icons.Default.Tv
+          else -> Icons.Default.Tv
+        }
+
+        TvNavActionButton(
+          label = portal.displayNameArabic,
+          icon = icon,
+          isSelected = !isHomeActive && activePortal == portal,
+          activeColor = btnColor,
+          onClick = { onSelectPortal(portal) },
+          testTag = "btn_nav_${portal.id}"
+        )
+      }
+
+      // 4. Secondary Utilities: Bookmarks, History, Virtual Mouse, Perspective Switcher
+      item {
         TvNavUtilityButton(
           label = "المفضلة",
           icon = Icons.Default.Bookmark,
           onClick = onOpenBookmarks,
           testTag = "btn_nav_bookmarks"
         )
+      }
 
+      item {
         TvNavUtilityButton(
           label = "السجل",
           icon = Icons.Default.History,
           onClick = onOpenHistory,
           testTag = "btn_nav_history"
         )
+      }
 
+      item {
         TvNavUtilityButton(
           label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس: نشط" else "الماوس",
           icon = Icons.Default.Mouse,
@@ -160,10 +163,14 @@ fun TvNavBar(
           onClick = onToggleControlMode,
           testTag = "btn_nav_mouse"
         )
+      }
 
+      item {
         TvNavUtilityButton(
-          label = if (currentDisplayMode == AppDisplayMode.TV) "وضع TV" else "وضع هاتف",
-          icon = Icons.Default.Tv,
+          label = if (currentDisplayMode == AppDisplayMode.TV) "منظور شاشة" else "منظور هاتف",
+          icon = if (currentDisplayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
+          isActive = true,
+          activeColor = Color(0xFF38BDF8),
           onClick = onOpenModeDialog,
           testTag = "btn_nav_mode"
         )
@@ -175,7 +182,6 @@ fun TvNavBar(
 @Composable
 private fun TvNavActionButton(
   label: String,
-  subLabel: String,
   icon: ImageVector,
   isSelected: Boolean,
   activeColor: Color,
@@ -187,6 +193,7 @@ private fun TvNavActionButton(
 
   Box(
     modifier = Modifier
+      .height(38.dp)
       .clip(RoundedCornerShape(8.dp))
       .background(
         when {
@@ -202,8 +209,9 @@ private fun TvNavActionButton(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 10.dp, vertical = 6.dp)
-      .testTag(testTag)
+      .padding(horizontal = 10.dp)
+      .testTag(testTag),
+    contentAlignment = Alignment.Center
   ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       Icon(
@@ -213,14 +221,14 @@ private fun TvNavActionButton(
         modifier = Modifier.size(16.dp)
       )
       Spacer(modifier = Modifier.width(5.dp))
-      Column {
-        Text(
-          text = label,
-          color = if (isSelected) Color.White else Color.LightGray,
-          fontSize = 11.sp,
-          fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-        )
-      }
+      Text(
+        text = label,
+        color = if (isSelected) Color.White else Color.LightGray,
+        fontSize = 11.sp,
+        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+        maxLines = 1,
+        softWrap = false
+      )
     }
   }
 }
@@ -239,6 +247,7 @@ private fun TvNavUtilityButton(
 
   Box(
     modifier = Modifier
+      .height(38.dp)
       .clip(RoundedCornerShape(8.dp))
       .background(
         if (isActive) activeColor.copy(alpha = 0.25f)
@@ -252,8 +261,9 @@ private fun TvNavUtilityButton(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 8.dp, vertical = 6.dp)
-      .testTag(testTag)
+      .padding(horizontal = 10.dp)
+      .testTag(testTag),
+    contentAlignment = Alignment.Center
   ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       Icon(
@@ -265,9 +275,11 @@ private fun TvNavUtilityButton(
       Spacer(modifier = Modifier.width(4.dp))
       Text(
         text = label,
-        color = if (isActive) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
+        color = if (isActive) Color.White else if (isFocused) CinemaFocusGlow else Color.LightGray,
         fontSize = 11.sp,
-        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+        maxLines = 1,
+        softWrap = false
       )
     }
   }

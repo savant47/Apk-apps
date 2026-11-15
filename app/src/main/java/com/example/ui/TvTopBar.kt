@@ -61,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -69,6 +70,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.AppDisplayMode
 import com.example.model.SmartOmniboxResolver
 import com.example.model.StreamingPortal
 import com.example.ui.theme.CinemaAccent
@@ -86,6 +88,7 @@ fun TvTopBar(
   activePortal: StreamingPortal,
   currentUrl: String,
   isGeneralBrowserMode: Boolean = false,
+  currentDisplayMode: AppDisplayMode = AppDisplayMode.MOBILE,
   isBarVisible: Boolean,
   loadingProgress: Int,
   pageTitle: String,
@@ -112,6 +115,8 @@ fun TvTopBar(
 
   val keyboardController = LocalSoftwareKeyboardController.current
   val focusManager = LocalFocusManager.current
+  val configuration = LocalConfiguration.current
+  val isMobileLayout = currentDisplayMode == AppDisplayMode.MOBILE || configuration.screenWidthDp < 600
 
   val quickSuggestions = listOf(
     "google.com",
@@ -146,25 +151,24 @@ fun TvTopBar(
         color = CinemaDarkBackground,
         border = androidx.compose.foundation.BorderStroke(1.dp, CinemaSurfaceVariant)
       ) {
-        Column(
-          modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-        ) {
-          // Row 1: Browser Controls, Smart Omnibox / Live Search Bar, and Action Buttons
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        if (isMobileLayout) {
+          // MOBILE PERSPECTIVE TOP BAR:
+          // Row 1: [Home] [Back] [Refresh] [Wide Visible Omnibox Input] [Go] [Bookmark]
+          // Row 2: Scrollable LazyRow of Portals & Tools (AdGuard, Subtitles, Quality 480p, Fullscreen)
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
           ) {
-            // Left: Home, Back, Forward, Reload
             Row(
+              modifier = Modifier.fillMaxWidth(),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
               TvTopBarIconButton(
                 icon = Icons.Default.Public,
-                contentDescription = "الواجهة الرئيسية (Asser Browser / Asser TV)",
+                contentDescription = "الرئيسية",
                 tint = Color(0xFF38BDF8),
                 onClick = onGoToHome,
                 testTag = "btn_topbar_home_dashboard"
@@ -176,51 +180,29 @@ fun TvTopBar(
                 testTag = "btn_topbar_back"
               )
               TvTopBarIconButton(
-                icon = Icons.Default.ArrowForward,
-                contentDescription = "للأمام",
-                onClick = onForwardClick,
-                testTag = "btn_topbar_forward"
-              )
-              TvTopBarIconButton(
                 icon = Icons.Default.Refresh,
                 contentDescription = "تحديث",
                 onClick = onRefreshClick,
                 testTag = "btn_topbar_refresh"
               )
-            }
 
-            // Center: Unified Search & URL Omnibox
-            Row(
-              modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
               TextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 placeholder = {
                   Text(
-                    text = "ابحث في جوجل، اكتب رابط موقع، أو اسم فيلم...",
-                    color = Color.Gray,
-                    fontSize = 12.sp,
-                    maxLines = 1
-                  )
-                },
-                leadingIcon = {
-                  Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "بحث",
-                    tint = Color(0xFF38BDF8),
-                    modifier = Modifier.size(18.dp)
+                    text = pageTitle.ifBlank { "ابحث في جوجل أو اكتب رابطاً..." },
+                    color = Color.LightGray,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                   )
                 },
                 trailingIcon = {
                   if (searchQuery.isNotEmpty()) {
                     IconButton(
                       onClick = { searchQuery = "" },
-                      modifier = Modifier.size(22.dp)
+                      modifier = Modifier.size(20.dp)
                     ) {
                       Icon(
                         imageVector = Icons.Default.Clear,
@@ -235,11 +217,8 @@ fun TvTopBar(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
                   onSearch = {
-                    if (isGeneralBrowserMode) {
-                      executeGoogleOrUrlOmnibox()
-                    } else {
-                      executePortalSearch(activePortal)
-                    }
+                    if (isGeneralBrowserMode) executeGoogleOrUrlOmnibox()
+                    else executePortalSearch(activePortal)
                   }
                 ),
                 colors = TextFieldDefaults.colors(
@@ -253,93 +232,26 @@ fun TvTopBar(
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier
                   .weight(1f)
-                  .height(44.dp)
+                  .height(42.dp)
                   .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
                   .testTag("topbar_search_input")
-                  .clickable { keyboardController?.show() }
               )
 
-              // Direct Google / URL Go button
               Button(
-                onClick = { executeGoogleOrUrlOmnibox() },
+                onClick = {
+                  if (isGeneralBrowserMode) executeGoogleOrUrlOmnibox()
+                  else executePortalSearch(activePortal)
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(8.dp),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                 modifier = Modifier
-                  .height(38.dp)
+                  .height(36.dp)
                   .testTag("topbar_btn_search_google")
               ) {
-                Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("جوجل / رابط", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Icon(Icons.Default.Search, contentDescription = "بحث", modifier = Modifier.size(16.dp), tint = Color.White)
               }
 
-              // Render direct search buttons dynamically for enabled streaming portals
-              StreamingPortal.values().filter { it.isEnabled }.take(3).forEach { portal ->
-                val btnColor = when (portal) {
-                  StreamingPortal.TOP_CINEMA -> CinemaPrimary
-                  StreamingPortal.WATCH_SERIES -> CinemaSecondary
-                  StreamingPortal.LAROZA -> CinemaAccent
-                  StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50)
-                  else -> CinemaSurfaceVariant
-                }
-                val textColor = if (portal == StreamingPortal.LAROZA) Color.Black else Color.White
-                val icon = when (portal) {
-                  StreamingPortal.TOP_CINEMA -> Icons.Default.Movie
-                  StreamingPortal.WATCH_SERIES -> Icons.Default.LiveTv
-                  StreamingPortal.EGY_DEAD -> Icons.Default.Tv
-                  else -> Icons.Default.HighQuality
-                }
-
-                Button(
-                  onClick = { executePortalSearch(portal) },
-                  colors = ButtonDefaults.buttonColors(containerColor = btnColor),
-                  shape = RoundedCornerShape(6.dp),
-                  contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                  modifier = Modifier
-                    .height(38.dp)
-                    .testTag("topbar_btn_search_${portal.id}")
-                ) {
-                  Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = textColor)
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text(portal.displayNameArabic, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = textColor)
-                }
-              }
-            }
-
-            // Right: AdBlock Shield, Subtitles, Quality, Update, Bookmark, Guide, Fullscreen
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-              TvTopBarIconButton(
-                icon = Icons.Default.Shield,
-                contentDescription = "مانع الإعلانات و AdGuard DNS",
-                tint = CinemaSuccess,
-                onClick = onOpenAdBlockSettings,
-                testTag = "btn_topbar_adblock"
-              )
-              TvTopBarIconButton(
-                icon = Icons.Default.Subtitles,
-                contentDescription = "الترجمة والكابشنز OpenSubtitles",
-                tint = CinemaAccent,
-                onClick = onOpenSubtitles,
-                testTag = "btn_topbar_subtitles"
-              )
-              TvTopBarIconButton(
-                icon = Icons.Default.HighQuality,
-                contentDescription = "اختيار جودة الفيديو (Quality)",
-                tint = Color(0xFF38BDF8),
-                onClick = onOpenQuality,
-                testTag = "btn_topbar_quality"
-              )
-              TvTopBarIconButton(
-                icon = Icons.Default.SystemUpdate,
-                contentDescription = "تحديث التطبيق المباشر",
-                tint = CinemaSuccess,
-                onClick = onOpenUpdate,
-                testTag = "btn_topbar_update"
-              )
               TvTopBarIconButton(
                 icon = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                 contentDescription = "إضافة للمفضلة",
@@ -347,89 +259,348 @@ fun TvTopBar(
                 onClick = onBookmarkClick,
                 testTag = "btn_topbar_bookmark"
               )
-              TvTopBarIconButton(
-                icon = Icons.Default.HelpOutline,
-                contentDescription = "دليل الاستخدام",
-                onClick = onOpenGuide,
-                testTag = "btn_topbar_guide"
-              )
-              TvTopBarIconButton(
-                icon = Icons.Default.Fullscreen,
-                contentDescription = "ملء الشاشة",
-                onClick = onToggleFullscreen,
-                testTag = "btn_topbar_fullscreen"
-              )
             }
-          }
 
-          // Row 2: Page Title / URL badge and Quick Search Suggestions
-          Spacer(modifier = Modifier.height(4.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              modifier = Modifier.weight(0.45f)
+            // Row 2: Scrollable Tools & Quick Portal Search Strip
+            LazyRow(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              verticalAlignment = Alignment.CenterVertically
             ) {
-              Box(
-                modifier = Modifier
-                  .clip(RoundedCornerShape(4.dp))
-                  .background(
-                    if (isGeneralBrowserMode) Color(0xFF0284C7).copy(alpha = 0.3f)
-                    else if (activePortal == StreamingPortal.TOP_CINEMA) CinemaPrimary.copy(alpha = 0.3f)
-                    else CinemaSecondary.copy(alpha = 0.3f)
-                  )
-                  .padding(horizontal = 6.dp, vertical = 2.dp)
-              ) {
-                Text(
-                  text = if (isGeneralBrowserMode) "Asser Browser" else activePortal.displayNameArabic,
-                  color = Color.White,
-                  fontSize = 10.sp,
-                  fontWeight = FontWeight.Bold
+              item {
+                MobileToolPill(
+                  label = "بحث جوجل",
+                  icon = Icons.Default.Public,
+                  color = Color(0xFF0284C7),
+                  onClick = { executeGoogleOrUrlOmnibox() }
                 )
               }
-              Spacer(modifier = Modifier.width(6.dp))
-              Text(
-                text = pageTitle.ifBlank { currentUrl },
-                color = Color.LightGray,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-              )
+
+              items(StreamingPortal.values().filter { it.isEnabled }) { portal ->
+                val btnColor = when (portal) {
+                  StreamingPortal.TOP_CINEMA -> CinemaPrimary
+                  StreamingPortal.WATCH_SERIES -> CinemaSecondary
+                  StreamingPortal.LAROZA -> CinemaAccent
+                  StreamingPortal.EGY_DEAD -> Color(0xFF4CAF50)
+                  else -> CinemaSurfaceVariant
+                }
+                MobileToolPill(
+                  label = "بحث ${portal.displayNameArabic}",
+                  icon = Icons.Default.LiveTv,
+                  color = btnColor,
+                  onClick = { executePortalSearch(portal) },
+                  testTag = "topbar_btn_search_${portal.id}"
+                )
+              }
+
+              item {
+                MobileToolPill(
+                  label = "حماية AdGuard",
+                  icon = Icons.Default.Shield,
+                  color = CinemaSuccess,
+                  onClick = onOpenAdBlockSettings,
+                  testTag = "btn_topbar_adblock"
+                )
+              }
+              item {
+                MobileToolPill(
+                  label = "الترجمة",
+                  icon = Icons.Default.Subtitles,
+                  color = CinemaAccent,
+                  onClick = onOpenSubtitles,
+                  testTag = "btn_topbar_subtitles"
+                )
+              }
+              item {
+                MobileToolPill(
+                  label = "الجودة 480p",
+                  icon = Icons.Default.HighQuality,
+                  color = Color(0xFF38BDF8),
+                  onClick = onOpenQuality,
+                  testTag = "btn_topbar_quality"
+                )
+              }
+              item {
+                MobileToolPill(
+                  label = "ملء الشاشة",
+                  icon = Icons.Default.Fullscreen,
+                  color = Color.LightGray,
+                  onClick = onToggleFullscreen,
+                  testTag = "btn_topbar_fullscreen"
+                )
+              }
+            }
+          }
+        } else {
+          // TV / TABLET WIDESCREEN PERSPECTIVE TOP BAR
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 10.dp, vertical = 6.dp)
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+              ) {
+                TvTopBarIconButton(
+                  icon = Icons.Default.Public,
+                  contentDescription = "الواجهة الرئيسية",
+                  tint = Color(0xFF38BDF8),
+                  onClick = onGoToHome,
+                  testTag = "btn_topbar_home_dashboard"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.ArrowBack,
+                  contentDescription = "للخلف",
+                  onClick = onBackClick,
+                  testTag = "btn_topbar_back"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.ArrowForward,
+                  contentDescription = "للأمام",
+                  onClick = onForwardClick,
+                  testTag = "btn_topbar_forward"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.Refresh,
+                  contentDescription = "تحديث",
+                  onClick = onRefreshClick,
+                  testTag = "btn_topbar_refresh"
+                )
+              }
+
+              Row(
+                modifier = Modifier
+                  .weight(1f)
+                  .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                TextField(
+                  value = searchQuery,
+                  onValueChange = { searchQuery = it },
+                  placeholder = {
+                    Text(
+                      text = "ابحث في جوجل، اكتب رابط موقع، أو اسم فيلم...",
+                      color = Color.Gray,
+                      fontSize = 12.sp,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis
+                    )
+                  },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.Search,
+                      contentDescription = "بحث",
+                      tint = Color(0xFF38BDF8),
+                      modifier = Modifier.size(18.dp)
+                    )
+                  },
+                  trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                      IconButton(
+                        onClick = { searchQuery = "" },
+                        modifier = Modifier.size(22.dp)
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.Clear,
+                          contentDescription = "مسح",
+                          tint = Color.LightGray,
+                          modifier = Modifier.size(14.dp)
+                        )
+                      }
+                    }
+                  },
+                  singleLine = true,
+                  keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                  keyboardActions = KeyboardActions(
+                    onSearch = {
+                      if (isGeneralBrowserMode) executeGoogleOrUrlOmnibox()
+                      else executePortalSearch(activePortal)
+                    }
+                  ),
+                  colors = TextFieldDefaults.colors(
+                    focusedContainerColor = CinemaSurface,
+                    unfocusedContainerColor = CinemaSurface,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedIndicatorColor = Color(0xFF38BDF8),
+                    unfocusedIndicatorColor = Color.Transparent
+                  ),
+                  shape = RoundedCornerShape(8.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+                    .testTag("topbar_search_input")
+                    .clickable { keyboardController?.show() }
+                )
+
+                Button(
+                  onClick = { executeGoogleOrUrlOmnibox() },
+                  colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                  shape = RoundedCornerShape(6.dp),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                  modifier = Modifier
+                    .height(38.dp)
+                    .testTag("topbar_btn_search_google")
+                ) {
+                  Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("جوجل / رابط", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
+                }
+
+                StreamingPortal.values().filter { it.isEnabled }.take(2).forEach { portal ->
+                  val btnColor = when (portal) {
+                    StreamingPortal.TOP_CINEMA -> CinemaPrimary
+                    StreamingPortal.WATCH_SERIES -> CinemaSecondary
+                    else -> CinemaSurfaceVariant
+                  }
+                  val icon = if (portal == StreamingPortal.TOP_CINEMA) Icons.Default.Movie else Icons.Default.LiveTv
+
+                  Button(
+                    onClick = { executePortalSearch(portal) },
+                    colors = ButtonDefaults.buttonColors(containerColor = btnColor),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                      .height(38.dp)
+                      .testTag("topbar_btn_search_${portal.id}")
+                  ) {
+                    Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color.White)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(portal.displayNameArabic, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
+                  }
+                }
+              }
+
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+              ) {
+                TvTopBarIconButton(
+                  icon = Icons.Default.Shield,
+                  contentDescription = "مانع الإعلانات و AdGuard DNS",
+                  tint = CinemaSuccess,
+                  onClick = onOpenAdBlockSettings,
+                  testTag = "btn_topbar_adblock"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.Subtitles,
+                  contentDescription = "الترجمة والكابشنز OpenSubtitles",
+                  tint = CinemaAccent,
+                  onClick = onOpenSubtitles,
+                  testTag = "btn_topbar_subtitles"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.HighQuality,
+                  contentDescription = "اختيار جودة الفيديو",
+                  tint = Color(0xFF38BDF8),
+                  onClick = onOpenQuality,
+                  testTag = "btn_topbar_quality"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.SystemUpdate,
+                  contentDescription = "تحديث التطبيق المباشر",
+                  tint = CinemaSuccess,
+                  onClick = onOpenUpdate,
+                  testTag = "btn_topbar_update"
+                )
+                TvTopBarIconButton(
+                  icon = if (isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                  contentDescription = "إضافة للمفضلة",
+                  tint = if (isBookmarked) CinemaAccent else Color.LightGray,
+                  onClick = onBookmarkClick,
+                  testTag = "btn_topbar_bookmark"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.HelpOutline,
+                  contentDescription = "دليل الاستخدام",
+                  onClick = onOpenGuide,
+                  testTag = "btn_topbar_guide"
+                )
+                TvTopBarIconButton(
+                  icon = Icons.Default.Fullscreen,
+                  contentDescription = "ملء الشاشة",
+                  onClick = onToggleFullscreen,
+                  testTag = "btn_topbar_fullscreen"
+                )
+              }
             }
 
-            // Quick suggestion chips
-            LazyRow(
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
-              modifier = Modifier.weight(0.55f)
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
             ) {
-              items(quickSuggestions) { suggestion ->
-                val interactionSource = remember { MutableInteractionSource() }
-                val isFocused by interactionSource.collectIsFocusedAsState()
-
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(0.45f)
+              ) {
                 Box(
                   modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))
-                    .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.3f) else CinemaSurfaceVariant)
-                    .border(1.dp, if (isFocused) CinemaFocusGlow else Color.Transparent, RoundedCornerShape(4.dp))
-                    .clickable(interactionSource = interactionSource, indication = null) {
-                      searchQuery = suggestion
-                      if (suggestion.contains(".")) {
-                        executeGoogleOrUrlOmnibox()
-                      } else {
-                        executePortalSearch(activePortal)
-                      }
-                    }
-                    .focusable(interactionSource = interactionSource)
+                    .background(
+                      if (isGeneralBrowserMode) Color(0xFF0284C7).copy(alpha = 0.3f)
+                      else if (activePortal == StreamingPortal.TOP_CINEMA) CinemaPrimary.copy(alpha = 0.3f)
+                      else CinemaSecondary.copy(alpha = 0.3f)
+                    )
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                   Text(
-                    text = suggestion,
-                    color = if (isFocused) CinemaFocusGlow else Color.White,
-                    fontSize = 10.sp
+                    text = if (isGeneralBrowserMode) "Asser Browser" else activePortal.displayNameArabic,
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false
                   )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  text = pageTitle.ifBlank { currentUrl },
+                  color = Color.LightGray,
+                  fontSize = 11.sp,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
+
+              LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.weight(0.55f)
+              ) {
+                items(quickSuggestions) { suggestion ->
+                  val interactionSource = remember { MutableInteractionSource() }
+                  val isFocused by interactionSource.collectIsFocusedAsState()
+
+                  Box(
+                    modifier = Modifier
+                      .clip(RoundedCornerShape(4.dp))
+                      .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.3f) else CinemaSurfaceVariant)
+                      .border(1.dp, if (isFocused) CinemaFocusGlow else Color.Transparent, RoundedCornerShape(4.dp))
+                      .clickable(interactionSource = interactionSource, indication = null) {
+                        searchQuery = suggestion
+                        if (suggestion.contains(".")) executeGoogleOrUrlOmnibox()
+                        else executePortalSearch(activePortal)
+                      }
+                      .focusable(interactionSource = interactionSource)
+                      .padding(horizontal = 6.dp, vertical = 2.dp)
+                  ) {
+                    Text(
+                      text = suggestion,
+                      color = if (isFocused) CinemaFocusGlow else Color.White,
+                      fontSize = 10.sp,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
                 }
               }
             }
@@ -438,7 +609,6 @@ fun TvTopBar(
       }
     }
 
-    // Loading Progress Indicator
     if (loadingProgress in 1..99) {
       LinearProgressIndicator(
         progress = { loadingProgress / 100f },
@@ -450,7 +620,6 @@ fun TvTopBar(
       )
     }
 
-    // Small Show/Hide Toggle Tab
     Box(
       modifier = Modifier
         .fillMaxWidth()
@@ -472,6 +641,44 @@ fun TvTopBar(
             .padding(2.dp)
         )
       }
+    }
+  }
+}
+
+@Composable
+private fun MobileToolPill(
+  label: String,
+  icon: ImageVector,
+  color: Color,
+  onClick: () -> Unit,
+  testTag: String = ""
+) {
+  Surface(
+    onClick = onClick,
+    color = color.copy(alpha = 0.18f),
+    shape = RoundedCornerShape(8.dp),
+    border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.6f)),
+    modifier = if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = Color.White,
+        modifier = Modifier.size(13.dp)
+      )
+      Text(
+        text = label,
+        color = Color.White,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        softWrap = false
+      )
     }
   }
 }

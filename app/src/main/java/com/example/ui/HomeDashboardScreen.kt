@@ -172,161 +172,73 @@ fun HomeDashboardScreen(
       .padding(horizontal = 16.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(18.dp)
   ) {
-    // 1. Top Header Bar (Optimized and responsive for Phone and TV)
+    // 1. Compact Sub-Header for Asser TV (no duplicate buttons that already exist in AppMainTabSwitcherBar)
     item {
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        // App Logo & Title
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          modifier = Modifier.weight(1f, fill = false)
+          modifier = Modifier.weight(1f)
         ) {
-          Image(
-            painter = painterResource(id = R.drawable.ic_assertv_logo),
-            contentDescription = "Asser TV Logo",
-            modifier = Modifier
-              .size(38.dp)
-              .clip(RoundedCornerShape(8.dp))
+          Icon(
+            imageVector = Icons.Default.LiveTv,
+            contentDescription = "Asser TV",
+            tint = CinemaPrimary,
+            modifier = Modifier.size(22.dp)
           )
           Spacer(modifier = Modifier.width(8.dp))
-          Column {
-            Text(
-              text = "Asser TV",
-              color = Color(0xFFE50914),
-              fontSize = 20.sp,
-              fontWeight = FontWeight.Black,
-              fontFamily = androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(R.font.bebas_neue)),
-              letterSpacing = 1.sp,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis
-            )
-            Text(
-              text = "بوابة الأفلام والمسلسلات الموحدة",
-              color = Color.LightGray,
-              fontSize = 10.sp
-            )
-          }
+          Text(
+            text = "Asser TV • بوابة الأفلام والمسلسلات",
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
         }
 
-        // Action Buttons: Mode Badge, Bookmarks, History
+        Spacer(modifier = Modifier.width(8.dp))
+
         Row(
           horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalAlignment = Alignment.CenterVertically
         ) {
-          // AdGuard Shield Button
           Surface(
-            onClick = onOpenAdBlockSettings,
-            color = CinemaSurface,
-            shape = RoundedCornerShape(20.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.5f)),
-            modifier = Modifier.testTag("btn_dashboard_adblock")
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Default.Shield,
-                contentDescription = null,
-                tint = CinemaSuccess,
-                modifier = Modifier.size(14.dp)
-              )
-              Text(
-                text = "AdGuard",
-                color = Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
-              )
-            }
-          }
-
-          // Display Mode Switcher
-          Surface(
-            onClick = onOpenDisplayMode,
-            color = CinemaSurface,
-            shape = RoundedCornerShape(20.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaBorder),
-            modifier = Modifier.testTag("btn_switch_display_mode")
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-              Icon(
-                imageVector = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
-                contentDescription = null,
-                tint = CinemaAccent,
-                modifier = Modifier.size(14.dp)
-              )
-              Text(
-                text = if (displayMode == AppDisplayMode.TV) "تلفاز" else "هاتف",
-                color = Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
-              )
-            }
-          }
-
-          IconButton(
-            onClick = onOpenBookmarks,
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(CinemaSurface)
-              .border(1.dp, CinemaBorder, CircleShape)
-              .testTag("btn_dashboard_bookmarks")
-          ) {
-            Icon(
-              Icons.Default.Bookmark,
-              contentDescription = "المفضلة",
-              tint = CinemaAccent,
-              modifier = Modifier.size(18.dp)
-            )
-          }
-
-          IconButton(
-            onClick = onOpenHistory,
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(CinemaSurface)
-              .border(1.dp, CinemaBorder, CircleShape)
-              .testTag("btn_dashboard_history")
-          ) {
-            Icon(
-              Icons.Default.History,
-              contentDescription = "السجل",
-              tint = Color.LightGray,
-              modifier = Modifier.size(18.dp)
-            )
-          }
-
-          IconButton(
             onClick = { showSourcesDialog = true },
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(CinemaSurface)
-              .border(1.dp, CinemaBorder, CircleShape)
-              .testTag("btn_dashboard_sources")
+            color = CinemaSurface,
+            shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaBorder),
+            modifier = Modifier.testTag("btn_dashboard_sources")
           ) {
-            Icon(
-              Icons.Default.Settings,
-              contentDescription = "إدارة المصادر",
-              tint = Color.LightGray,
-              modifier = Modifier.size(18.dp)
-            )
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              Icon(
+                Icons.Default.Settings,
+                contentDescription = "إدارة المصادر",
+                tint = CinemaAccent,
+                modifier = Modifier.size(15.dp)
+              )
+              Text(
+                text = "المصادر",
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
           }
 
           IconButton(
             onClick = onOpenUpdate,
             modifier = Modifier
-              .size(36.dp)
+              .size(34.dp)
               .clip(CircleShape)
               .background(CinemaSurface)
               .border(1.dp, CinemaSuccess.copy(alpha = 0.6f), CircleShape)
@@ -336,7 +248,7 @@ fun HomeDashboardScreen(
               Icons.Default.SystemUpdate,
               contentDescription = "تحديث التطبيق",
               tint = CinemaSuccess,
-              modifier = Modifier.size(18.dp)
+              modifier = Modifier.size(17.dp)
             )
           }
         }
@@ -422,10 +334,12 @@ fun HomeDashboardScreen(
       ) {
         Column(modifier = Modifier.padding(14.dp)) {
           Text(
-            text = "🔍 ابحث في جميع بوابات ومصادر المشاهدة معاً:",
+            text = "🔍 ابحث في جميع بوابات المشاهدة معاً:",
             color = Color.White,
             fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
           )
           Spacer(modifier = Modifier.height(8.dp))
 
@@ -439,9 +353,11 @@ fun HomeDashboardScreen(
               onValueChange = { searchQuery = it },
               placeholder = {
                 Text(
-                  text = "اكتب اسم الفيلم أو المسلسل (مثل: Silo, Z Nation, Peaky Blinders...)",
+                  text = "اكتب اسم الفيلم أو المسلسل (مثل Silo)...",
                   color = Color.Gray,
-                  fontSize = 12.sp
+                  fontSize = 12.sp,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
                 )
               },
               leadingIcon = {
@@ -481,7 +397,7 @@ fun HomeDashboardScreen(
                 contentColor = Color.Black
               ),
               shape = RoundedCornerShape(12.dp),
-              contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
               modifier = Modifier.testTag("btn_dual_search_action")
             ) {
               Icon(
@@ -489,11 +405,13 @@ fun HomeDashboardScreen(
                 contentDescription = null,
                 modifier = Modifier.size(18.dp)
               )
-              Spacer(modifier = Modifier.width(6.dp))
+              Spacer(modifier = Modifier.width(4.dp))
               Text(
                 text = "بحث",
                 fontWeight = FontWeight.ExtraBold,
-                fontSize = 14.sp
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false
               )
             }
           }

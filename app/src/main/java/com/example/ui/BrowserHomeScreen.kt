@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -63,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -85,7 +88,6 @@ import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
 import com.example.ui.theme.CinemaFocusGlow
 import com.example.ui.theme.CinemaPrimary
-import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.CinemaSurfaceVariant
@@ -103,90 +105,242 @@ fun AppMainTabSwitcherBar(
   onOpenAdBlock: () -> Unit,
   modifier: Modifier = Modifier
 ) {
-  Row(
-    modifier = modifier
-      .fillMaxWidth()
-      .background(Color(0xFF070A0F))
-      .border(width = 1.dp, color = CinemaSurfaceVariant)
-      .padding(horizontal = 12.dp, vertical = 8.dp),
-    horizontalArrangement = Arrangement.SpaceBetween,
-    verticalAlignment = Alignment.CenterVertically
+  val configuration = LocalConfiguration.current
+  val isMobileLayout = displayMode == AppDisplayMode.MOBILE || configuration.screenWidthDp < 600
+
+  if (isMobileLayout) {
+    Column(
+      modifier = modifier
+        .fillMaxWidth()
+        .background(Color(0xFF070A0F))
+        .border(width = 1.dp, color = CinemaSurfaceVariant)
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          modifier = Modifier.weight(1f)
+        ) {
+          Image(
+            painter = painterResource(id = R.drawable.ic_assertv_logo),
+            contentDescription = "Asser Browser Logo",
+            modifier = Modifier
+              .size(30.dp)
+              .clip(RoundedCornerShape(8.dp))
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = "Asser Browser",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
+        }
+
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          Surface(
+            onClick = onOpenDisplayMode,
+            color = Color(0xFF0284C7).copy(alpha = 0.2f),
+            shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
+            modifier = Modifier.testTag("top_chip_display_mode")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              Icon(
+                imageVector = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
+                contentDescription = null,
+                tint = Color(0xFF38BDF8),
+                modifier = Modifier.size(14.dp)
+              )
+              Text(
+                text = if (displayMode == AppDisplayMode.TV) "منظور شاشة" else "منظور هاتف",
+                color = Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
+          }
+
+          CompactTopIconBtn(
+            icon = Icons.Default.Bookmark,
+            tint = CinemaAccent,
+            contentDescription = "المفضلة",
+            onClick = onOpenBookmarks,
+            testTag = "top_chip_bookmarks"
+          )
+          CompactTopIconBtn(
+            icon = Icons.Default.History,
+            tint = Color.LightGray,
+            contentDescription = "السجل",
+            onClick = onOpenHistory,
+            testTag = "top_chip_history"
+          )
+          CompactTopIconBtn(
+            icon = Icons.Default.Shield,
+            tint = CinemaSuccess,
+            contentDescription = "حماية AdGuard",
+            onClick = onOpenAdBlock,
+            testTag = "top_chip_adblock"
+          )
+        }
+      }
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        MainModeTabItem(
+          title = "Asser Browser",
+          subtitle = "بحث جوجل وتصفح",
+          icon = Icons.Default.Public,
+          isSelected = selectedTab == AppMainTab.BROWSER,
+          activeColor = Color(0xFF38BDF8),
+          onClick = { onSelectTab(AppMainTab.BROWSER) },
+          testTag = "tab_asser_browser",
+          modifier = Modifier.weight(1f)
+        )
+
+        MainModeTabItem(
+          title = "Asser TV",
+          subtitle = "أفلام ومسلسلات",
+          icon = Icons.Default.LiveTv,
+          isSelected = selectedTab == AppMainTab.ASSER_TV,
+          activeColor = CinemaPrimary,
+          onClick = { onSelectTab(AppMainTab.ASSER_TV) },
+          testTag = "tab_asser_tv",
+          modifier = Modifier.weight(1f)
+        )
+      }
+    }
+  } else {
+    Row(
+      modifier = modifier
+        .fillMaxWidth()
+        .background(Color(0xFF070A0F))
+        .border(width = 1.dp, color = CinemaSurfaceVariant)
+        .padding(horizontal = 14.dp, vertical = 8.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        Image(
+          painter = painterResource(id = R.drawable.ic_assertv_logo),
+          contentDescription = "Asser Browser Logo",
+          modifier = Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(8.dp))
+        )
+
+        MainModeTabItem(
+          title = "Asser Browser",
+          subtitle = "بحث جوجل وتصفح",
+          icon = Icons.Default.Public,
+          isSelected = selectedTab == AppMainTab.BROWSER,
+          activeColor = Color(0xFF38BDF8),
+          onClick = { onSelectTab(AppMainTab.BROWSER) },
+          testTag = "tab_asser_browser"
+        )
+
+        MainModeTabItem(
+          title = "Asser TV",
+          subtitle = "أفلام ومسلسلات",
+          icon = Icons.Default.LiveTv,
+          isSelected = selectedTab == AppMainTab.ASSER_TV,
+          activeColor = CinemaPrimary,
+          onClick = { onSelectTab(AppMainTab.ASSER_TV) },
+          testTag = "tab_asser_tv"
+        )
+      }
+
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.horizontalScroll(rememberScrollState())
+      ) {
+        QuickTopUtilityChip(
+          label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس: نشط" else "الماوس",
+          icon = Icons.Default.Mouse,
+          tint = if (controlMode == ControlMode.VIRTUAL_MOUSE) CinemaAccent else Color.LightGray,
+          onClick = onToggleControlMode,
+          testTag = "top_chip_mouse"
+        )
+        QuickTopUtilityChip(
+          label = if (displayMode == AppDisplayMode.TV) "منظور شاشة/تابلت" else "منظور هاتف",
+          icon = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
+          tint = Color(0xFF38BDF8),
+          onClick = onOpenDisplayMode,
+          testTag = "top_chip_display_mode"
+        )
+        QuickTopUtilityChip(
+          label = "المفضلة",
+          icon = Icons.Default.Bookmark,
+          tint = CinemaAccent,
+          onClick = onOpenBookmarks,
+          testTag = "top_chip_bookmarks"
+        )
+        QuickTopUtilityChip(
+          label = "السجل",
+          icon = Icons.Default.History,
+          tint = Color.LightGray,
+          onClick = onOpenHistory,
+          testTag = "top_chip_history"
+        )
+        QuickTopUtilityChip(
+          label = "حماية AdGuard",
+          icon = Icons.Default.Shield,
+          tint = CinemaSuccess,
+          onClick = onOpenAdBlock,
+          testTag = "top_chip_adblock"
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun CompactTopIconBtn(
+  icon: ImageVector,
+  tint: Color,
+  contentDescription: String,
+  onClick: () -> Unit,
+  testTag: String
+) {
+  Box(
+    modifier = Modifier
+      .size(34.dp)
+      .clip(RoundedCornerShape(8.dp))
+      .background(CinemaSurface)
+      .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+      .clickable { onClick() }
+      .testTag(testTag),
+    contentAlignment = Alignment.Center
   ) {
-    // Left / Main Tabs: [🌐 Asser Browser] & [🎬 Asser TV]
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-      Image(
-        painter = painterResource(id = R.drawable.ic_assertv_logo),
-        contentDescription = "Asser Browser Logo",
-        modifier = Modifier
-          .size(34.dp)
-          .clip(RoundedCornerShape(8.dp))
-      )
-
-      MainModeTabItem(
-        title = "Asser Browser",
-        subtitle = "بحث جوجل وتصفح",
-        icon = Icons.Default.Public,
-        isSelected = selectedTab == AppMainTab.BROWSER,
-        activeColor = CinemaAccent,
-        onClick = { onSelectTab(AppMainTab.BROWSER) },
-        testTag = "tab_asser_browser"
-      )
-
-      MainModeTabItem(
-        title = "Asser TV",
-        subtitle = "أفلام ومسلسلات",
-        icon = Icons.Default.LiveTv,
-        isSelected = selectedTab == AppMainTab.ASSER_TV,
-        activeColor = CinemaPrimary,
-        onClick = { onSelectTab(AppMainTab.ASSER_TV) },
-        testTag = "tab_asser_tv"
-      )
-    }
-
-    // Right Utilities: Mouse Mode, TV/Phone Mode, AdBlock, Bookmarks, History
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-      QuickTopUtilityChip(
-        label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس: نشط" else "الماوس",
-        icon = Icons.Default.Mouse,
-        tint = if (controlMode == ControlMode.VIRTUAL_MOUSE) CinemaAccent else Color.LightGray,
-        onClick = onToggleControlMode,
-        testTag = "top_chip_mouse"
-      )
-      QuickTopUtilityChip(
-        label = if (displayMode == AppDisplayMode.TV) "TV" else "هاتف",
-        icon = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
-        tint = CinemaSecondary,
-        onClick = onOpenDisplayMode,
-        testTag = "top_chip_display_mode"
-      )
-      QuickTopUtilityChip(
-        label = "المفضلة",
-        icon = Icons.Default.Bookmark,
-        tint = CinemaAccent,
-        onClick = onOpenBookmarks,
-        testTag = "top_chip_bookmarks"
-      )
-      QuickTopUtilityChip(
-        label = "السجل",
-        icon = Icons.Default.History,
-        tint = Color.LightGray,
-        onClick = onOpenHistory,
-        testTag = "top_chip_history"
-      )
-      QuickTopUtilityChip(
-        label = "حماية",
-        icon = Icons.Default.Shield,
-        tint = CinemaSuccess,
-        onClick = onOpenAdBlock,
-        testTag = "top_chip_adblock"
-      )
-    }
+    Icon(
+      imageVector = icon,
+      contentDescription = contentDescription,
+      tint = tint,
+      modifier = Modifier.size(17.dp)
+    )
   }
 }
 
@@ -198,7 +352,8 @@ private fun MainModeTabItem(
   isSelected: Boolean,
   activeColor: Color,
   onClick: () -> Unit,
-  testTag: String
+  testTag: String,
+  modifier: Modifier = Modifier
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val isFocused by interactionSource.collectIsFocusedAsState()
@@ -215,8 +370,8 @@ private fun MainModeTabItem(
   }
 
   Box(
-    modifier = Modifier
-      .heightIn(min = 48.dp)
+    modifier = modifier
+      .height(48.dp)
       .clip(RoundedCornerShape(10.dp))
       .background(bgColor)
       .border(
@@ -226,31 +381,35 @@ private fun MainModeTabItem(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 14.dp, vertical = 6.dp)
+      .padding(horizontal = 10.dp, vertical = 4.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
+      horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
       Icon(
         imageVector = icon,
         contentDescription = title,
         tint = if (isSelected) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
-        modifier = Modifier.size(20.dp)
+        modifier = Modifier.size(18.dp)
       )
       Column {
         Text(
           text = title,
           color = Color.White,
-          fontSize = 14.sp,
-          fontWeight = FontWeight.Bold
+          fontSize = 13.sp,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
         Text(
           text = subtitle,
           color = if (isSelected) activeColor else Color.LightGray,
-          fontSize = 10.sp
+          fontSize = 10.sp,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
       }
     }
@@ -270,9 +429,9 @@ private fun QuickTopUtilityChip(
 
   Box(
     modifier = Modifier
-      .heightIn(min = 42.dp)
+      .height(40.dp)
       .clip(RoundedCornerShape(8.dp))
-      .background(if (isFocused) CinemaSurfaceVariant else CinemaSurface)
+      .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.25f) else CinemaSurface)
       .border(
         width = if (isFocused) 2.dp else 1.dp,
         color = if (isFocused) CinemaFocusGlow else CinemaBorder,
@@ -286,19 +445,21 @@ private fun QuickTopUtilityChip(
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(4.dp)
+      horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
       Icon(
         imageVector = icon,
         contentDescription = label,
         tint = if (isFocused) CinemaFocusGlow else tint,
-        modifier = Modifier.size(16.dp)
+        modifier = Modifier.size(15.dp)
       )
       Text(
         text = label,
         color = if (isFocused) CinemaFocusGlow else Color.White,
         fontSize = 11.sp,
-        fontWeight = FontWeight.Medium
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        softWrap = false
       )
     }
   }
@@ -316,6 +477,10 @@ fun BrowserHomeScreen(
   var omniboxInput by remember { mutableStateOf("") }
   val keyboardController = LocalSoftwareKeyboardController.current
   val focusManager = LocalFocusManager.current
+
+  val displayMode by repository.displayModeFlow.collectAsState()
+  val configuration = LocalConfiguration.current
+  val isMobileLayout = displayMode == AppDisplayMode.MOBILE || configuration.screenWidthDp < 600
 
   val history by repository.historyFlow.collectAsState()
   val bookmarks by repository.bookmarksFlow.collectAsState()
@@ -366,11 +531,11 @@ fun BrowserHomeScreen(
     modifier = modifier
       .fillMaxSize()
       .background(CinemaDarkBackground)
-      .padding(horizontal = 16.dp, vertical = 12.dp)
+      .padding(horizontal = if (isMobileLayout) 12.dp else 16.dp, vertical = 10.dp)
       .testTag("asser_browser_home_screen"),
-    verticalArrangement = Arrangement.spacedBy(16.dp)
+    verticalArrangement = Arrangement.spacedBy(14.dp)
   ) {
-    // 1. Hero Google Search & Omnibox Card (Zero-Animation, Instant Response)
+    // 1. Hero Google Search & Omnibox Card
     item {
       Column(
         modifier = Modifier
@@ -378,51 +543,60 @@ fun BrowserHomeScreen(
           .clip(RoundedCornerShape(14.dp))
           .background(CinemaSurface)
           .border(1.dp, CinemaBorder, RoundedCornerShape(14.dp))
-          .padding(16.dp),
+          .padding(14.dp),
         horizontalAlignment = Alignment.CenterHorizontally
       ) {
         Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.Center
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          Icon(
-            imageVector = Icons.Default.Public,
-            contentDescription = null,
-            tint = CinemaAccent,
-            modifier = Modifier.size(28.dp)
-          )
-          Spacer(modifier = Modifier.width(8.dp))
-          Text(
-            text = "Asser Browser",
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.ExtraBold
-          )
-          Spacer(modifier = Modifier.width(8.dp))
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(
+              imageVector = Icons.Default.Public,
+              contentDescription = null,
+              tint = Color(0xFF38BDF8),
+              modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+              text = "محرك بحث Google والمتصفح",
+              color = Color.White,
+              fontSize = if (isMobileLayout) 16.sp else 19.sp,
+              fontWeight = FontWeight.ExtraBold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
+            )
+          }
+
           Box(
             modifier = Modifier
               .clip(RoundedCornerShape(6.dp))
-              .background(CinemaAccent.copy(alpha = 0.2f))
-              .padding(horizontal = 8.dp, vertical = 3.dp)
+              .background(Color(0xFF38BDF8).copy(alpha = 0.18f))
+              .padding(horizontal = 8.dp, vertical = 4.dp)
           ) {
             Text(
-              text = "بحث Google وتصفح خفيف وسريع",
-              color = CinemaAccent,
+              text = "سريع وخفيف ⚡",
+              color = Color(0xFF38BDF8),
               fontSize = 11.sp,
-              fontWeight = FontWeight.Bold
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              softWrap = false
             )
           }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Unified Google Search & URL Address Bar
         OutlinedTextField(
           value = omniboxInput,
           onValueChange = { omniboxInput = it },
           placeholder = {
             Text(
-              text = "ابحث في Google أو اكتب رابط أي موقع (مثل youtube.com)...",
+              text = "ابحث في Google أو اكتب رابط موقع...",
               color = Color.Gray,
               fontSize = 13.sp,
               maxLines = 1,
@@ -433,7 +607,7 @@ fun BrowserHomeScreen(
             Icon(
               imageVector = Icons.Default.Search,
               contentDescription = "بحث جوجل أو رابط",
-              tint = CinemaAccent
+              tint = Color(0xFF38BDF8)
             )
           },
           trailingIcon = {
@@ -453,7 +627,7 @@ fun BrowserHomeScreen(
           colors = OutlinedTextFieldDefaults.colors(
             focusedContainerColor = Color(0xFF0B0F17),
             unfocusedContainerColor = Color(0xFF0B0F17),
-            focusedBorderColor = CinemaAccent,
+            focusedBorderColor = Color(0xFF38BDF8),
             unfocusedBorderColor = CinemaBorder,
             focusedTextColor = Color.White,
             unfocusedTextColor = Color.White
@@ -466,58 +640,137 @@ fun BrowserHomeScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Action Buttons: Google Search | Direct URL / Google Home | Switch to Asser TV
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          Button(
-            onClick = { submitOmnibox(forceGoogleSearch = true) },
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4)),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-              .weight(1f)
-              .height(48.dp)
-              .testTag("btn_google_search_submit")
+        if (isMobileLayout) {
+          Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
           ) {
-            Icon(Icons.Default.Search, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("بحث Google", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-          }
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Button(
+                onClick = { submitOmnibox(forceGoogleSearch = true) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4)),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .height(44.dp)
+                  .testTag("btn_google_search_submit")
+              ) {
+                Icon(Icons.Default.Search, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  text = "بحث Google",
+                  color = Color.White,
+                  fontWeight = FontWeight.Bold,
+                  fontSize = 13.sp,
+                  maxLines = 1,
+                  softWrap = false,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
 
-          Button(
-            onClick = { submitOmnibox(forceGoogleSearch = false) },
-            colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-              .weight(1f)
-              .height(48.dp)
-              .testTag("btn_omnibox_go")
-          ) {
-            Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("تصفح / فتح الرابط", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-          }
+              Button(
+                onClick = { submitOmnibox(forceGoogleSearch = false) },
+                colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier
+                  .weight(1f)
+                  .height(44.dp)
+                  .testTag("btn_omnibox_go")
+              ) {
+                Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  text = "فتح الرابط",
+                  color = Color.Black,
+                  fontWeight = FontWeight.Bold,
+                  fontSize = 13.sp,
+                  maxLines = 1,
+                  softWrap = false,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
+            }
 
-          Button(
-            onClick = onSwitchToAsserTv,
-            colors = ButtonDefaults.buttonColors(containerColor = CinemaPrimary),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier
-              .weight(1f)
-              .height(48.dp)
-              .testTag("btn_hero_switch_assertv")
+            Button(
+              onClick = onSwitchToAsserTv,
+              colors = ButtonDefaults.buttonColors(containerColor = CinemaPrimary),
+              shape = RoundedCornerShape(8.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+                .testTag("btn_hero_switch_assertv")
+            ) {
+              Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = "🎬 الانتقال إلى قسم الأفلام والمسلسلات (Asser TV)",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+              )
+            }
+          }
+        } else {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
           ) {
-            Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("قسم Asser TV 🎬", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Button(
+              onClick = { submitOmnibox(forceGoogleSearch = true) },
+              colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4)),
+              shape = RoundedCornerShape(8.dp),
+              modifier = Modifier
+                .weight(1f)
+                .height(46.dp)
+                .testTag("btn_google_search_submit")
+            ) {
+              Icon(Icons.Default.Search, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("بحث Google", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, softWrap = false)
+            }
+
+            Button(
+              onClick = { submitOmnibox(forceGoogleSearch = false) },
+              colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
+              shape = RoundedCornerShape(8.dp),
+              modifier = Modifier
+                .weight(1f)
+                .height(46.dp)
+                .testTag("btn_omnibox_go")
+            ) {
+              Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("تصفح / فتح الرابط", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, softWrap = false)
+            }
+
+            Button(
+              onClick = onSwitchToAsserTv,
+              colors = ButtonDefaults.buttonColors(containerColor = CinemaPrimary),
+              shape = RoundedCornerShape(8.dp),
+              modifier = Modifier
+                .weight(1f)
+                .height(46.dp)
+                .testTag("btn_hero_switch_assertv")
+            ) {
+              Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(6.dp))
+              Text("قسم Asser TV 🎬", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, softWrap = false)
+            }
           }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Quick Google Search Chips
         LazyRow(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -527,7 +780,7 @@ fun BrowserHomeScreen(
             val isFocused by interactionSource.collectIsFocusedAsState()
             Box(
               modifier = Modifier
-                .heightIn(min = 38.dp)
+                .height(34.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.25f) else CinemaSurfaceVariant)
                 .border(
@@ -540,13 +793,15 @@ fun BrowserHomeScreen(
                   submitOmnibox(forceGoogleSearch = true)
                 }
                 .focusable(interactionSource = interactionSource)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp),
               contentAlignment = Alignment.Center
             ) {
               Text(
                 text = "🔍 $chip",
                 color = if (isFocused) CinemaFocusGlow else Color.White,
-                fontSize = 12.sp
+                fontSize = 11.sp,
+                maxLines = 1,
+                softWrap = false
               )
             }
           }
@@ -554,24 +809,26 @@ fun BrowserHomeScreen(
       }
     }
 
-    // 2. Quick Web Sites Grid (مواقع التصفح السريع)
+    // 2. Quick Web Sites Grid (2 columns on Mobile so titles are 100% clear, 4 columns on TV/Tablet)
     item {
       Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         Text(
-          text = "🌐 مواقع التصفح السريع (ضغطة واحدة بالريموت أو اللمس)",
+          text = "🌐 مواقع التصفح السريع",
           color = Color.White,
-          fontSize = 15.sp,
-          fontWeight = FontWeight.Bold
+          fontSize = 14.sp,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1
         )
 
-        val rows = quickWebSites.chunked(4)
+        val columnsPerRow = if (isMobileLayout) 2 else 4
+        val rows = quickWebSites.chunked(columnsPerRow)
         rows.forEach { rowSites ->
           Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
           ) {
             rowSites.forEach { site ->
               QuickWebTileCard(
@@ -585,7 +842,7 @@ fun BrowserHomeScreen(
       }
     }
 
-    // 3. Direct Asser TV Portals Strip (وصول سريع لبوابات الأفلام والمسلسلات)
+    // 3. Direct Asser TV Portals Strip
     item {
       Column(
         modifier = Modifier
@@ -593,7 +850,7 @@ fun BrowserHomeScreen(
           .clip(RoundedCornerShape(12.dp))
           .background(CinemaSurface)
           .border(1.dp, CinemaBorder, RoundedCornerShape(12.dp))
-          .padding(14.dp),
+          .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
         Row(
@@ -601,35 +858,49 @@ fun BrowserHomeScreen(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.PlayCircleFilled, contentDescription = null, tint = CinemaPrimary, modifier = Modifier.size(20.dp))
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+          ) {
+            Icon(
+              Icons.Default.PlayCircleFilled,
+              contentDescription = null,
+              tint = CinemaPrimary,
+              modifier = Modifier.size(18.dp)
+            )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-              text = "🎬 بوابات Asser TV للبحث والمشاهدة المباشرة",
+              text = "🎬 بوابات Asser TV للمشاهدة المباشرة",
               color = Color.White,
-              fontSize = 14.sp,
-              fontWeight = FontWeight.Bold
+              fontSize = 13.sp,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
             )
           }
 
+          Spacer(modifier = Modifier.width(8.dp))
+
           Surface(
             onClick = onSwitchToAsserTv,
-            color = CinemaPrimary.copy(alpha = 0.2f),
+            color = CinemaPrimary.copy(alpha = 0.22f),
             shape = RoundedCornerShape(8.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, CinemaPrimary)
           ) {
             Text(
-              text = "فتح محرك بحث Asser TV الشامل ⬅",
+              text = "البحث الموحد ⬅",
               color = Color.White,
               fontSize = 11.sp,
               fontWeight = FontWeight.Bold,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+              maxLines = 1,
+              softWrap = false,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
             )
           }
         }
 
         LazyRow(
-          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
           modifier = Modifier.fillMaxWidth()
         ) {
           items(StreamingPortal.values().filter { it.isEnabled }) { portal ->
@@ -637,7 +908,7 @@ fun BrowserHomeScreen(
             val isFocused by interactionSource.collectIsFocusedAsState()
             Box(
               modifier = Modifier
-                .heightIn(min = 48.dp)
+                .height(42.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(if (isFocused) CinemaPrimary.copy(alpha = 0.3f) else CinemaSurfaceVariant)
                 .border(
@@ -649,18 +920,20 @@ fun BrowserHomeScreen(
                   onOpenWebUrl(portal.homeUrl, portal.displayNameArabic)
                 }
                 .focusable(interactionSource = interactionSource)
-                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .padding(horizontal = 12.dp)
                 .testTag("browser_quick_portal_${portal.id}"),
               contentAlignment = Alignment.Center
             ) {
               Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LiveTv, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.LiveTv, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(15.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                   text = "${portal.displayNameArabic} (${portal.displayNameEnglish})",
                   color = Color.White,
                   fontSize = 12.sp,
-                  fontWeight = FontWeight.Bold
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  softWrap = false
                 )
               }
             }
@@ -678,7 +951,7 @@ fun BrowserHomeScreen(
             .clip(RoundedCornerShape(12.dp))
             .background(CinemaSurface)
             .border(1.dp, CinemaBorder, RoundedCornerShape(12.dp))
-            .padding(14.dp),
+            .padding(12.dp),
           verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
           Row(
@@ -687,12 +960,15 @@ fun BrowserHomeScreen(
             verticalAlignment = Alignment.CenterVertically
           ) {
             Text(
-              text = "🕒 آخر الصفحات والمواقع التي زرتها",
+              text = "🕒 آخر الزيارات",
               color = Color.White,
-              fontSize = 14.sp,
-              fontWeight = FontWeight.Bold
+              fontSize = 13.sp,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.weight(1f)
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
               Surface(
                 onClick = onOpenBookmarks,
                 color = CinemaSurfaceVariant,
@@ -702,6 +978,8 @@ fun BrowserHomeScreen(
                   text = "المفضلة (${bookmarks.size})",
                   color = CinemaAccent,
                   fontSize = 11.sp,
+                  maxLines = 1,
+                  softWrap = false,
                   modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
               }
@@ -714,9 +992,9 @@ fun BrowserHomeScreen(
                   verticalAlignment = Alignment.CenterVertically,
                   modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                  Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(14.dp))
+                  Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(13.dp))
                   Spacer(modifier = Modifier.width(4.dp))
-                  Text("مسح السجل", color = Color.LightGray, fontSize = 11.sp)
+                  Text("مسح", color = Color.LightGray, fontSize = 11.sp, maxLines = 1, softWrap = false)
                 }
               }
             }
@@ -728,7 +1006,7 @@ fun BrowserHomeScreen(
             Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 48.dp)
+                .heightIn(min = 46.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (isFocused) CinemaSurfaceVariant else Color(0xFF0B0F17))
                 .border(
@@ -740,7 +1018,7 @@ fun BrowserHomeScreen(
                   onOpenWebUrl(item.url, item.title)
                 }
                 .focusable(interactionSource = interactionSource)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
@@ -748,7 +1026,7 @@ fun BrowserHomeScreen(
                 Text(
                   text = item.title.ifBlank { item.url },
                   color = Color.White,
-                  fontSize = 13.sp,
+                  fontSize = 12.sp,
                   fontWeight = FontWeight.Medium,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
@@ -756,16 +1034,17 @@ fun BrowserHomeScreen(
                 Text(
                   text = item.url,
                   color = Color.Gray,
-                  fontSize = 11.sp,
+                  fontSize = 10.sp,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
               }
+              Spacer(modifier = Modifier.width(8.dp))
               Icon(
                 imageVector = Icons.Default.OpenInBrowser,
                 contentDescription = "فتح",
-                tint = CinemaAccent,
-                modifier = Modifier.size(18.dp)
+                tint = Color(0xFF38BDF8),
+                modifier = Modifier.size(16.dp)
               )
             }
           }
@@ -795,7 +1074,7 @@ private fun QuickWebTileCard(
 
   Box(
     modifier = modifier
-      .heightIn(min = 68.dp)
+      .height(58.dp)
       .clip(RoundedCornerShape(10.dp))
       .background(if (isFocused) accentColor.copy(alpha = 0.22f) else CinemaSurface)
       .border(
@@ -805,13 +1084,14 @@ private fun QuickWebTileCard(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 10.dp, vertical = 10.dp)
+      .padding(horizontal = 10.dp, vertical = 6.dp)
       .testTag("quick_tile_${site.id}"),
     contentAlignment = Alignment.CenterStart
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      modifier = Modifier.fillMaxWidth()
     ) {
       Box(
         modifier = Modifier
@@ -827,7 +1107,7 @@ private fun QuickWebTileCard(
           modifier = Modifier.size(18.dp)
         )
       }
-      Column {
+      Column(modifier = Modifier.weight(1f)) {
         Text(
           text = site.titleArabic,
           color = Color.White,
