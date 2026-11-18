@@ -47,6 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,10 +57,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.ScrapedEpisodeItem
@@ -114,6 +118,7 @@ fun WatchSidePanel(
     mutableIntStateOf(if (seriesStructure.episodes.isNotEmpty() || seriesStructure.seasons.isNotEmpty()) 0 else 1)
   }
 
+  CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
   Surface(
     color = CinemaDarkBackground.copy(alpha = 0.99f),
     border = BorderStroke(1.dp, CinemaBorder),
@@ -131,7 +136,7 @@ fun WatchSidePanel(
         .padding(horizontal = 10.dp, vertical = 6.dp),
       verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-      // 1. Sleek Single-Line Header + Native Player Toggle + Fullscreen + Diagnostics Log + CC + Refresh + Close
+      // 1. Sleek Well-Proportioned Header (No overlapping circles!)
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -147,51 +152,87 @@ fun WatchSidePanel(
               .clip(CircleShape)
               .background(if (isNativePlayerActive) CinemaSuccess else CinemaAccent)
           )
-          Spacer(modifier = Modifier.width(5.dp))
+          Spacer(modifier = Modifier.width(6.dp))
           Text(
             text = if (searchQuery.isNotBlank()) searchQuery else activePortal.displayNameArabic,
             color = Color.White,
-            fontSize = 11.5.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
+          if (isScrapingSeries) {
+            Spacer(modifier = Modifier.width(6.dp))
+            CircularProgressIndicator(
+              color = CinemaAccent,
+              modifier = Modifier.size(13.dp),
+              strokeWidth = 2.dp
+            )
+          }
         }
 
-        if (isScrapingSeries) {
-          CircularProgressIndicator(
-            color = CinemaAccent,
-            modifier = Modifier
-              .padding(end = 5.dp)
-              .size(14.dp),
-            strokeWidth = 2.dp
-          )
-        }
+        Spacer(modifier = Modifier.width(6.dp))
 
-        // Non-blocking switch button to Primary Native Player (replaces the old bottom banner that covered the video controls!)
-        if (hasDetectedDirectStream && !isNativePlayerActive) {
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(5.dp),
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          // Switch to Primary Native Player (when in WebView fallback mode)
+          if (hasDetectedDirectStream && !isNativePlayerActive) {
+            Surface(
+              onClick = onSwitchToNativePlayer,
+              color = CinemaSuccess,
+              shape = RoundedCornerShape(8.dp),
+              modifier = Modifier
+                .heightIn(min = 28.dp)
+                .testTag("play_native_video_button")
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Icon(
+                  imageVector = Icons.Default.PlayArrow,
+                  contentDescription = null,
+                  tint = Color.Black,
+                  modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(3.dp))
+                Text(
+                  text = "المشغل الأساسي",
+                  color = Color.Black,
+                  fontSize = 9.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
+            }
+          }
+
+          // Video Fullscreen button
           Surface(
-            onClick = onSwitchToNativePlayer,
-            color = CinemaSuccess,
+            onClick = onToggleVideoFullscreen,
+            color = CinemaPrimary,
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier
-              .heightIn(min = 27.dp)
-              .testTag("play_native_video_button")
+              .heightIn(min = 28.dp)
+              .testTag("side_panel_fullscreen_button")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
               verticalAlignment = Alignment.CenterVertically
             ) {
               Icon(
-                imageVector = Icons.Default.PlayArrow,
-                contentDescription = null,
-                tint = Color.Black,
-                modifier = Modifier.size(13.dp)
+                imageVector = Icons.Default.Fullscreen,
+                contentDescription = "تكبير المشغل ملء الشاشة",
+                tint = Color.White,
+                modifier = Modifier.size(14.dp)
               )
-              Spacer(modifier = Modifier.width(2.dp))
+              Spacer(modifier = Modifier.width(3.dp))
               Text(
-                text = "المشغل الأساسي",
-                color = Color.Black,
+                text = "ملء الشاشة",
+                color = Color.White,
                 fontSize = 9.5.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
@@ -199,146 +240,55 @@ fun WatchSidePanel(
               )
             }
           }
-          Spacer(modifier = Modifier.width(4.dp))
-        }
 
-        // Video Fullscreen button (rotates to landscape and fills screen with the video player)
-        Surface(
-          onClick = onToggleVideoFullscreen,
-          color = CinemaPrimary,
-          shape = RoundedCornerShape(8.dp),
-          modifier = Modifier
-            .heightIn(min = 27.dp)
-            .testTag("side_panel_fullscreen_button")
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically
+          // Subtitles CC Button
+          Surface(
+            onClick = onOpenSubtitles,
+            color = CinemaSurfaceVariant,
+            border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.8f)),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+              .heightIn(min = 28.dp)
+              .testTag("side_panel_subtitles_button")
           ) {
-            Icon(
-              imageVector = Icons.Default.Fullscreen,
-              contentDescription = "تكبير المشغل ملء الشاشة",
-              tint = Color.White,
-              modifier = Modifier.size(14.dp)
-            )
-            Spacer(modifier = Modifier.width(2.dp))
-            Text(
-              text = "ملء الشاشة",
-              color = Color.White,
-              fontSize = 9.5.sp,
-              fontWeight = FontWeight.ExtraBold,
-              maxLines = 1,
-              softWrap = false
-            )
+            Row(
+              modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Icon(
+                imageVector = Icons.Default.Subtitles,
+                contentDescription = null,
+                tint = CinemaAccent,
+                modifier = Modifier.size(13.dp)
+              )
+              Spacer(modifier = Modifier.width(3.dp))
+              Text(
+                text = "CC",
+                color = Color.White,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
           }
-        }
 
-        Spacer(modifier = Modifier.width(4.dp))
-
-        // Subtitles CC Button
-        Surface(
-          onClick = onOpenSubtitles,
-          color = CinemaSurfaceVariant,
-          border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.8f)),
-          shape = RoundedCornerShape(8.dp),
-          modifier = Modifier
-            .heightIn(min = 27.dp)
-            .testTag("side_panel_subtitles_button")
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Icon(
-              imageVector = Icons.Default.Subtitles,
-              contentDescription = null,
-              tint = CinemaAccent,
-              modifier = Modifier.size(12.dp)
-            )
-            Spacer(modifier = Modifier.width(3.dp))
-            Text(
-              text = "CC",
-              color = Color.White,
-              fontSize = 9.5.sp,
-              fontWeight = FontWeight.Bold,
-              maxLines = 1,
-              softWrap = false
-            )
-          }
-        }
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        // Diagnostics & Log Copy Button
-        IconButton(
-          onClick = onOpenDiagnostics,
-          modifier = Modifier
-            .size(27.dp)
-            .clip(CircleShape)
-            .background(CinemaSurface)
-            .border(1.dp, CinemaAccent.copy(alpha = 0.6f), CircleShape)
-            .testTag("btn_open_diagnostics_log")
-        ) {
-          Icon(
-            imageVector = Icons.Default.BugReport,
-            contentDescription = "نسخ اللوج وتشخيص الأعطال",
+          // Refresh Servers & Episodes Button (crisp 28dp rounded-square, no 48dp IconButton overlap!)
+          SidePanelSquareIconBtn(
+            icon = Icons.Default.Refresh,
             tint = CinemaAccent,
-            modifier = Modifier.size(14.dp)
-          )
-        }
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        // In-App GitHub Update Button
-        IconButton(
-          onClick = onOpenUpdate,
-          modifier = Modifier
-            .size(27.dp)
-            .clip(CircleShape)
-            .background(CinemaSurface)
-            .testTag("btn_open_update_from_watch")
-        ) {
-          Icon(
-            imageVector = Icons.Default.SystemUpdate,
-            contentDescription = "تحديث التطبيق من جيت هب",
-            tint = CinemaSuccess,
-            modifier = Modifier.size(14.dp)
-          )
-        }
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        IconButton(
-          onClick = onRescrapePage,
-          modifier = Modifier
-            .size(27.dp)
-            .clip(CircleShape)
-            .background(CinemaSurface)
-            .testTag("btn_rescrape_seasons_episodes")
-        ) {
-          Icon(
-            imageVector = Icons.Default.Refresh,
             contentDescription = "تحديث السيرفرات والحلقات",
-            tint = CinemaAccent,
-            modifier = Modifier.size(13.dp)
+            onClick = onRescrapePage,
+            testTag = "btn_rescrape_seasons_episodes"
           )
-        }
 
-        Spacer(modifier = Modifier.width(4.dp))
-
-        IconButton(
-          onClick = onClosePanel,
-          modifier = Modifier
-            .size(27.dp)
-            .clip(CircleShape)
-            .background(CinemaSurface)
-            .testTag("btn_close_watch_side_panel")
-        ) {
-          Icon(
-            imageVector = Icons.Default.Close,
-            contentDescription = "إخفاء اللوحة",
+          // Close Panel Button
+          SidePanelSquareIconBtn(
+            icon = Icons.Default.Close,
             tint = Color.LightGray,
-            modifier = Modifier.size(13.dp)
+            contentDescription = "إخفاء اللوحة",
+            onClick = onClosePanel,
+            testTag = "btn_close_watch_side_panel"
           )
         }
       }
@@ -846,6 +796,35 @@ fun WatchSidePanel(
           }
         }
       }
+    }
+  }
+  }
+}
+
+@Composable
+private fun SidePanelSquareIconBtn(
+  icon: ImageVector,
+  tint: Color,
+  contentDescription: String,
+  onClick: () -> Unit,
+  testTag: String
+) {
+  Surface(
+    onClick = onClick,
+    color = CinemaSurface,
+    shape = RoundedCornerShape(8.dp),
+    border = BorderStroke(1.dp, CinemaBorder),
+    modifier = Modifier
+      .size(28.dp)
+      .testTag(testTag)
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        tint = tint,
+        modifier = Modifier.size(14.dp)
+      )
     }
   }
 }

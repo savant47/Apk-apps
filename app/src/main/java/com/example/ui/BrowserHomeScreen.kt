@@ -118,64 +118,68 @@ fun AppMainTabSwitcherBar(
         .fillMaxWidth()
         .background(Color(0xFF070A0F))
         .border(width = 1.dp, color = CinemaSurfaceVariant)
-        .padding(horizontal = 12.dp, vertical = 8.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp)
+        .padding(horizontal = 10.dp, vertical = 7.dp),
+      verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
+        // Brand Logo + Full Unclipped Title
         Row(
-          verticalAlignment = Alignment.CenterVertically,
-          modifier = Modifier.weight(1f)
+          verticalAlignment = Alignment.CenterVertically
         ) {
           Image(
             painter = painterResource(id = R.drawable.ic_assertv_logo),
-            contentDescription = "Asser Browser Logo",
+            contentDescription = "Asser TV Logo",
             modifier = Modifier
-              .size(30.dp)
-              .clip(RoundedCornerShape(8.dp))
+              .size(28.dp)
+              .clip(RoundedCornerShape(7.dp))
           )
-          Spacer(modifier = Modifier.width(8.dp))
+          Spacer(modifier = Modifier.width(6.dp))
           Text(
             text = "Asser TV",
             color = Color.White,
-            fontSize = 15.sp,
+            fontSize = 14.5.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis
+            softWrap = false
           )
         }
 
+        Spacer(modifier = Modifier.width(6.dp))
+
+        // Well-proportioned Mobile Action Bar (Never clips Brand Title!)
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(5.dp)
+          horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
           Surface(
             onClick = onOpenDisplayMode,
             color = Color(0xFF0284C7).copy(alpha = 0.2f),
             shape = RoundedCornerShape(8.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
-            modifier = Modifier.testTag("top_chip_display_mode")
+            modifier = Modifier
+              .heightIn(min = 30.dp)
+              .testTag("top_chip_display_mode")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+              modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp)
+              horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
               Icon(
                 imageVector = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
                 contentDescription = null,
                 tint = Color(0xFF38BDF8),
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(13.dp)
               )
               Text(
-                text = if (displayMode == AppDisplayMode.TV) "وضع شاشة" else "وضع هاتف",
+                text = if (displayMode == AppDisplayMode.TV) "شاشة" else "هاتف",
                 color = Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
               )
@@ -249,25 +253,34 @@ fun AppMainTabSwitcherBar(
       }
     }
   } else {
+    // TV / TABLET WIDESCREEN HEADER
     Row(
       modifier = modifier
         .fillMaxWidth()
         .background(Color(0xFF070A0F))
         .border(width = 1.dp, color = CinemaSurfaceVariant)
-        .padding(horizontal = 14.dp, vertical = 8.dp),
+        .padding(horizontal = 12.dp, vertical = 7.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         Image(
           painter = painterResource(id = R.drawable.ic_assertv_logo),
-          contentDescription = "Asser Browser Logo",
+          contentDescription = "Asser TV Logo",
           modifier = Modifier
-            .size(36.dp)
+            .size(32.dp)
             .clip(RoundedCornerShape(8.dp))
+        )
+        Text(
+          text = "Asser TV",
+          color = Color.White,
+          fontSize = 14.sp,
+          fontWeight = FontWeight.ExtraBold,
+          maxLines = 1,
+          softWrap = false
         )
 
         MainModeTabItem(
@@ -291,10 +304,14 @@ fun AppMainTabSwitcherBar(
         )
       }
 
+      Spacer(modifier = Modifier.width(8.dp))
+
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.horizontalScroll(rememberScrollState())
+        modifier = Modifier
+          .weight(1f, fill = false)
+          .horizontalScroll(rememberScrollState())
       ) {
         QuickTopUtilityChip(
           label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس: نشط" else "الماوس",
@@ -304,25 +321,11 @@ fun AppMainTabSwitcherBar(
           testTag = "top_chip_mouse"
         )
         QuickTopUtilityChip(
-          label = if (displayMode == AppDisplayMode.TV) "منظور شاشة/تابلت" else "منظور هاتف",
+          label = if (displayMode == AppDisplayMode.TV) "وضع شاشة/تابلت" else "وضع هاتف",
           icon = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
           tint = Color(0xFF38BDF8),
           onClick = onOpenDisplayMode,
           testTag = "top_chip_display_mode"
-        )
-        QuickTopUtilityChip(
-          label = "المفضلة",
-          icon = Icons.Default.Bookmark,
-          tint = CinemaAccent,
-          onClick = onOpenBookmarks,
-          testTag = "top_chip_bookmarks"
-        )
-        QuickTopUtilityChip(
-          label = "السجل",
-          icon = Icons.Default.History,
-          tint = Color.LightGray,
-          onClick = onOpenHistory,
-          testTag = "top_chip_history"
         )
         QuickTopUtilityChip(
           label = "تحديث جيت هب",
@@ -339,7 +342,21 @@ fun AppMainTabSwitcherBar(
           testTag = "top_chip_diagnostics"
         )
         QuickTopUtilityChip(
-          label = "حماية AdGuard",
+          label = "المفضلة",
+          icon = Icons.Default.Bookmark,
+          tint = CinemaAccent,
+          onClick = onOpenBookmarks,
+          testTag = "top_chip_bookmarks"
+        )
+        QuickTopUtilityChip(
+          label = "السجل",
+          icon = Icons.Default.History,
+          tint = Color.LightGray,
+          onClick = onOpenHistory,
+          testTag = "top_chip_history"
+        )
+        QuickTopUtilityChip(
+          label = "AdGuard",
           icon = Icons.Default.Shield,
           tint = CinemaSuccess,
           onClick = onOpenAdBlock,
@@ -358,22 +375,23 @@ private fun CompactTopIconBtn(
   onClick: () -> Unit,
   testTag: String
 ) {
-  Box(
+  Surface(
+    onClick = onClick,
+    color = CinemaSurface,
+    shape = RoundedCornerShape(8.dp),
+    border = androidx.compose.foundation.BorderStroke(1.dp, CinemaBorder),
     modifier = Modifier
-      .size(34.dp)
-      .clip(RoundedCornerShape(8.dp))
-      .background(CinemaSurface)
-      .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-      .clickable { onClick() }
-      .testTag(testTag),
-    contentAlignment = Alignment.Center
+      .size(30.dp)
+      .testTag(testTag)
   ) {
-    Icon(
-      imageVector = icon,
-      contentDescription = contentDescription,
-      tint = tint,
-      modifier = Modifier.size(17.dp)
-    )
+    Box(contentAlignment = Alignment.Center) {
+      Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        tint = tint,
+        modifier = Modifier.size(15.dp)
+      )
+    }
   }
 }
 
