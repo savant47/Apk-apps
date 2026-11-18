@@ -6,6 +6,7 @@ import com.example.model.Bookmark
 import com.example.model.ControlMode
 import com.example.model.HistoryEntry
 import com.example.model.StreamingPortal
+import com.example.model.SubtitleStyleConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,10 +33,14 @@ class TvPreferencesRepository(context: Context) {
   private val _displayModeFlow = MutableStateFlow<AppDisplayMode>(AppDisplayMode.MOBILE)
   val displayModeFlow: StateFlow<AppDisplayMode> = _displayModeFlow.asStateFlow()
 
+  private val _subtitleStyleFlow = MutableStateFlow(SubtitleStyleConfig())
+  val subtitleStyleFlow: StateFlow<SubtitleStyleConfig> = _subtitleStyleFlow.asStateFlow()
+
   init {
     loadBookmarks()
     loadHistory()
     loadDisplayMode()
+    loadSubtitleStyle()
     loadPortals()
   }
 
@@ -96,6 +101,34 @@ class TvPreferencesRepository(context: Context) {
 
   fun hasSelectedDisplayMode(): Boolean {
     return prefs.getBoolean(KEY_HAS_SELECTED_MODE, false)
+  }
+
+  private fun loadSubtitleStyle() {
+    val textColor = prefs.getLong(KEY_SUB_TEXT_COLOR, 0xFFFFD700L)
+    val bgColor = prefs.getLong(KEY_SUB_BG_COLOR, 0xBF000000L)
+    val fontSize = prefs.getFloat(KEY_SUB_FONT_SIZE, 20f)
+    val bottomOffset = prefs.getInt(KEY_SUB_BOTTOM_OFFSET, 28)
+    val syncOffset = prefs.getLong(KEY_SUB_SYNC_OFFSET, 0L)
+    _subtitleStyleFlow.value = SubtitleStyleConfig(
+      textColorArgb = textColor,
+      backgroundColorArgb = bgColor,
+      fontSizeSp = fontSize,
+      bottomOffsetDp = bottomOffset,
+      syncOffsetMs = syncOffset
+    )
+  }
+
+  fun getSubtitleStyle(): SubtitleStyleConfig = _subtitleStyleFlow.value
+
+  fun setSubtitleStyle(style: SubtitleStyleConfig) {
+    _subtitleStyleFlow.value = style
+    prefs.edit()
+      .putLong(KEY_SUB_TEXT_COLOR, style.textColorArgb)
+      .putLong(KEY_SUB_BG_COLOR, style.backgroundColorArgb)
+      .putFloat(KEY_SUB_FONT_SIZE, style.fontSizeSp)
+      .putInt(KEY_SUB_BOTTOM_OFFSET, style.bottomOffsetDp)
+      .putLong(KEY_SUB_SYNC_OFFSET, style.syncOffsetMs)
+      .apply()
   }
 
   fun getActivePortal(): StreamingPortal {
@@ -351,6 +384,11 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_STRICT_POPUP_BLOCKER = "strict_popup_blocker_enabled"
     private const val KEY_GITHUB_REPO = "github_repo_slug"
     private const val KEY_GITHUB_TOKEN = "github_pat_token"
+    private const val KEY_SUB_TEXT_COLOR = "subtitle_text_color_argb"
+    private const val KEY_SUB_BG_COLOR = "subtitle_bg_color_argb"
+    private const val KEY_SUB_FONT_SIZE = "subtitle_font_size_sp"
+    private const val KEY_SUB_BOTTOM_OFFSET = "subtitle_bottom_offset_dp"
+    private const val KEY_SUB_SYNC_OFFSET = "subtitle_sync_offset_ms"
     const val DEFAULT_GITHUB_REPO = "savant47/Apk-apps"
   }
 }

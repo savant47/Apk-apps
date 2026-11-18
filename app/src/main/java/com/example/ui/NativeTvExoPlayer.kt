@@ -1,7 +1,8 @@
 package com.example.ui
 
-import android.app.Activity
+import android.graphics.Typeface
 import android.net.Uri
+import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
@@ -59,20 +61,26 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -80,7 +88,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
@@ -93,9 +100,12 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.example.data.AppDiagnosticsLogger
+import com.example.data.SearchAndSubtitlesService
 import com.example.model.SubtitleItem
+import com.example.model.SubtitleStyleConfig
 import com.example.model.VideoQualityOption
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
@@ -105,6 +115,7 @@ import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.CinemaSurfaceVariant
 import com.example.ui.theme.ClipboxWhite
+import kotlinx.coroutines.delay
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -120,6 +131,8 @@ fun NativeTvExoPlayer(
   availableQualities: List<VideoQualityOption> = emptyList(),
   onSelectQualityOption: (VideoQualityOption) -> Unit = {},
   activeSubtitle: SubtitleItem? = null,
+  subtitleStyle: SubtitleStyleConfig = SubtitleStyleConfig(),
+  onUpdateSubtitleStyle: (SubtitleStyleConfig) -> Unit = {},
   isFullscreen: Boolean = false,
   onToggleFullscreen: () -> Unit = {},
   onOpenSubtitles: () -> Unit = {},
@@ -128,12 +141,20 @@ fun NativeTvExoPlayer(
   onFallbackToWebPlayer: () -> Unit = onDismiss
 ) {
   val context = LocalContext.current
+  // Ensure permissive SSL socket factory is installed before ExoPlayer opens any HTTPS connection
+  remember {
+    SearchAndSubtitlesService.installPermissiveSslForStreaming()
+    true
+  }
+
+  val latestSelectedQuality by rememberUpdatedState(selectedQuality)
   var retryAttempt by remember(videoUrl) { mutableIntStateOf(0) }
   var isControllerVisible by remember { mutableStateOf(true) }
   var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
   var actualVideoResolution by remember(videoUrl) { mutableStateOf("") }
   var showGearSettingsMenu by remember { mutableStateOf(false) }
   var currentPlaybackSpeed by remember { mutableFloatStateOf(1.0f) }
+  var currentPlaybackPosMs by remember { mutableLongStateOf(0L) }
 
   val httpDataSourceFactory = remember {
     DefaultHttpDataSource.Factory()
@@ -153,6 +174,17 @@ fun NativeTvExoPlayer(
       .build().apply {
         playWhenReady = true
       }
+  }
+
+  // Poll current playback position every 180ms for real-time synchronized subtitle cue rendering
+  LaunchedEffect(player, activeSubtitle) {
+    while (true) {
+      try {
+        currentPlaybackPosMs = player.currentPosition.coerceAtLeast(0L)
+      } catch (_: Exception) {
+      }
+      delay(180L)
+    }
   }
 
   fun applyQualityToTrackSelector(targetQualityId: String) {
@@ -182,13 +214,12 @@ fun NativeTvExoPlayer(
         }
       }
 
-      if (!appliedExplicitOverride) {
-        paramsBuilder
-          .setMaxVideoSize(Int.MAX_VALUE, targetHeight + 50)
-          .setMinVideoSize(0, (targetHeight - 60).coerceAtLeast(0))
-      } else {
-        paramsBuilder.clearVideoSizeConstraints()
-      }
+      // Always enforce maxVideoSize constraint alongside TrackSelectionOverride so adaptive HLS
+      // never jumps back to 1080p/1040p across track refreshes!
+      paramsBuilder
+        .setMaxVideoSize(Int.MAX_VALUE, targetHeight + 45)
+        .setMinVideoSize(0, 0)
+
       AppDiagnosticsLogger.log(
         "ExoPlayerQuality",
         "Applied target quality ${targetHeight}p (explicitOverride=$appliedExplicitOverride)"
@@ -233,9 +264,9 @@ fun NativeTvExoPlayer(
           )
           for (h in sorted) {
             val badge = when {
-              h >= 1080 -> "${h}p FHD"
-              h >= 720 -> "${h}p HD"
-              h >= 480 -> "${h}p SD"
+              h >= 1000 -> "${h}p FHD"
+              h >= 680 -> "${h}p HD"
+              h >= 440 -> "${h}p SD"
               else -> "${h}p توفير"
             }
             options.add(VideoQualityOption(id = h.toString(), label = badge, height = h))
@@ -245,8 +276,8 @@ fun NativeTvExoPlayer(
             "Detected real video tracks: ${sorted.joinToString { "${it}p" }}"
           )
           onQualitiesDetected(options)
-          if (selectedQuality != "auto") {
-            applyQualityToTrackSelector(selectedQuality)
+          if (latestSelectedQuality != "auto") {
+            applyQualityToTrackSelector(latestSelectedQuality)
           }
         }
       }
@@ -302,7 +333,9 @@ fun NativeTvExoPlayer(
     }
   }
 
-  LaunchedEffect(videoUrl, refererUrl, capturedHeaders, userAgent, retryAttempt, activeSubtitle) {
+  // Note: activeSubtitle is intentionally NOT a key here so selecting/changing subtitles
+  // or changing subtitle colors/sizes NEVER reloads or re-buffers the video stream!
+  LaunchedEffect(videoUrl, refererUrl, capturedHeaders, userAgent, retryAttempt) {
     if (videoUrl.isNotBlank()) {
       AppDiagnosticsLogger.extractedStreamUrl = videoUrl
       val videoHostOrigin = try {
@@ -334,16 +367,18 @@ fun NativeTvExoPlayer(
       }
       AppDiagnosticsLogger.streamReferer = effectiveReferer
 
-      val effectiveOrigin = try {
-        val rUri = Uri.parse(effectiveReferer)
-        if (!rUri.scheme.isNullOrBlank() && !rUri.host.isNullOrBlank()) {
-          "${rUri.scheme}://${rUri.host}"
-        } else {
+      val effectiveOrigin = capturedHeaders["Origin"]
+        ?: capturedHeaders["origin"]
+        ?: try {
+          val rUri = Uri.parse(effectiveReferer)
+          if (!rUri.scheme.isNullOrBlank() && !rUri.host.isNullOrBlank()) {
+            "${rUri.scheme}://${rUri.host}"
+          } else {
+            videoHostOrigin
+          }
+        } catch (_: Exception) {
           videoHostOrigin
         }
-      } catch (_: Exception) {
-        videoHostOrigin
-      }
 
       val standardDesktopUa =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -386,7 +421,7 @@ fun NativeTvExoPlayer(
       headersMap["Accept"] = "*/*"
       headersMap["Accept-Language"] = "ar,en-US;q=0.9,en;q=0.8"
 
-      if (retryAttempt == 1 && !headersMap.containsKey("Origin") && !headersMap.containsKey("origin")) {
+      if (retryAttempt <= 1 && effectiveOrigin.isNotBlank()) {
         headersMap["Origin"] = effectiveOrigin
       } else if (retryAttempt == 2) {
         headersMap.remove("Origin")
@@ -402,30 +437,12 @@ fun NativeTvExoPlayer(
 
       AppDiagnosticsLogger.log(
         "ExoPlayerInit",
-        "Loading stream (attempt $retryAttempt): $videoUrl | Referer=$effectiveReferer | UA=${effectiveUa.take(42)}..."
+        "Loading stream (attempt $retryAttempt): $videoUrl | Referer=$effectiveReferer | Origin=${headersMap["Origin"] ?: "none"}"
       )
 
       val currentPos = if (retryAttempt == 0) player.currentPosition.coerceAtLeast(0L) else 0L
-      val mediaItemBuilder = MediaItem.Builder().setUri(videoUrl)
-      if (activeSubtitle != null) {
-        val subUriStr = activeSubtitle.rawVttDataUri.ifBlank { activeSubtitle.downloadUrl }
-        if (subUriStr.isNotBlank()) {
-          val subConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUriStr))
-            .setMimeType(
-              if (activeSubtitle.format.equals("srt", ignoreCase = true) && !subUriStr.startsWith("data:text/vtt")) {
-                MimeTypes.APPLICATION_SUBRIP
-              } else {
-                MimeTypes.TEXT_VTT
-              }
-            )
-            .setLanguage(activeSubtitle.languageCode)
-            .setLabel(activeSubtitle.languageName)
-            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-            .build()
-          mediaItemBuilder.setSubtitleConfigurations(listOf(subConfig))
-        }
-      }
-      player.setMediaItem(mediaItemBuilder.build(), currentPos)
+      val mediaItem = MediaItem.Builder().setUri(videoUrl).build()
+      player.setMediaItem(mediaItem, currentPos)
       player.prepare()
       player.playWhenReady = true
     }
@@ -465,8 +482,6 @@ fun NativeTvExoPlayer(
     }
   }
 
-  // Helper to hook Media3's built-in bottom-right Settings Gear button (`exo_settings`)
-  // so tapping the gear icon opens our real extracted Video Qualities & Speed menu!
   fun hookPlayerViewGearButton(playerView: PlayerView) {
     try {
       val settingsBtn = playerView.findViewById<View>(androidx.media3.ui.R.id.exo_settings)
@@ -476,6 +491,31 @@ fun NativeTvExoPlayer(
         btn.isClickable = true
         btn.setOnClickListener {
           showGearSettingsMenu = !showGearSettingsMenu
+        }
+      }
+    } catch (_: Exception) {
+    }
+  }
+
+  fun applyCaptionStyleToPlayerView(playerView: PlayerView, style: SubtitleStyleConfig) {
+    try {
+      playerView.subtitleView?.let { subView ->
+        // Hide Media3's internal subtitleView if we are rendering custom parsedCues via Compose overlay
+        if (activeSubtitle != null && activeSubtitle.parsedCues.isNotEmpty()) {
+          subView.visibility = View.GONE
+        } else {
+          subView.visibility = View.VISIBLE
+          subView.setStyle(
+            CaptionStyleCompat(
+              Color(style.textColorArgb).toArgb(),
+              Color(style.backgroundColorArgb).toArgb(),
+              android.graphics.Color.TRANSPARENT,
+              CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+              android.graphics.Color.BLACK,
+              Typeface.DEFAULT_BOLD
+            )
+          )
+          subView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSizeSp)
         }
       }
     } catch (_: Exception) {
@@ -547,6 +587,7 @@ fun NativeTvExoPlayer(
                 }
               }
             )
+            applyCaptionStyleToPlayerView(this, subtitleStyle)
             post { hookPlayerViewGearButton(this) }
           }
         },
@@ -557,9 +598,19 @@ fun NativeTvExoPlayer(
           if (view.resizeMode != resizeMode) {
             view.resizeMode = resizeMode
           }
+          applyCaptionStyleToPlayerView(view, subtitleStyle)
           hookPlayerViewGearButton(view)
         },
         modifier = Modifier.fillMaxSize()
+      )
+
+      // Synchronized Live Custom Subtitle Overlay (renders activeSubtitle.parsedCues with user's exact Color, Background, and Font Size!)
+      ActiveSubtitleCueOverlay(
+        activeSubtitle = activeSubtitle,
+        currentPositionMs = currentPlaybackPosMs,
+        subtitleStyle = subtitleStyle,
+        isControllerVisible = isControllerVisible,
+        modifier = Modifier.align(Alignment.BottomCenter)
       )
     } else {
       // Primary Player Extraction State
@@ -699,7 +750,7 @@ fun NativeTvExoPlayer(
             // 2. Subtitles CC Button
             PlayerCompactSquareBtn(
               icon = Icons.Default.Subtitles,
-              tint = CinemaAccent,
+              tint = if (activeSubtitle != null) CinemaSuccess else CinemaAccent,
               contentDescription = "الترجمة",
               onClick = onOpenSubtitles,
               testTag = "exo_subtitles_button"
@@ -771,7 +822,7 @@ fun NativeTvExoPlayer(
       Box(
         modifier = Modifier
           .fillMaxSize()
-          .background(Color.Black.copy(alpha = 0.72f))
+          .background(Color.Black.copy(alpha = 0.75f))
           .clickable { showGearSettingsMenu = false },
         contentAlignment = Alignment.Center
       ) {
@@ -783,7 +834,7 @@ fun NativeTvExoPlayer(
             shadowElevation = 18.dp,
             modifier = Modifier
               .fillMaxWidth(0.92f)
-              .widthIn(max = 420.dp)
+              .widthIn(max = 430.dp)
               .padding(8.dp)
               .clickable(enabled = false) {}
               .testTag("exo_gear_settings_sheet")
@@ -812,7 +863,7 @@ fun NativeTvExoPlayer(
                   )
                   Column {
                     Text(
-                      text = "إعدادات المشغل والجودة المستخرجة",
+                      text = "إعدادات المشغل والجودة والترجمة",
                       color = Color.White,
                       fontSize = 12.5.sp,
                       fontWeight = FontWeight.ExtraBold
@@ -908,7 +959,90 @@ fun NativeTvExoPlayer(
                 }
               }
 
-              // 2. Playback Speed Section
+              // 2. Quick Subtitle Style Controls (Color, Background, Font Size)
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Palette,
+                  contentDescription = null,
+                  tint = CinemaAccent,
+                  modifier = Modifier.size(15.dp)
+                )
+                Text(
+                  text = "مظهر الترجمة السريع (اللون • الحجم • الخلفية):",
+                  color = CinemaAccent,
+                  fontSize = 10.5.sp,
+                  fontWeight = FontWeight.ExtraBold
+                )
+              }
+
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                val quickColors = listOf(
+                  0xFFFFD700L to "أصفر",
+                  0xFFFFFFFFL to "أبيض",
+                  0xFF00E5FFL to "سماوي",
+                  0xFF4ADE80L to "أخضر"
+                )
+                quickColors.forEach { (argb, label) ->
+                  val isSelected = subtitleStyle.textColorArgb == argb
+                  Surface(
+                    onClick = { onUpdateSubtitleStyle(subtitleStyle.copy(textColorArgb = argb)) },
+                    color = if (isSelected) CinemaPrimary.copy(alpha = 0.3f) else CinemaSurfaceVariant,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, if (isSelected) Color(argb) else CinemaBorder),
+                    modifier = Modifier.heightIn(min = 28.dp)
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                      Box(
+                        modifier = Modifier
+                          .size(11.dp)
+                          .clip(CircleShape)
+                          .background(Color(argb))
+                      )
+                      Text(
+                        text = label,
+                        color = Color(argb),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                      )
+                    }
+                  }
+                }
+
+                val quickSizes = listOf(16f to "صغير", 20f to "كبير", 25f to "ضخم")
+                quickSizes.forEach { (sz, lbl) ->
+                  val isSelected = subtitleStyle.fontSizeSp == sz
+                  Surface(
+                    onClick = { onUpdateSubtitleStyle(subtitleStyle.copy(fontSizeSp = sz)) },
+                    color = if (isSelected) ClipboxWhite else CinemaSurfaceVariant,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, if (isSelected) ClipboxWhite else CinemaBorder),
+                    modifier = Modifier.heightIn(min = 28.dp)
+                  ) {
+                    Text(
+                      text = "خط $lbl",
+                      color = if (isSelected) Color.Black else Color.White,
+                      fontSize = 10.sp,
+                      fontWeight = FontWeight.Bold,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                  }
+                }
+              }
+
+              // 3. Playback Speed Section
               Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -964,7 +1098,7 @@ fun NativeTvExoPlayer(
                 }
               }
 
-              // 3. Quick Subtitles & Aspect Ratio Row
+              // 4. Quick Subtitles Dialog & Aspect Ratio Row
               Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -994,7 +1128,7 @@ fun NativeTvExoPlayer(
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                      text = "الترجمة (CC)",
+                      text = "بحث وإعدادات الترجمة (CC)",
                       color = Color.White,
                       fontSize = 10.5.sp,
                       fontWeight = FontWeight.Bold
@@ -1041,6 +1175,70 @@ fun NativeTvExoPlayer(
               }
             }
           }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Live Synchronized Subtitle Cue Overlay that renders active `ParsedSubtitleCue` items
+ * on top of either `NativeTvExoPlayer` or `WebViewPlayerBox` using the user's chosen
+ * Text Color, Background Color/Opacity, Font Size, and Timing Sync Offset.
+ */
+@Composable
+fun ActiveSubtitleCueOverlay(
+  activeSubtitle: SubtitleItem?,
+  currentPositionMs: Long,
+  subtitleStyle: SubtitleStyleConfig,
+  isControllerVisible: Boolean = false,
+  modifier: Modifier = Modifier
+) {
+  if (activeSubtitle == null || activeSubtitle.parsedCues.isEmpty()) return
+
+  val effectiveTimeMs = (currentPositionMs - subtitleStyle.syncOffsetMs).coerceAtLeast(0L)
+  val matchingCueText = remember(activeSubtitle, effectiveTimeMs / 150L) {
+    activeSubtitle.parsedCues
+      .filter { effectiveTimeMs in it.startMs..it.endMs }
+      .joinToString("\n") { it.text }
+  }
+
+  if (matchingCueText.isNotBlank()) {
+    val bottomPad = if (isControllerVisible) {
+      (subtitleStyle.bottomOffsetDp + 44).dp
+    } else {
+      subtitleStyle.bottomOffsetDp.dp
+    }
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+      Box(
+        modifier = modifier
+          .fillMaxWidth()
+          .padding(horizontal = 18.dp)
+          .padding(bottom = bottomPad),
+        contentAlignment = Alignment.BottomCenter
+      ) {
+        Box(
+          modifier = Modifier
+            .background(
+              color = Color(subtitleStyle.backgroundColorArgb),
+              shape = RoundedCornerShape(8.dp)
+            )
+            .padding(horizontal = 14.dp, vertical = 5.dp)
+        ) {
+          Text(
+            text = matchingCueText,
+            color = Color(subtitleStyle.textColorArgb),
+            fontSize = subtitleStyle.fontSizeSp.sp,
+            fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.Center,
+            lineHeight = (subtitleStyle.fontSizeSp * 1.25f).sp,
+            style = TextStyle(
+              shadow = Shadow(
+                color = Color.Black,
+                blurRadius = 6f
+              )
+            )
+          )
         }
       }
     }

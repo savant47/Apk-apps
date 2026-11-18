@@ -183,6 +183,14 @@ fun MainScreen(
   var preferNativePlayer by remember { mutableStateOf(true) }
   var userManuallyDismissedNativePlayer by remember { mutableStateOf(false) }
   var activeSubtitleItem by remember { mutableStateOf<SubtitleItem?>(null) }
+  val subtitleStyle by repository.subtitleStyleFlow.collectAsState()
+  var webVideoCurrentTimeMs by remember { mutableStateOf(0L) }
+  val failedNativeStreamUrls = remember { mutableSetOf<String>() }
+
+  // Ensure permissive SSL is installed early for all streaming CDNs
+  LaunchedEffect(Unit) {
+    SearchAndSubtitlesService.installPermissiveSslForStreaming()
+  }
 
   // Keep AppDiagnosticsLogger live summary synchronized
   LaunchedEffect(
@@ -389,11 +397,23 @@ fun MainScreen(
 
   fun onStreamUrlIntercepted(url: String, headers: Map<String, String>, sourceTag: String) {
     if (!url.startsWith("http")) return
-    val lower = url.lowercase()
+    // Unwrap proxy stream URLs (e.g. surge.flooderrr.store/mp/...&headers={...}&host=https://bcdnxw.hakunaymatata.com)
+    val (resolvedUrl, resolvedHeaders) = searchService.unwrapProxyStreamUrl(url, headers)
+    val lower = resolvedUrl.lowercase()
+
+    // Ignore secondary bandwidth test probes (/mp/bt/) when a primary stream is already detected
+    if (url.lowercase().contains("/mp/bt/") && !detectedVideoUrl.isNullOrBlank()) {
+      return
+    }
+    // Never auto-relaunch a stream URL that already failed in NativeTvExoPlayer (prevents infinite fallback loops)
+    if (failedNativeStreamUrls.contains(url) || failedNativeStreamUrls.contains(resolvedUrl)) {
+      return
+    }
+
     if ((lower.contains(".ts") || lower.contains(".m4s")) && detectedVideoUrl?.contains(".m3u8") == true) {
       return
     }
-    if (url == detectedVideoUrl && playNativeVideoUrl != null) return
+    if (resolvedUrl == detectedVideoUrl && playNativeVideoUrl != null) return
 
     // CRITICAL FIX: Never let a single-quality child variant playlist (e.g. index-v1-a1.m3u8)
     // overwrite a multi-quality Master HLS playlist (master.m3u8 / .urlset)!
@@ -409,35 +429,34 @@ fun MainScreen(
     if (existingIsMaster && incomingIsChildVariant) {
       AppDiagnosticsLogger.log(
         "STREAM",
-        "تجاهل ملف الجودة الفرعي للحفاظ على ملف الجودات الرئيسي (Master M3U8): $url"
+        "تجاهل ملف الجودة الفرعي للحفاظ على ملف الجودات الرئيسي (Master M3U8): $resolvedUrl"
       )
       stopBackgroundWebViewVideo()
       return
     }
 
-    AppDiagnosticsLogger.log("STREAM", "التقاط رابط فيديو مباشر ($sourceTag): $url")
-    detectedVideoUrl = url
-    if (headers.isNotEmpty()) {
-      detectedVideoHeaders = headers
+    AppDiagnosticsLogger.log("STREAM", "التقاط رابط فيديو مباشر ($sourceTag): $resolvedUrl")
+    detectedVideoUrl = resolvedUrl
+    if (resolvedHeaders.isNotEmpty()) {
+      detectedVideoHeaders = resolvedHeaders
     }
 
-    val effectiveReferer = headers["Referer"]
-      ?: headers["referer"]
+    val effectiveReferer = resolvedHeaders["Referer"]
+      ?: resolvedHeaders["referer"]
       ?: activeEmbedRefererUrl.ifBlank { currentUrl.ifBlank { activeWatchPageUrl } }
 
     if (lower.contains(".m3u8")) {
       scope.launch {
-        val hlsQualities = searchService.parseHlsQualitiesFromManifest(url, effectiveReferer)
+        val hlsQualities = searchService.parseHlsQualitiesFromManifest(resolvedUrl, effectiveReferer)
         if (hlsQualities.isNotEmpty()) {
           mergeDetectedQualities(hlsQualities)
         }
       }
     }
 
-    if (!isGeneralBrowserSession && (preferNativePlayer || !userManuallyDismissedNativePlayer)) {
-      preferNativePlayer = true
+    if (!isGeneralBrowserSession && preferNativePlayer && !userManuallyDismissedNativePlayer) {
       stopBackgroundWebViewVideo()
-      playNativeVideoUrl = url
+      playNativeVideoUrl = resolvedUrl
     }
   }
 
@@ -556,6 +575,7 @@ fun MainScreen(
     detectedVideoQualities = emptyList()
     currentVideoQuality = "auto"
     userManuallyDismissedNativePlayer = false
+    failedNativeStreamUrls.clear()
 
     scope.launch {
       val scraped = searchService.scrapeSeasonsAndEpisodes(
@@ -639,6 +659,7 @@ fun MainScreen(
     isGeneralBrowserSession = isGeneralBrowser
     preferNativePlayer = !isGeneralBrowser
     userManuallyDismissedNativePlayer = false
+    failedNativeStreamUrls.clear()
     detectedVideoUrl = null
     detectedVideoHeaders = emptyMap()
     detectedVideoQualities = emptyList()
@@ -875,7 +896,11 @@ fun MainScreen(
               addJavascriptInterface(
                 TvPlayerBridge(
                   onVideoEnded = {},
-                  onVideoTimeUpdate = { _, _ -> },
+                  onVideoTimeUpdate = { curSec, _ ->
+                    post {
+                      webVideoCurrentTimeMs = (curSec * 1000f).toLong()
+                    }
+                  },
                   onCenterClickFiltered = { _, _ -> },
                   onVideoDetected = { url ->
                     post {
@@ -889,24 +914,26 @@ fun MainScreen(
                       )
                     }
                   },
-                  onQualitiesDetected = { jsonStr ->
+                  onQualitiesDetected = { heightsList ->
                     post {
                       try {
-                        val arr = JSONArray(jsonStr)
-                        val list = mutableListOf<VideoQualityOption>()
-                        for (i in 0 until arr.length()) {
-                          val obj = arr.optJSONObject(i) ?: continue
-                          val h = obj.optInt("height", 0)
-                          if (h in 140..4320) {
-                            list.add(
-                              VideoQualityOption(
-                                id = h.toString(),
-                                label = obj.optString("label").ifBlank { "${h}p" },
-                                height = h
-                              )
+                        val list = heightsList
+                          .filter { it in 140..4320 }
+                          .distinct()
+                          .sortedDescending()
+                          .map { h ->
+                            val badge = when {
+                              h >= 1080 -> "FHD"
+                              h >= 720 -> "HD"
+                              h >= 480 -> "SD"
+                              else -> "توفير"
+                            }
+                            VideoQualityOption(
+                              id = h.toString(),
+                              label = "${h}p $badge",
+                              height = h
                             )
                           }
-                        }
                         if (list.isNotEmpty()) {
                           mergeDetectedQualities(list)
                           AppDiagnosticsLogger.log(
@@ -1122,6 +1149,17 @@ fun MainScreen(
         }
       }
 
+      // Live synchronized Subtitle Cue Overlay when using Embedded WebView Player
+      if (!isGeneralBrowserSession && !showPrimaryNativePlayer && activeSubtitleItem != null) {
+        ActiveSubtitleCueOverlay(
+          activeSubtitle = activeSubtitleItem,
+          currentPositionMs = webVideoCurrentTimeMs,
+          subtitleStyle = subtitleStyle,
+          modifier = Modifier
+            .align(Alignment.BottomCenter)
+        )
+      }
+
       if (showPrimaryNativePlayer) {
         NativeTvExoPlayer(
           videoUrl = playNativeVideoUrl ?: "",
@@ -1135,6 +1173,10 @@ fun MainScreen(
             applyVideoQualityInPlayer(option.id, option.label, option.streamUrl)
           },
           activeSubtitle = activeSubtitleItem,
+          subtitleStyle = subtitleStyle,
+          onUpdateSubtitleStyle = { newStyle ->
+            repository.setSubtitleStyle(newStyle)
+          },
           isFullscreen = isFullscreenVideo,
           onToggleFullscreen = {
             toggleVideoFullscreen(!isFullscreenVideo)
@@ -1158,15 +1200,20 @@ fun MainScreen(
             }
           },
           onFallbackToWebPlayer = {
+            playNativeVideoUrl?.let { failedNativeStreamUrls.add(it) }
+            detectedVideoUrl?.let { failedNativeStreamUrls.add(it) }
+            preferNativePlayer = false
             playNativeVideoUrl = null
             val fallbackServerUrl = activeEmbedRefererUrl.ifBlank { currentUrl }
-            loadServerIntoWebView(
-              targetWebView = webViewRef,
-              targetServerUrl = fallbackServerUrl,
-              isDirectEmbed = isCurrentUrlDirectEmbed,
-              portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
-              resetNativePlayer = false
-            )
+            if (currentUrl != fallbackServerUrl) {
+              loadServerIntoWebView(
+                targetWebView = webViewRef,
+                targetServerUrl = fallbackServerUrl,
+                isDirectEmbed = isCurrentUrlDirectEmbed,
+                portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+                resetNativePlayer = false
+              )
+            }
             Toast.makeText(
               context,
               "تم التبديل لمشغل السيرفر المدمج",
@@ -1754,7 +1801,19 @@ fun MainScreen(
   // Dialogs
   if (showSubtitlesDialog) {
     OpenSubtitlesDialog(
-      initialQuery = lastSearchQuery.ifBlank { pageTitle.ifBlank { "Silo" } },
+      initialQuery = lastSearchQuery.ifBlank { pageTitle.ifBlank { "VisionQuest" } },
+      embedUrlHint = activeEmbedRefererUrl.ifBlank { currentUrl },
+      refererUrlHint = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+      activeSubtitle = activeSubtitleItem,
+      subtitleStyle = subtitleStyle,
+      onUpdateSubtitleStyle = { newStyle ->
+        repository.setSubtitleStyle(newStyle)
+      },
+      onClearSubtitle = {
+        activeSubtitleItem = null
+        showSubtitlesDialog = false
+        Toast.makeText(context, "تم إيقاف الترجمة", Toast.LENGTH_SHORT).show()
+      },
       onDismiss = { showSubtitlesDialog = false },
       onApplySubtitle = { sub ->
         showSubtitlesDialog = false
@@ -1806,21 +1865,9 @@ fun MainScreen(
                     iTrack.mode = 'showing';
                     applied = true;
                   }
-                  var ccBtn = doc.querySelector('.jw-icon-cc, .vjs-subs-caps-button, button[aria-label*="Captions"], button[aria-label*="Subtitles"]');
-                  if (ccBtn) {
-                    ccBtn.click();
-                    applied = true;
-                  }
                 }
               } catch(e) {}
             }
-
-            var rootCc = document.querySelector('.jw-icon-cc, .vjs-subs-caps-button, button[aria-label*="Captions"], button[aria-label*="Subtitles"], .art-control-subtitle');
-            if (rootCc) {
-              rootCc.click();
-              applied = true;
-            }
-
             return applied ? 'APPLIED' : 'QUEUED';
           })();
         """.trimIndent()

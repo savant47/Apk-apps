@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.assertv"
     minSdk = 24
     targetSdk = 36
-    versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 29
-    versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.29"
+    versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 30
+    versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.30"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

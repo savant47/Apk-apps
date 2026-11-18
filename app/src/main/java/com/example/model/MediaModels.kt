@@ -86,6 +86,20 @@ enum class SubtitleSourceFilter(val titleArabic: String, val id: String) {
     get() = titleArabic
 }
 
+data class ParsedSubtitleCue(
+  val startMs: Long,
+  val endMs: Long,
+  val text: String
+)
+
+data class SubtitleStyleConfig(
+  val textColorArgb: Long = 0xFFFFD700L,       // Default: Cinema Gold/Yellow (#FFD700)
+  val backgroundColorArgb: Long = 0xBF000000L, // Default: 75% Black (#BF000000)
+  val fontSizeSp: Float = 20f,                 // Default: Large readable 20sp
+  val bottomOffsetDp: Int = 28,                // Distance from bottom of player
+  val syncOffsetMs: Long = 0L                  // Subtitle timing offset in milliseconds
+)
+
 data class SubtitleItem(
   val id: String,
   val releaseName: String,
@@ -95,8 +109,11 @@ data class SubtitleItem(
   val downloadUrl: String,
   val source: String = "OpenSubtitles.org",
   val rating: Float = 5.0f,
-  val rawVttDataUri: String = ""
+  val rawVttDataUri: String = "",
+  val localFileUri: String = "",
+  val parsedCues: List<ParsedSubtitleCue> = emptyList()
 ) {
   val sourceSite: String
     get() = source
 }
+
