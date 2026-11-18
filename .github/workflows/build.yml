@@ -4,22 +4,38 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main", "master" ]
-    tags: [ "v*" ]
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Cleanup Old Workflow Artifacts (تفريغ حصة الـ Artifacts المجانية)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking and deleting any old workflow artifacts to free up GitHub Actions storage quota..."
+          ARTIFACT_IDS=$(gh api "repos/${{ github.repository }}/actions/artifacts" --paginate -q '.artifacts[].id' 2>/dev/null || true)
+          if [ -n "$ARTIFACT_IDS" ]; then
+            for id in $ARTIFACT_IDS; do
+              echo "Deleting artifact ID: $id"
+              gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" || true
+            done
+          else
+            echo "No artifacts found. Storage quota is clean (0 MB used)."
+          fi
+
+      - name: Set up JDK 17 (No Cache to Save Storage Quota)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -44,7 +60,10 @@ jobs:
           cp debug.keystore app/debug.keystore
 
       - name: Build Signed APK
-        run: gradle assembleDebug -x test -x lint -Dkotlin.daemon.jvm.options="-Xmx2g" -Dorg.gradle.jvmargs="-Xmx4g"
+        env:
+          APP_VERSION_CODE: ${{ github.run_number }}
+          APP_VERSION_NAME: 1.0.${{ github.run_number }}
+        run: gradle assembleDebug -x test -x lint --no-build-cache -Dkotlin.daemon.jvm.options="-Xmx2g" -Dorg.gradle.jvmargs="-Xmx4g"
 
       - name: Prepare Release APK Files
         run: |
@@ -52,21 +71,27 @@ jobs:
           cp "$APK_SOURCE" "app/build/outputs/apk/debug/AsserTV.apk"
           cp "$APK_SOURCE" "app/build/outputs/apk/debug/AsserTV-v1.0.${{ github.run_number }}.apk"
 
-      - name: Publish APK to GitHub Releases (النسخ)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: "Asser TV v1.0.${{ github.run_number }}"
-          body: |
-            ## 🎬 Asser TV - إصدار جاهز للتثبيت (v1.0.${{ github.run_number }})
-            - تم تجميع وتوقيع ملف الـ APK تلقائياً ونشره في قسم النسخ (**Releases**).
-            - يدعم الهواتف الذكية وشاشات **Android TV**.
-            - قم بتحميل ملف `AsserTV.apk` بالأسفل للتثبيت المباشر.
-          files: |
-            app/build/outputs/apk/debug/AsserTV.apk
-            app/build/outputs/apk/debug/AsserTV-v1.0.${{ github.run_number }}.apk
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+      - name: Publish APK Directly to GitHub Releases (النسخ)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          TITLE="Asser TV v1.0.${{ github.run_number }}"
+          NOTES="## 🎬 Asser TV - إصدار جاهز للتثبيت ($TAG)
+          - تم تجميع وتوقيع ملف الـ APK تلقائياً ونشره مباشرة في قسم النسخ (**Releases**) بدون استهلاك أي مساحة من حصة الـ Artifacts.
+          - يدعم الهواتف الذكية وشاشات **Android TV**.
+          - قم بتحميل ملف \`AsserTV.apk\` بالأسفل للتثبيت المباشر."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              "app/build/outputs/apk/debug/AsserTV.apk" \
+              "app/build/outputs/apk/debug/AsserTV-v1.0.${{ github.run_number }}.apk" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              "app/build/outputs/apk/debug/AsserTV.apk#AsserTV.apk" \
+              "app/build/outputs/apk/debug/AsserTV-v1.0.${{ github.run_number }}.apk" \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --latest
+          fi

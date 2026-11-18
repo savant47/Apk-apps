@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,13 +26,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -66,6 +68,7 @@ import com.example.model.ScrapedSeriesStructure
 import com.example.model.ScrapedWatchServer
 import com.example.model.SearchResultItem
 import com.example.model.StreamingPortal
+import com.example.model.VideoQualityOption
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
@@ -86,13 +89,20 @@ fun WatchSidePanel(
   seriesStructure: ScrapedSeriesStructure,
   isScrapingSeries: Boolean,
   currentQuality: String,
+  detectedQualities: List<VideoQualityOption> = emptyList(),
+  isNativePlayerActive: Boolean = false,
+  hasDetectedDirectStream: Boolean = false,
+  onSwitchToNativePlayer: () -> Unit = {},
+  onToggleVideoFullscreen: () -> Unit = {},
+  onOpenDiagnostics: () -> Unit = {},
+  onOpenUpdate: () -> Unit = {},
   onSelectWatchServer: (ScrapedWatchServer) -> Unit = {},
   onSelectSearchResult: (SearchResultItem, StreamingPortal) -> Unit,
   onSwitchPortalDirect: (StreamingPortal) -> Unit,
   onSelectSeason: (ScrapedSeasonItem) -> Unit,
   onSelectEpisode: (ScrapedEpisodeItem) -> Unit,
   onRescrapePage: () -> Unit,
-  onSelectQuality: (qualityId: String, qualityLabel: String) -> Unit,
+  onSelectQuality: (qualityOption: VideoQualityOption) -> Unit,
   onOpenSubtitles: () -> Unit,
   onClosePanel: () -> Unit,
   isCompactMobileSheet: Boolean = false,
@@ -103,15 +113,6 @@ fun WatchSidePanel(
   var activeSubTab by remember(seriesStructure.episodes.isNotEmpty(), seriesStructure.seasons.isNotEmpty()) {
     mutableIntStateOf(if (seriesStructure.episodes.isNotEmpty() || seriesStructure.seasons.isNotEmpty()) 0 else 1)
   }
-
-  val qualities = listOf(
-    "auto" to "تلقائي Auto",
-    "240" to "240p توفير",
-    "360" to "360p متوسط",
-    "480" to "480p SD",
-    "720" to "720p HD",
-    "1080" to "1080p FHD"
-  )
 
   Surface(
     color = CinemaDarkBackground.copy(alpha = 0.99f),
@@ -130,7 +131,7 @@ fun WatchSidePanel(
         .padding(horizontal = 10.dp, vertical = 6.dp),
       verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-      // 1. Sleek Single-Line Header + Subtitles CC + Refresh + Close
+      // 1. Sleek Single-Line Header + Native Player Toggle + Fullscreen + Diagnostics Log + CC + Refresh + Close
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -144,13 +145,13 @@ fun WatchSidePanel(
             modifier = Modifier
               .size(8.dp)
               .clip(CircleShape)
-              .background(CinemaSuccess)
+              .background(if (isNativePlayerActive) CinemaSuccess else CinemaAccent)
           )
-          Spacer(modifier = Modifier.width(6.dp))
+          Spacer(modifier = Modifier.width(5.dp))
           Text(
-            text = if (searchQuery.isNotBlank()) "Asser TV • $searchQuery" else "مشغل Asser TV • ${activePortal.displayNameArabic}",
+            text = if (searchQuery.isNotBlank()) searchQuery else activePortal.displayNameArabic,
             color = Color.White,
-            fontSize = 12.sp,
+            fontSize = 11.5.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -161,38 +162,147 @@ fun WatchSidePanel(
           CircularProgressIndicator(
             color = CinemaAccent,
             modifier = Modifier
-              .padding(end = 6.dp)
-              .size(15.dp),
+              .padding(end = 5.dp)
+              .size(14.dp),
             strokeWidth = 2.dp
           )
         }
 
-        Button(
+        // Non-blocking switch button to Primary Native Player (replaces the old bottom banner that covered the video controls!)
+        if (hasDetectedDirectStream && !isNativePlayerActive) {
+          Surface(
+            onClick = onSwitchToNativePlayer,
+            color = CinemaSuccess,
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+              .heightIn(min = 27.dp)
+              .testTag("play_native_video_button")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Icon(
+                imageVector = Icons.Default.PlayArrow,
+                contentDescription = null,
+                tint = Color.Black,
+                modifier = Modifier.size(13.dp)
+              )
+              Spacer(modifier = Modifier.width(2.dp))
+              Text(
+                text = "المشغل الأساسي",
+                color = Color.Black,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
+          }
+          Spacer(modifier = Modifier.width(4.dp))
+        }
+
+        // Video Fullscreen button (rotates to landscape and fills screen with the video player)
+        Surface(
+          onClick = onToggleVideoFullscreen,
+          color = CinemaPrimary,
+          shape = RoundedCornerShape(8.dp),
+          modifier = Modifier
+            .heightIn(min = 27.dp)
+            .testTag("side_panel_fullscreen_button")
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Icon(
+              imageVector = Icons.Default.Fullscreen,
+              contentDescription = "تكبير المشغل ملء الشاشة",
+              tint = Color.White,
+              modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(2.dp))
+            Text(
+              text = "ملء الشاشة",
+              color = Color.White,
+              fontSize = 9.5.sp,
+              fontWeight = FontWeight.ExtraBold,
+              maxLines = 1,
+              softWrap = false
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // Subtitles CC Button
+        Surface(
           onClick = onOpenSubtitles,
-          colors = ButtonDefaults.buttonColors(
-            containerColor = CinemaSurfaceVariant,
-            contentColor = Color.White
-          ),
+          color = CinemaSurfaceVariant,
           border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.8f)),
           shape = RoundedCornerShape(8.dp),
-          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
           modifier = Modifier
-            .heightIn(min = 28.dp)
+            .heightIn(min = 27.dp)
             .testTag("side_panel_subtitles_button")
         ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Icon(
+              imageVector = Icons.Default.Subtitles,
+              contentDescription = null,
+              tint = CinemaAccent,
+              modifier = Modifier.size(12.dp)
+            )
+            Spacer(modifier = Modifier.width(3.dp))
+            Text(
+              text = "CC",
+              color = Color.White,
+              fontSize = 9.5.sp,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              softWrap = false
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // Diagnostics & Log Copy Button
+        IconButton(
+          onClick = onOpenDiagnostics,
+          modifier = Modifier
+            .size(27.dp)
+            .clip(CircleShape)
+            .background(CinemaSurface)
+            .border(1.dp, CinemaAccent.copy(alpha = 0.6f), CircleShape)
+            .testTag("btn_open_diagnostics_log")
+        ) {
           Icon(
-            imageVector = Icons.Default.Subtitles,
-            contentDescription = null,
+            imageVector = Icons.Default.BugReport,
+            contentDescription = "نسخ اللوج وتشخيص الأعطال",
             tint = CinemaAccent,
-            modifier = Modifier.size(13.dp)
+            modifier = Modifier.size(14.dp)
           )
-          Spacer(modifier = Modifier.width(4.dp))
-          Text(
-            text = "الترجمة CC",
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            softWrap = false
+        }
+
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // In-App GitHub Update Button
+        IconButton(
+          onClick = onOpenUpdate,
+          modifier = Modifier
+            .size(27.dp)
+            .clip(CircleShape)
+            .background(CinemaSurface)
+            .testTag("btn_open_update_from_watch")
+        ) {
+          Icon(
+            imageVector = Icons.Default.SystemUpdate,
+            contentDescription = "تحديث التطبيق من جيت هب",
+            tint = CinemaSuccess,
+            modifier = Modifier.size(14.dp)
           )
         }
 
@@ -201,7 +311,7 @@ fun WatchSidePanel(
         IconButton(
           onClick = onRescrapePage,
           modifier = Modifier
-            .size(28.dp)
+            .size(27.dp)
             .clip(CircleShape)
             .background(CinemaSurface)
             .testTag("btn_rescrape_seasons_episodes")
@@ -210,7 +320,7 @@ fun WatchSidePanel(
             imageVector = Icons.Default.Refresh,
             contentDescription = "تحديث السيرفرات والحلقات",
             tint = CinemaAccent,
-            modifier = Modifier.size(14.dp)
+            modifier = Modifier.size(13.dp)
           )
         }
 
@@ -219,7 +329,7 @@ fun WatchSidePanel(
         IconButton(
           onClick = onClosePanel,
           modifier = Modifier
-            .size(28.dp)
+            .size(27.dp)
             .clip(CircleShape)
             .background(CinemaSurface)
             .testTag("btn_close_watch_side_panel")
@@ -228,7 +338,7 @@ fun WatchSidePanel(
             imageVector = Icons.Default.Close,
             contentDescription = "إخفاء اللوحة",
             tint = Color.LightGray,
-            modifier = Modifier.size(14.dp)
+            modifier = Modifier.size(13.dp)
           )
         }
       }
@@ -309,7 +419,7 @@ fun WatchSidePanel(
         }
       }
 
-      // 3. Compact Single-Line Quality Selector Strip
+      // 3. Auto-Detected Real Video Qualities Strip (No fake static list!)
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -322,12 +432,12 @@ fun WatchSidePanel(
         Icon(
           imageVector = Icons.Default.HighQuality,
           contentDescription = null,
-          tint = CinemaSecondary,
+          tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
           modifier = Modifier.size(14.dp)
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-          text = "الجودة:",
+          text = if (detectedQualities.isNotEmpty()) "جودات الفيديو:" else "الجودة:",
           color = Color.White,
           fontSize = 10.sp,
           fontWeight = FontWeight.Bold,
@@ -335,34 +445,46 @@ fun WatchSidePanel(
           softWrap = false
         )
         Spacer(modifier = Modifier.width(6.dp))
-        LazyRow(
-          horizontalArrangement = Arrangement.spacedBy(5.dp),
-          modifier = Modifier.weight(1f)
-        ) {
-          items(qualities) { (qId, qLabel) ->
-            val selected = currentQuality == qId
-            Surface(
-              onClick = { onSelectQuality(qId, qLabel) },
-              color = if (selected) ClipboxWhite else CinemaDarkBackground,
-              shape = RoundedCornerShape(7.dp),
-              border = BorderStroke(1.dp, if (selected) ClipboxWhite else CinemaBorder),
-              modifier = Modifier.heightIn(min = 26.dp)
-            ) {
-              Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        if (detectedQualities.isNotEmpty()) {
+          LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier.weight(1f)
+          ) {
+            items(detectedQualities, key = { it.id }) { qOption ->
+              val selected = currentQuality == qOption.id
+              Surface(
+                onClick = { onSelectQuality(qOption) },
+                color = if (selected) ClipboxWhite else CinemaDarkBackground,
+                shape = RoundedCornerShape(7.dp),
+                border = BorderStroke(1.dp, if (selected) ClipboxWhite else CinemaSuccess.copy(alpha = 0.6f)),
+                modifier = Modifier.heightIn(min = 26.dp)
               ) {
-                Text(
-                  text = qLabel,
-                  color = if (selected) Color.Black else Color.LightGray,
-                  fontSize = 10.sp,
-                  fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
-                  maxLines = 1,
-                  softWrap = false
-                )
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                  Text(
+                    text = qOption.label,
+                    color = if (selected) Color.Black else Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                }
               }
             }
           }
+        } else {
+          Text(
+            text = "تلقائي Auto (سيتم إظهار الجودات الفعلية فور بدء البث...)",
+            color = CinemaAccent,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+          )
         }
       }
 
@@ -727,4 +849,3 @@ fun WatchSidePanel(
     }
   }
 }
-

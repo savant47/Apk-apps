@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.SportsSoccer
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
@@ -103,6 +105,8 @@ fun AppMainTabSwitcherBar(
   onOpenBookmarks: () -> Unit,
   onOpenHistory: () -> Unit,
   onOpenAdBlock: () -> Unit,
+  onOpenUpdate: () -> Unit = {},
+  onOpenDiagnostics: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
   val configuration = LocalConfiguration.current
@@ -135,7 +139,7 @@ fun AppMainTabSwitcherBar(
           )
           Spacer(modifier = Modifier.width(8.dp))
           Text(
-            text = "Asser Browser",
+            text = "Asser TV",
             color = Color.White,
             fontSize = 15.sp,
             fontWeight = FontWeight.ExtraBold,
@@ -178,6 +182,20 @@ fun AppMainTabSwitcherBar(
             }
           }
 
+          CompactTopIconBtn(
+            icon = Icons.Default.SystemUpdate,
+            tint = CinemaSuccess,
+            contentDescription = "تحديث التطبيق من جيت هب",
+            onClick = onOpenUpdate,
+            testTag = "top_chip_update"
+          )
+          CompactTopIconBtn(
+            icon = Icons.Default.BugReport,
+            tint = CinemaAccent,
+            contentDescription = "سجل الأعطال واللوج",
+            onClick = onOpenDiagnostics,
+            testTag = "top_chip_diagnostics"
+          )
           CompactTopIconBtn(
             icon = Icons.Default.Bookmark,
             tint = CinemaAccent,
@@ -305,6 +323,20 @@ fun AppMainTabSwitcherBar(
           tint = Color.LightGray,
           onClick = onOpenHistory,
           testTag = "top_chip_history"
+        )
+        QuickTopUtilityChip(
+          label = "تحديث جيت هب",
+          icon = Icons.Default.SystemUpdate,
+          tint = CinemaSuccess,
+          onClick = onOpenUpdate,
+          testTag = "top_chip_update"
+        )
+        QuickTopUtilityChip(
+          label = "لوج الأعطال",
+          icon = Icons.Default.BugReport,
+          tint = CinemaAccent,
+          onClick = onOpenDiagnostics,
+          testTag = "top_chip_diagnostics"
         )
         QuickTopUtilityChip(
           label = "حماية AdGuard",

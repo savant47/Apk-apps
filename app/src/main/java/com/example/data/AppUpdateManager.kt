@@ -11,18 +11,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
-import java.util.regex.Pattern
 
 data class UpdateReleaseInfo(
   val tagName: String,
   val title: String,
   val releaseNotes: String,
   val apkDownloadUrl: String,
+  val apkApiAssetUrl: String = "",
   val apkFileName: String,
   val fileSizeBytes: Long,
   val publishedAt: String,
@@ -32,7 +33,7 @@ data class UpdateReleaseInfo(
 sealed class UpdateDownloadState {
   object Idle : UpdateDownloadState()
   object Checking : UpdateDownloadState()
-  data class UpToDate(val currentVersion: String) : UpdateDownloadState()
+  data class UpToDate(val currentVersion: String, val latestInfo: UpdateReleaseInfo? = null) : UpdateDownloadState()
   data class UpdateAvailable(val info: UpdateReleaseInfo) : UpdateDownloadState()
   data class Downloading(val progress: Float, val downloadedText: String, val totalText: String) : UpdateDownloadState()
   data class ReadyToInstall(val apkFile: File, val info: UpdateReleaseInfo?) : UpdateDownloadState()
@@ -48,22 +49,23 @@ class AppUpdateManager(private val context: Context) {
     .build()
 
   /**
-   * Checks GitHub Releases or direct URL for an update.
+   * Checks GitHub Releases (e.g. savant47/Apk-apps) or direct URL for an update.
    */
   suspend fun checkForUpdates(
     rawRepoOrUrl: String,
-    currentVersionName: String
+    currentVersionName: String,
+    githubToken: String = ""
   ): Result<UpdateReleaseInfo> = withContext(Dispatchers.IO) {
     try {
       val input = rawRepoOrUrl.trim()
       if (input.isBlank()) {
-        return@withContext Result.failure(Exception("يرجى إدخال اسم مستودع جيت هب (مثل: Savant47/cinema-tv) أو رابط مباشر."))
+        return@withContext Result.failure(Exception("يرجى إدخال اسم مستودع جيت هب (مثل: savant47/Apk-apps) أو رابط مباشر."))
       }
 
       // Check if it's already a direct APK link
       if (input.startsWith("http://") || input.startsWith("https://")) {
-        if (input.endsWith(".apk", ignoreCase = true)) {
-          val fileName = input.substringAfterLast("/")
+        if (input.endsWith(".apk", ignoreCase = true) || input.contains("/releases/download/")) {
+          val fileName = input.substringAfterLast("/").ifBlank { "AsserTV.apk" }
           val info = UpdateReleaseInfo(
             tagName = "Direct",
             title = "تحديث مباشر من الرابط",
@@ -78,51 +80,79 @@ class AppUpdateManager(private val context: Context) {
         }
       }
 
-      // Extract owner and repo from GitHub URL or slug
       val (owner, repo) = extractGitHubOwnerRepo(input)
-        ?: return@withContext Result.failure(Exception("صيغة اسم المستودع غير صحيحة. الصيغة المطلوبة: username/repository أو رابط GitHub كامل."))
+        ?: return@withContext Result.failure(Exception("صيغة اسم المستودع غير صحيحة. الصيغة المطلوبة: savant47/Apk-apps أو رابط GitHub كامل."))
 
-      val apiUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
-      val request = Request.Builder()
-        .url(apiUrl)
-        .header("User-Agent", "AsserTV-Android-App")
-        .header("Accept", "application/vnd.github.v3+json")
-        .build()
+      val cleanToken = githubToken.trim()
 
-      val response = httpClient.newCall(request).execute()
-      if (!response.isSuccessful) {
-        val code = response.code
-        if (code == 404) {
-          return@withContext Result.failure(Exception("لم يتم العثور على أي Release في مستودع ($owner/$repo). تأكد من إنشاء Release ورفع ملف APK فيه."))
+      fun buildGitHubRequest(url: String): Request {
+        val builder = Request.Builder()
+          .url(url)
+          .header("User-Agent", "AsserTV-Android-Updater")
+          .header("Accept", "application/vnd.github+json")
+        if (cleanToken.isNotBlank()) {
+          builder.header("Authorization", "Bearer $cleanToken")
         }
-        return@withContext Result.failure(Exception("خطأ في الاتصال بجيت هب (رمز: $code)."))
+        return builder.build()
       }
 
-      val bodyStr = response.body?.string()
-        ?: return@withContext Result.failure(Exception("استجابة فارغة من خادم جيت هب."))
+      var response = httpClient.newCall(buildGitHubRequest("https://api.github.com/repos/$owner/$repo/releases/latest")).execute()
+      var json: JSONObject? = null
 
-      val json = JSONObject(bodyStr)
-      val tagName = json.optString("tag_name", "v1.0")
-      val title = json.optString("name", tagName)
-      val notes = json.optString("body", "تحديث جديد لتطبيق AsserTV مع تحسينات في الأداء ومشغلات الفيديو.")
-      val publishedAt = json.optString("published_at", "")
+      if (response.isSuccessful) {
+        val bodyStr = response.body?.string() ?: ""
+        if (bodyStr.isNotBlank()) {
+          json = JSONObject(bodyStr)
+        }
+      } else {
+        // Fallback: check /releases list in case release wasn't marked "latest"
+        val listResp = httpClient.newCall(buildGitHubRequest("https://api.github.com/repos/$owner/$repo/releases")).execute()
+        if (listResp.isSuccessful) {
+          val arrStr = listResp.body?.string() ?: ""
+          val arr = if (arrStr.isNotBlank()) JSONArray(arrStr) else JSONArray()
+          if (arr.length() > 0) {
+            json = arr.getJSONObject(0)
+          }
+        } else if (listResp.code == 404) {
+          val privateHint = if (cleanToken.isBlank()) {
+            "\n💡 ملاحظة هامة: إذا كان المستودع ($owner/$repo) خاصاً (Private 🔒)، يرجى إما تحويله إلى Public من إعدادات GitHub أو إدخال رمز (GitHub Token) في خانة الإعدادات بالأسفل."
+          } else ""
+          return@withContext Result.failure(
+            Exception("لم يتم العثور على Release عام في ($owner/$repo).$privateHint")
+          )
+        } else {
+          return@withContext Result.failure(Exception("خطأ في الاتصال بجيت هب (رمز: ${listResp.code})."))
+        }
+      }
 
-      // Search for .apk asset
+      val releaseJson = json
+        ?: return@withContext Result.failure(Exception("لا توجد إصدارات (Releases) منشورة حالياً في ($owner/$repo)."))
+
+      val tagName = releaseJson.optString("tag_name", "v1.0")
+      val title = releaseJson.optString("name", tagName)
+      val notes = releaseJson.optString("body", "تحديث جديد لتطبيق Asser TV من قسم Releases.")
+      val publishedAt = releaseJson.optString("published_at", "")
+
       var apkUrl: String? = null
-      var apkName = "AsserTV_Update.apk"
+      var apkApiAssetUrl = ""
+      var apkName = "AsserTV.apk"
       var fileSize = -1L
 
-      val assets = json.optJSONArray("assets")
+      val assets = releaseJson.optJSONArray("assets")
       if (assets != null && assets.length() > 0) {
         for (i in 0 until assets.length()) {
           val asset = assets.getJSONObject(i)
           val name = asset.optString("name", "")
           val downloadUrl = asset.optString("browser_download_url", "")
+          val apiAssetUrl = asset.optString("url", "")
           if (name.endsWith(".apk", ignoreCase = true) || downloadUrl.endsWith(".apk", ignoreCase = true)) {
             apkUrl = downloadUrl
+            apkApiAssetUrl = apiAssetUrl
             apkName = name
             fileSize = asset.optLong("size", -1L)
-            break
+            if (name.equals("AsserTV.apk", ignoreCase = true)) {
+              break
+            }
           }
         }
       }
@@ -132,12 +162,14 @@ class AppUpdateManager(private val context: Context) {
       }
 
       val isNewer = compareVersions(tagName, currentVersionName)
+      AppDiagnosticsLogger.log("AppUpdater", "Checked GitHub Release $owner/$repo: latest=$tagName, installed=$currentVersionName, isNewer=$isNewer")
 
       val info = UpdateReleaseInfo(
         tagName = tagName,
         title = title,
         releaseNotes = notes,
         apkDownloadUrl = apkUrl,
+        apkApiAssetUrl = apkApiAssetUrl,
         apkFileName = apkName,
         fileSizeBytes = fileSize,
         publishedAt = publishedAt,
@@ -146,24 +178,37 @@ class AppUpdateManager(private val context: Context) {
 
       Result.success(info)
     } catch (e: Exception) {
+      AppDiagnosticsLogger.log("AppUpdater", "Update check failed: ${e.message}", isError = true)
       Result.failure(Exception("فشل فحص التحديثات: ${e.localizedMessage ?: "تأكد من الاتصال بالإنترنت"}"))
     }
   }
 
   /**
    * Downloads the APK file to app external files or cache directory with progress reporting.
+   * Supports both public browser_download_url and authenticated GitHub API asset URLs for private repos.
    */
   suspend fun downloadApk(
     downloadUrl: String,
+    apiAssetUrl: String = "",
+    githubToken: String = "",
     onProgress: (progress: Float, downloadedMB: String, totalMB: String) -> Unit
   ): Result<File> = withContext(Dispatchers.IO) {
     try {
-      val request = Request.Builder()
-        .url(downloadUrl)
-        .header("User-Agent", "Mozilla/5.0 (Linux; Android) AsserTV-Downloader")
-        .build()
+      val cleanToken = githubToken.trim()
+      val useApiAsset = cleanToken.isNotBlank() && apiAssetUrl.isNotBlank()
+      val targetUrl = if (useApiAsset) apiAssetUrl else downloadUrl
 
-      val response = httpClient.newCall(request).execute()
+      val reqBuilder = Request.Builder()
+        .url(targetUrl)
+        .header("User-Agent", "Mozilla/5.0 (Linux; Android) AsserTV-Downloader")
+      if (useApiAsset) {
+        reqBuilder.header("Authorization", "Bearer $cleanToken")
+        reqBuilder.header("Accept", "application/octet-stream")
+      } else if (cleanToken.isNotBlank()) {
+        reqBuilder.header("Authorization", "Bearer $cleanToken")
+      }
+
+      val response = httpClient.newCall(reqBuilder.build()).execute()
       if (!response.isSuccessful) {
         return@withContext Result.failure(Exception("فشل تنزيل ملف التحديث (رمز الخطأ: ${response.code})."))
       }
@@ -173,7 +218,6 @@ class AppUpdateManager(private val context: Context) {
 
       val totalBytes = responseBody.contentLength()
 
-      // Target file location
       val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
         ?: context.cacheDir
 
@@ -230,7 +274,6 @@ class AppUpdateManager(private val context: Context) {
 
   /**
    * Prompts the Android OS package installer to install the APK file.
-   * Internal storage, SharedPreferences, continue watching, and bookmarks are 100% preserved.
    */
   fun installApk(apkFile: File): Result<Unit> {
     return try {
@@ -238,7 +281,6 @@ class AppUpdateManager(private val context: Context) {
         return Result.failure(Exception("ملف التحديث غير موجود أو فارغ."))
       }
 
-      // Check unknown apps installation permission for Android 8.0+ (Oreo)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         if (!context.packageManager.canRequestPackageInstalls()) {
           val permissionIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
@@ -289,7 +331,6 @@ class AppUpdateManager(private val context: Context) {
 
     if (cleanTag == cleanCurrent) return false
 
-    // Numeric comparison (e.g. 1.1 vs 1.0)
     try {
       val tagParts = cleanTag.split(".").map { it.filter { c -> c.isDigit() }.toIntOrNull() ?: 0 }
       val curParts = cleanCurrent.split(".").map { it.filter { c -> c.isDigit() }.toIntOrNull() ?: 0 }
@@ -303,7 +344,6 @@ class AppUpdateManager(private val context: Context) {
       }
     } catch (_: Exception) {}
 
-    // Fallback: If tag string is different, assume it's a newer release
     return cleanTag != cleanCurrent
   }
 }

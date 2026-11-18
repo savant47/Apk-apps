@@ -2,6 +2,7 @@ package com.example.data
 
 import android.util.Base64
 import com.example.model.CatalogMediaItem
+import com.example.model.DirectStreamResolution
 import com.example.model.ScrapedEpisodeItem
 import com.example.model.ScrapedSeasonItem
 import com.example.model.ScrapedSeriesStructure
@@ -10,6 +11,7 @@ import com.example.model.SearchResultItem
 import com.example.model.StreamingPortal
 import com.example.model.SubtitleItem
 import com.example.model.SubtitleSourceFilter
+import com.example.model.VideoQualityOption
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -32,7 +34,7 @@ class SearchAndSubtitlesService {
     .build()
 
   private val desktopUserAgent =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
   private val tmdbKey = "829a43a98259bc44cae297489c7e3bba"
 
@@ -1365,14 +1367,24 @@ class SearchAndSubtitlesService {
     val bestEmbedUrl = watchServers.firstOrNull { it.isDirectEmbed }?.embedUrl ?: normalizedWatchUrl
     var extractedDirectStream = ""
     var extractedStreamReferer = normalizedWatchUrl
+    var detectedQualities = emptyList<VideoQualityOption>()
 
-    // Proactively resolve direct .m3u8 / .mp4 stream URL from the scraped embed servers
-    // so the app's Native ExoPlayer launches immediately as the primary default player!
-    for (srv in watchServers.filter { it.isDirectEmbed }.take(5)) {
-      val direct = resolveDirectStreamFromEmbed(srv.embedUrl, normalizedWatchUrl)
-      if (direct.isNotBlank()) {
-        extractedDirectStream = direct
-        extractedStreamReferer = srv.embedUrl
+    AppDiagnosticsLogger.log(
+      "Scraper",
+      "Scraped ${seasons.size} seasons, ${episodes.size} episodes, ${watchServers.size} servers from $normalizedWatchUrl"
+    )
+
+    // Proactively resolve direct .m3u8 / .mp4 stream URL + real available video qualities from the scraped embed servers
+    for (srv in watchServers.filter { it.isDirectEmbed }.take(6)) {
+      val resolution = resolveDirectStreamFromEmbed(srv.embedUrl, normalizedWatchUrl)
+      if (resolution.primaryStreamUrl.isNotBlank()) {
+        extractedDirectStream = resolution.primaryStreamUrl
+        extractedStreamReferer = resolution.refererUrl.ifBlank { srv.embedUrl }
+        detectedQualities = resolution.detectedQualities
+        AppDiagnosticsLogger.log(
+          "StreamExtractor",
+          "Resolved direct stream from [${srv.name}]: ${resolution.primaryStreamUrl} | Qualities: ${detectedQualities.joinToString { it.label }}"
+        )
         break
       }
     }
@@ -1387,21 +1399,44 @@ class SearchAndSubtitlesService {
       watchServers = watchServers,
       bestCleanPlayerUrl = bestEmbedUrl,
       directStreamUrl = extractedDirectStream,
-      directStreamReferer = extractedStreamReferer
+      directStreamReferer = extractedStreamReferer,
+      detectedQualities = detectedQualities
     )
   }
 
   suspend fun extractDirectStreamFromServer(
     embedUrl: String,
-    refererUrl: String
-  ): String = withContext(Dispatchers.IO) {
-    resolveDirectStreamFromEmbed(embedUrl, refererUrl)
+    refererUrl: String,
+    userAgentOverride: String = desktopUserAgent
+  ): DirectStreamResolution = withContext(Dispatchers.IO) {
+    resolveDirectStreamFromEmbed(embedUrl, refererUrl, userAgentOverride)
   }
 
-  private fun resolveDirectStreamFromEmbed(embedUrl: String, refererUrl: String): String {
-    if (!embedUrl.startsWith("http")) return ""
+  suspend fun parseHlsQualitiesFromManifest(
+    m3u8Url: String,
+    refererUrl: String,
+    userAgentOverride: String = desktopUserAgent
+  ): List<VideoQualityOption> = withContext(Dispatchers.IO) {
+    fetchHlsMasterQualities(m3u8Url, refererUrl, userAgentOverride)
+  }
+
+  private fun resolveDirectStreamFromEmbed(
+    embedUrl: String,
+    refererUrl: String,
+    userAgentOverride: String = desktopUserAgent
+  ): DirectStreamResolution {
+    if (!embedUrl.startsWith("http")) return DirectStreamResolution()
     val lowerUrl = embedUrl.lowercase()
-    if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".mp4")) return embedUrl
+    if (lowerUrl.contains(".m3u8") || lowerUrl.contains(".mp4")) {
+      val hlsQuals = if (lowerUrl.contains(".m3u8")) {
+        fetchHlsMasterQualities(embedUrl, refererUrl, userAgentOverride)
+      } else emptyList()
+      return DirectStreamResolution(
+        primaryStreamUrl = embedUrl,
+        refererUrl = refererUrl,
+        detectedQualities = hlsQuals
+      )
+    }
     return try {
       val origin = try {
         val u = java.net.URI(refererUrl)
@@ -1409,31 +1444,95 @@ class SearchAndSubtitlesService {
       } catch (_: Exception) {
         "https://topcinema.io"
       }
-      val req = Request.Builder()
+      val cookieHeader = try {
+        android.webkit.CookieManager.getInstance()?.getCookie(embedUrl) ?: ""
+      } catch (_: Exception) { "" }
+
+      val reqBuilder = Request.Builder()
         .url(embedUrl)
-        .header("User-Agent", desktopUserAgent)
+        .header("User-Agent", userAgentOverride)
         .header("Referer", refererUrl.ifBlank { "$origin/" })
         .header("Sec-Fetch-Dest", "iframe")
         .header("Sec-Fetch-Mode", "navigate")
         .header("Sec-Fetch-Site", "cross-site")
         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        .build()
+      if (cookieHeader.isNotBlank()) {
+        reqBuilder.header("Cookie", cookieHeader)
+      }
 
-      val resp = httpClient.newCall(req).execute()
+      val resp = httpClient.newCall(reqBuilder.build()).execute()
       val html = resp.body?.string() ?: ""
-      if (html.isBlank() || html.contains("Embeds disabled", ignoreCase = true)) return ""
+      if (html.isBlank() || html.contains("Embeds disabled", ignoreCase = true)) {
+        AppDiagnosticsLogger.log("StreamExtractor", "Empty or disabled embed response from $embedUrl (HTTP ${resp.code})")
+        return DirectStreamResolution()
+      }
 
       val unpacked = unpackDeanEdwards(html)
       val combinedSource = "$unpacked\n$html".replace("\\/", "/")
 
+      val extractedQualities = mutableListOf<VideoQualityOption>()
+      val seenHeights = mutableSetOf<Int>()
+
+      // 1) Look for explicit multi-quality source objects: {file:"https://...", label:"720p"} or <source src="https://..." size="720">
+      val sourceObjMatcher = Pattern.compile(
+        "\\{[^{}]*(?:file|src)\\s*:\\s*[\"'](https?://[^\"'\\s<>\\\\]+)[\"'][^{}]*label\\s*:\\s*[\"']([^\"']+)[\"'][^{}]*\\}",
+        Pattern.CASE_INSENSITIVE
+      ).matcher(combinedSource)
+      while (sourceObjMatcher.find()) {
+        val fUrl = sourceObjMatcher.group(1)?.trim() ?: continue
+        val lbl = sourceObjMatcher.group(2)?.trim() ?: ""
+        val height = Regex("([0-9]{3,4})").find(lbl)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        if (height in listOf(144, 240, 360, 480, 720, 1080, 1440, 2160) && seenHeights.add(height)) {
+          extractedQualities.add(
+            VideoQualityOption(
+              id = height.toString(),
+              label = formatQualityBadge(height),
+              height = height,
+              streamUrl = fUrl
+            )
+          )
+        }
+      }
+
+      val htmlSourceTagMatcher = Pattern.compile(
+        "<source[^>]+src=[\"'](https?://[^\"'\\s<>\\\\]+)[\"'][^>]*>",
+        Pattern.CASE_INSENSITIVE
+      ).matcher(combinedSource)
+      while (htmlSourceTagMatcher.find()) {
+        val tag = htmlSourceTagMatcher.group(0) ?: continue
+        val fUrl = htmlSourceTagMatcher.group(1)?.trim() ?: continue
+        val sizeAttr = Regex("(?:size|label|res)=[\"']?([0-9]{3,4})", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        if (sizeAttr in listOf(144, 240, 360, 480, 720, 1080, 1440, 2160) && seenHeights.add(sizeAttr)) {
+          extractedQualities.add(
+            VideoQualityOption(
+              id = sizeAttr.toString(),
+              label = formatQualityBadge(sizeAttr),
+              height = sizeAttr,
+              streamUrl = fUrl
+            )
+          )
+        }
+      }
+
+      // 2) Find primary .m3u8 stream
       val m3u8Matcher = Pattern.compile(
         "(https?://[^\"'\\s<>\\\\]+\\.m3u8[^\"'\\s<>\\\\]*)",
         Pattern.CASE_INSENSITIVE
       ).matcher(combinedSource)
       if (m3u8Matcher.find()) {
-        return m3u8Matcher.group(1)?.trim() ?: ""
+        val m3u8Url = m3u8Matcher.group(1)?.trim() ?: ""
+        if (m3u8Url.isNotBlank()) {
+          val hlsQuals = fetchHlsMasterQualities(m3u8Url, embedUrl, userAgentOverride)
+          val allQuals = if (hlsQuals.isNotEmpty()) hlsQuals else buildQualityListWithAuto(extractedQualities)
+          return DirectStreamResolution(
+            primaryStreamUrl = m3u8Url,
+            refererUrl = embedUrl,
+            detectedQualities = allQuals
+          )
+        }
       }
 
+      // 3) Find primary .mp4 stream
       val mp4Matcher = Pattern.compile(
         "(https?://[^\"'\\s<>\\\\]+\\.mp4[^\"'\\s<>\\\\]*)",
         Pattern.CASE_INSENSITIVE
@@ -1441,21 +1540,143 @@ class SearchAndSubtitlesService {
       while (mp4Matcher.find()) {
         val candidate = mp4Matcher.group(1)?.trim() ?: ""
         if (!candidate.contains("trailer", ignoreCase = true) && !candidate.contains("blank", ignoreCase = true)) {
-          return candidate
+          return DirectStreamResolution(
+            primaryStreamUrl = candidate,
+            refererUrl = embedUrl,
+            detectedQualities = buildQualityListWithAuto(extractedQualities)
+          )
         }
       }
 
+      // 4) Fallback file/src property
       val filePropMatcher = Pattern.compile(
         "(?:file|src)\\s*:\\s*[\"'](https?://[^\"'\\s<>\\\\]+(?:/master|/index|\\.m3u8|\\.mp4|/v/|/stream/)[^\"'\\s<>\\\\]*)[\"']",
         Pattern.CASE_INSENSITIVE
       ).matcher(combinedSource)
       if (filePropMatcher.find()) {
-        return filePropMatcher.group(1)?.trim() ?: ""
+        val foundUrl = filePropMatcher.group(1)?.trim() ?: ""
+        if (foundUrl.isNotBlank()) {
+          val hlsQuals = if (foundUrl.contains(".m3u8", ignoreCase = true)) {
+            fetchHlsMasterQualities(foundUrl, embedUrl, userAgentOverride)
+          } else emptyList()
+          return DirectStreamResolution(
+            primaryStreamUrl = foundUrl,
+            refererUrl = embedUrl,
+            detectedQualities = if (hlsQuals.isNotEmpty()) hlsQuals else buildQualityListWithAuto(extractedQualities)
+          )
+        }
       }
 
-      ""
+      DirectStreamResolution()
+    } catch (e: Exception) {
+      AppDiagnosticsLogger.log("StreamExtractor", "Error extracting from $embedUrl: ${e.message}", isError = true)
+      DirectStreamResolution()
+    }
+  }
+
+  private fun fetchHlsMasterQualities(
+    m3u8Url: String,
+    refererUrl: String,
+    userAgentOverride: String
+  ): List<VideoQualityOption> {
+    return try {
+      val cookieHeader = try {
+        android.webkit.CookieManager.getInstance()?.getCookie(m3u8Url) ?: ""
+      } catch (_: Exception) { "" }
+
+      val reqBuilder = Request.Builder()
+        .url(m3u8Url)
+        .header("User-Agent", userAgentOverride)
+        .header("Referer", refererUrl)
+        .header("Accept", "*/*")
+      if (cookieHeader.isNotBlank()) {
+        reqBuilder.header("Cookie", cookieHeader)
+      }
+
+      val resp = httpClient.newCall(reqBuilder.build()).execute()
+      if (!resp.isSuccessful) {
+        AppDiagnosticsLogger.log(
+          "HLSParser",
+          "Master playlist HTTP ${resp.code} for $m3u8Url (Referer: $refererUrl)",
+          isError = true
+        )
+        return emptyList()
+      }
+      val manifest = resp.body?.string() ?: ""
+      if (!manifest.contains("#EXTM3U")) return emptyList()
+
+      val qualities = mutableListOf<VideoQualityOption>()
+      val seenHeights = mutableSetOf<Int>()
+      val lines = manifest.lines()
+      for (i in lines.indices) {
+        val line = lines[i].trim()
+        if (line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) {
+          val resMatch = Regex("RESOLUTION=\\d+x(\\d+)", RegexOption.IGNORE_CASE).find(line)
+          val nameMatch = Regex("NAME=\"?([0-9]{3,4})p?\"?", RegexOption.IGNORE_CASE).find(line)
+          val height = resMatch?.groupValues?.get(1)?.toIntOrNull()
+            ?: nameMatch?.groupValues?.get(1)?.toIntOrNull()
+            ?: 0
+
+          var variantUrl = ""
+          for (j in (i + 1) until minOf(i + 4, lines.size)) {
+            val nextLine = lines[j].trim()
+            if (nextLine.isNotBlank() && !nextLine.startsWith("#")) {
+              variantUrl = resolveManifestVariantUrl(m3u8Url, nextLine)
+              break
+            }
+          }
+
+          if (height > 0 && seenHeights.add(height)) {
+            qualities.add(
+              VideoQualityOption(
+                id = height.toString(),
+                label = formatQualityBadge(height),
+                height = height,
+                streamUrl = variantUrl
+              )
+            )
+          }
+        }
+      }
+
+      buildQualityListWithAuto(qualities)
+    } catch (_: Exception) {
+      emptyList()
+    }
+  }
+
+  private fun resolveManifestVariantUrl(masterUrl: String, variantLine: String): String {
+    if (variantLine.startsWith("http://") || variantLine.startsWith("https://")) return variantLine
+    return try {
+      val baseUri = java.net.URI(masterUrl)
+      baseUri.resolve(variantLine).toString()
     } catch (_: Exception) {
       ""
+    }
+  }
+
+  private fun buildQualityListWithAuto(detected: List<VideoQualityOption>): List<VideoQualityOption> {
+    if (detected.isEmpty()) return emptyList()
+    val sorted = detected.sortedByDescending { it.height }
+    val result = mutableListOf(
+      VideoQualityOption(
+        id = "auto",
+        label = "تلقائي Auto (${sorted.first().height}p)",
+        height = 0,
+        streamUrl = "",
+        isAuto = true
+      )
+    )
+    result.addAll(sorted)
+    return result
+  }
+
+  private fun formatQualityBadge(height: Int): String {
+    return when {
+      height >= 1080 -> "${height}p FHD"
+      height >= 720 -> "${height}p HD"
+      height >= 480 -> "${height}p SD"
+      else -> "${height}p توفير"
     }
   }
 
@@ -1467,20 +1688,25 @@ class SearchAndSubtitlesService {
       )
       val matcher = packerPattern.matcher(html)
       val sb = StringBuilder()
+      val wordRegex = Regex("\\b[0-9a-zA-Z]+\\b")
       while (matcher.find()) {
-        var payload = matcher.group(1) ?: continue
+        val payload = matcher.group(1) ?: continue
         val radix = matcher.group(2)?.toIntOrNull() ?: 36
         val count = matcher.group(3)?.toIntOrNull() ?: 0
         val symtab = (matcher.group(4) ?: "").split("|")
         if (radix in 2..62 && count > 0 && symtab.isNotEmpty()) {
-          for (i in minOf(count, symtab.size) - 1 downTo 0) {
-            val replacement = symtab[i]
-            if (replacement.isNotEmpty()) {
-              val token = encodeBase62(i, radix)
-              payload = payload.replace(Regex("\\b${Regex.escape(token)}\\b"), replacement)
+          // Single-pass token replacement so already-replaced URLs are NEVER corrupted by subsequent tokens!
+          val unpackedPayload = wordRegex.replace(payload) { matchResult ->
+            val token = matchResult.value
+            val index = decodeBase62(token, radix)
+            if (index in 0 until minOf(count, symtab.size)) {
+              val replacement = symtab[index]
+              if (replacement.isNotEmpty()) replacement else token
+            } else {
+              token
             }
           }
-          sb.append(payload).append("\n")
+          sb.append(unpackedPayload).append("\n")
         }
       }
       sb.toString()
@@ -1489,12 +1715,20 @@ class SearchAndSubtitlesService {
     }
   }
 
-  private fun encodeBase62(value: Int, radix: Int): String {
-    val chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    if (value < radix) {
-      return if (value < 36) value.toString(radix) else chars[value].toString()
+  private fun decodeBase62(token: String, radix: Int): Int {
+    if (token.isEmpty()) return -1
+    var result = 0
+    for (ch in token) {
+      val digit = when (ch) {
+        in '0'..'9' -> ch - '0'
+        in 'a'..'z' -> ch - 'a' + 10
+        in 'A'..'Z' -> ch - 'A' + 36
+        else -> return -1
+      }
+      if (digit >= radix) return -1
+      result = result * radix + digit
     }
-    return encodeBase62(value / radix, radix) + encodeBase62(value % radix, radix)
+    return result
   }
 
   private fun extractSeasonNumberFromText(text: String): Int? {

@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.view.KeyEvent
@@ -18,7 +19,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -34,20 +34,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -69,18 +69,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.example.data.AppDiagnosticsLogger
 import com.example.data.AppDisplayMode
 import com.example.data.SearchAndSubtitlesService
 import com.example.data.TvPreferencesRepository
 import com.example.model.AppMainTab
 import com.example.model.ControlMode
-import com.example.model.ScrapedEpisodeItem
-import com.example.model.ScrapedSeasonItem
 import com.example.model.ScrapedSeriesStructure
-import com.example.model.ScrapedWatchServer
 import com.example.model.SearchResultItem
 import com.example.model.StreamingPortal
 import com.example.model.SubtitleItem
+import com.example.model.VideoQualityOption
 import com.example.tv.TvKeyHandler
 import com.example.tv.TvPlayerBridge
 import com.example.tv.TvWebChromeClient
@@ -89,13 +91,11 @@ import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
 import com.example.ui.theme.CinemaPrimary
+import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSurface
-import com.example.ui.theme.CinemaSurfaceVariant
 import com.example.ui.theme.ClipboxWhite
 import kotlinx.coroutines.launch
 import org.json.JSONArray
-import org.json.JSONObject
-import org.json.JSONTokener
 
 interface KeyEventProvider {
   fun setKeyEventCallback(callback: ActivityKeyEventCallback?)
@@ -127,7 +127,10 @@ fun MainScreen(
   var showSubtitlesDialog by remember { mutableStateOf(false) }
   var showQualityDialog by remember { mutableStateOf(false) }
   var showUpdateDialog by remember { mutableStateOf(false) }
+  var showDiagnosticsDialog by remember { mutableStateOf(false) }
+
   var currentVideoQuality by remember { mutableStateOf("auto") }
+  var detectedVideoQualities by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
   var isHomeActive by remember { mutableStateOf(true) }
   var selectedMainTab by remember { mutableStateOf(AppMainTab.BROWSER) }
   var isGeneralBrowserSession by remember { mutableStateOf(true) }
@@ -145,7 +148,7 @@ fun MainScreen(
   var activePortal by remember { mutableStateOf(repository.getActivePortal()) }
   var controlMode by remember { mutableStateOf(repository.getControlMode()) }
 
-  // Web State
+  // Web & Player State
   var isBarVisible by remember { mutableStateOf(true) }
   var isFullscreenVideo by remember { mutableStateOf(false) }
   var loadingProgress by remember { mutableIntStateOf(0) }
@@ -154,6 +157,7 @@ fun MainScreen(
     mutableStateOf(activePortal.homeUrl.replace("topcinema.site", "topcinema.io"))
   }
   var activeWatchPageUrl by remember { mutableStateOf("") }
+  var activeEmbedRefererUrl by remember { mutableStateOf("") }
   var isCurrentUrlDirectEmbed by remember { mutableStateOf(false) }
 
   // Virtual Mouse Coordinates
@@ -175,7 +179,33 @@ fun MainScreen(
   var detectedVideoHeaders by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
   var playNativeVideoUrl by remember { mutableStateOf<String?>(null) }
   var preferNativePlayer by remember { mutableStateOf(true) }
+  var userManuallyDismissedNativePlayer by remember { mutableStateOf(false) }
   var activeSubtitleItem by remember { mutableStateOf<SubtitleItem?>(null) }
+
+  // Keep AppDiagnosticsLogger live summary synchronized
+  LaunchedEffect(
+    activePortal,
+    activeWatchPageUrl,
+    currentUrl,
+    playNativeVideoUrl,
+    detectedVideoUrl,
+    activeEmbedRefererUrl,
+    detectedVideoQualities,
+    currentVideoQuality
+  ) {
+    AppDiagnosticsLogger.activePortalName = activePortal.displayNameArabic
+    AppDiagnosticsLogger.activeWatchUrl = activeWatchPageUrl.ifBlank { currentUrl }
+    AppDiagnosticsLogger.currentWebViewUrl = currentUrl
+    AppDiagnosticsLogger.activePlayerMode =
+      if (playNativeVideoUrl != null) "المشغل الأساسي للتطبيق (Native ExoPlayer)"
+      else "مشغل السيرفر المدمج (WebView)"
+    AppDiagnosticsLogger.extractedStreamUrl = detectedVideoUrl ?: ""
+    AppDiagnosticsLogger.streamReferer = activeEmbedRefererUrl.ifBlank { currentUrl }
+    AppDiagnosticsLogger.detectedQualitiesSummary =
+      if (detectedVideoQualities.isEmpty()) "تلقائي فقط (لم يتم رصد جودات فرعية بعد)"
+      else detectedVideoQualities.joinToString(" , ") { it.label }
+    AppDiagnosticsLogger.selectedQualityId = currentVideoQuality
+  }
 
   val cleanAndroidChromeUa = remember(context) {
     try {
@@ -186,11 +216,63 @@ fun MainScreen(
       "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
     }
   }
+  // Unified Desktop Chrome 128 User-Agent used across Scraper, WebView Embeds, and NativeTvExoPlayer
+  // so IP + UA bound .m3u8 tokens (VidTube / StreamWish / VidShare) never fail with HTTP 403!
   val desktopChromeUa =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-  fun applyVideoQualityInPlayer(qualityId: String, qualityLabel: String) {
+  fun mergeDetectedQualities(newOptions: List<VideoQualityOption>) {
+    if (newOptions.isEmpty()) return
+    val merged = mutableListOf<VideoQualityOption>()
+    merged.add(VideoQualityOption(id = "auto", label = "تلقائي (Auto)", height = 0))
+    val combined = (newOptions + detectedVideoQualities)
+      .filter { it.id != "auto" && it.height > 0 }
+      .distinctBy { it.height }
+      .sortedByDescending { it.height }
+    merged.addAll(combined)
+    detectedVideoQualities = merged
+  }
+
+  fun toggleVideoFullscreen(enable: Boolean) {
+    isFullscreenVideo = enable
+    isBarVisible = !enable
+    if (!enable) {
+      isWatchSidePanelOpen = true
+    }
+
+    activity?.let { act ->
+      val window = act.window
+      val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+      insetsController.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      if (enable) {
+        insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+      } else {
+        insetsController.show(WindowInsetsCompat.Type.systemBars())
+        if (displayMode == AppDisplayMode.TV) {
+          act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+          act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+      }
+    }
+
+    AppDiagnosticsLogger.log("PLAYER", "تبديل وضع ملء الشاشة للفيديو: fullscreen=$enable")
+  }
+
+  fun applyVideoQualityInPlayer(qualityId: String, qualityLabel: String, directVariantUrl: String = "") {
     currentVideoQuality = qualityId
+    AppDiagnosticsLogger.selectedQualityId = qualityId
+    AppDiagnosticsLogger.log("QUALITY", "اختيار الجودة: $qualityLabel (id=$qualityId) | url=$directVariantUrl")
+
+    // If the quality option has its own direct MP4 file URL and Native Player is active:
+    if (directVariantUrl.startsWith("http") && playNativeVideoUrl != null && qualityId != "auto") {
+      if (directVariantUrl.contains(".mp4", ignoreCase = true) && directVariantUrl != playNativeVideoUrl) {
+        playNativeVideoUrl = directVariantUrl
+      }
+    }
+
     val js = """
       (function() {
         var qId = '$qualityId';
@@ -199,14 +281,35 @@ fun MainScreen(
           var matched = false;
           try {
             if (typeof win.jwplayer === 'function' && win.jwplayer().setCurrentQuality) {
-              var levels = win.jwplayer().getQualityLevels();
-              for (var i = 0; i < levels.length; i++) {
-                var lbl = (levels[i].label || '').toLowerCase();
-                var h = levels[i].height ? levels[i].height.toString() : '';
-                if (qId === 'auto' || lbl.indexOf(qId) !== -1 || h === qId) {
-                  win.jwplayer().setCurrentQuality(i);
-                  matched = true;
-                  break;
+              var levels = win.jwplayer().getQualityLevels() || [];
+              if (qId === 'auto') {
+                win.jwplayer().setCurrentQuality(0);
+                matched = true;
+              } else {
+                for (var i = 0; i < levels.length; i++) {
+                  var lbl = (levels[i].label || '').toLowerCase();
+                  var h = levels[i].height ? levels[i].height.toString() : '';
+                  if (lbl.indexOf(qId) !== -1 || h === qId) {
+                    win.jwplayer().setCurrentQuality(i);
+                    matched = true;
+                    break;
+                  }
+                }
+              }
+            }
+          } catch(e) {}
+          try {
+            if (win.hls && win.hls.levels) {
+              if (qId === 'auto') {
+                win.hls.currentLevel = -1;
+                matched = true;
+              } else {
+                for (var k = 0; k < win.hls.levels.length; k++) {
+                  if (win.hls.levels[k].height && win.hls.levels[k].height.toString() === qId) {
+                    win.hls.currentLevel = k;
+                    matched = true;
+                    break;
+                  }
                 }
               }
             }
@@ -244,6 +347,45 @@ fun MainScreen(
     Toast.makeText(context, "تم تفعيل جودة العرض: $qualityLabel", Toast.LENGTH_SHORT).show()
   }
 
+  fun onStreamUrlIntercepted(url: String, headers: Map<String, String>, sourceTag: String) {
+    if (!url.startsWith("http")) return
+    val lower = url.lowercase()
+    if ((lower.contains(".ts") || lower.contains(".m4s")) && detectedVideoUrl?.contains(".m3u8") == true) {
+      return
+    }
+    if (url == detectedVideoUrl && playNativeVideoUrl != null) return
+
+    AppDiagnosticsLogger.log("STREAM", "التقاط رابط فيديو مباشر ($sourceTag): $url")
+    detectedVideoUrl = url
+    if (headers.isNotEmpty()) {
+      detectedVideoHeaders = headers
+    }
+
+    val effectiveReferer = headers["Referer"]
+      ?: headers["referer"]
+      ?: activeEmbedRefererUrl.ifBlank { currentUrl.ifBlank { activeWatchPageUrl } }
+
+    if (lower.contains(".m3u8")) {
+      scope.launch {
+        val hlsQualities = searchService.parseHlsQualitiesFromManifest(url, effectiveReferer)
+        if (hlsQualities.isNotEmpty()) {
+          mergeDetectedQualities(hlsQualities)
+        }
+      }
+    }
+
+    if (!isGeneralBrowserSession && (preferNativePlayer || !userManuallyDismissedNativePlayer)) {
+      preferNativePlayer = true
+      webViewRef?.post {
+        webViewRef?.evaluateJavascript(
+          "(function() { document.querySelectorAll('video').forEach(function(v) { v.pause(); }); })()",
+          null
+        )
+      }
+      playNativeVideoUrl = url
+    }
+  }
+
   fun loadServerIntoWebView(
     targetWebView: WebView?,
     targetServerUrl: String,
@@ -255,6 +397,7 @@ fun MainScreen(
       .replace("topcinema.site", "topcinema.io")
       .replace("video.php?vid=", "play.php?vid=")
     currentUrl = cleanTargetUrl
+    activeEmbedRefererUrl = cleanTargetUrl
     isCurrentUrlDirectEmbed = isDirectEmbed
     if (resetNativePlayer) {
       playNativeVideoUrl = null
@@ -262,6 +405,8 @@ fun MainScreen(
     }
 
     val wv = targetWebView ?: return
+    wv.settings.userAgentString = desktopChromeUa
+
     val refererPage = portalRefererPageUrl
       .replace("topcinema.site", "topcinema.io")
       .replace("video.php?vid=", "play.php?vid=")
@@ -273,6 +418,11 @@ fun MainScreen(
       "https://topcinema.io/"
     }
 
+    AppDiagnosticsLogger.log(
+      "WEBVIEW",
+      "تحميل سيرفر المشاهدة (directEmbed=$isDirectEmbed) | URL=$cleanTargetUrl | Referer=$refererOrigin"
+    )
+
     val lowerTarget = cleanTargetUrl.lowercase()
     val isStandaloneGlobalEmbed = lowerTarget.contains("vidlink.") ||
         lowerTarget.contains("vidsrc.") ||
@@ -281,8 +431,6 @@ fun MainScreen(
         lowerTarget.contains("multiembed.")
 
     if (isDirectEmbed && !isStandaloneGlobalEmbed) {
-      // Portal CDN embeds (VidTube, VidShare, Uqload, StreamWish, Lulustream, Mixdrop) check window.self !== window.top.
-      // Use position: fixed + 100vw/100vh so the iframe NEVER collapses to 0px when useWideViewPort = true!
       val cleanIframeHtml = """
         <!DOCTYPE html>
         <html>
@@ -350,6 +498,10 @@ fun MainScreen(
     autoLoadBestEmbed: Boolean = false
   ) {
     isScrapingSeries = true
+    detectedVideoQualities = emptyList()
+    currentVideoQuality = "auto"
+    userManuallyDismissedNativePlayer = false
+
     scope.launch {
       val scraped = searchService.scrapeSeasonsAndEpisodes(
         pageUrl = targetUrl,
@@ -360,14 +512,22 @@ fun MainScreen(
       seriesStructure = scraped
       isScrapingSeries = false
 
+      if (scraped.detectedQualities.isNotEmpty()) {
+        mergeDetectedQualities(scraped.detectedQualities)
+      }
+
       val resolvedPortalWatchUrl = scraped.watchServers.firstOrNull { !it.isDirectEmbed }?.embedUrl ?: targetUrl
       activeWatchPageUrl = resolvedPortalWatchUrl
 
       // If the scraper resolved a direct .m3u8 / .mp4 stream URL, launch NativeTvExoPlayer immediately by default!
       if (scraped.directStreamUrl.isNotBlank()) {
+        val streamReferer = scraped.directStreamReferer.ifBlank {
+          scraped.bestCleanPlayerUrl.ifBlank { resolvedPortalWatchUrl }
+        }
+        activeEmbedRefererUrl = streamReferer
         detectedVideoUrl = scraped.directStreamUrl
         detectedVideoHeaders = mapOf(
-          "Referer" to scraped.directStreamReferer.ifBlank { resolvedPortalWatchUrl },
+          "Referer" to streamReferer,
           "User-Agent" to desktopChromeUa
         )
         if (preferNativePlayer) {
@@ -379,6 +539,7 @@ fun MainScreen(
       if (autoLoadBestEmbed && scraped.bestCleanPlayerUrl.isNotBlank()) {
         val bestServer = scraped.watchServers.firstOrNull { it.embedUrl == scraped.bestCleanPlayerUrl }
         val isDirect = bestServer?.isDirectEmbed ?: (scraped.bestCleanPlayerUrl != resolvedPortalWatchUrl)
+        AppDiagnosticsLogger.activeServerName = bestServer?.name ?: "تلقائي"
         loadServerIntoWebView(
           targetWebView = webViewRef,
           targetServerUrl = scraped.bestCleanPlayerUrl,
@@ -413,11 +574,15 @@ fun MainScreen(
 
     currentUrl = cleanUrl
     activeWatchPageUrl = cleanUrl
+    activeEmbedRefererUrl = cleanUrl
     isCurrentUrlDirectEmbed = false
     isGeneralBrowserSession = isGeneralBrowser
     preferNativePlayer = !isGeneralBrowser
+    userManuallyDismissedNativePlayer = false
     detectedVideoUrl = null
     detectedVideoHeaders = emptyMap()
+    detectedVideoQualities = emptyList()
+    currentVideoQuality = "auto"
     playNativeVideoUrl = null
     if (title != null) pageTitle = title
     if (portal != null) {
@@ -425,7 +590,7 @@ fun MainScreen(
       repository.setActivePortal(portal)
     }
     isHomeActive = false
-    val useAndroidUa = isGeneralBrowser || cleanUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE
+    val useAndroidUa = isGeneralBrowser && (cleanUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE)
     webViewRef?.settings?.userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
     webViewRef?.loadUrl(cleanUrl, mapOf("Referer" to targetPortal.homeUrl))
 
@@ -458,14 +623,20 @@ fun MainScreen(
         isBarVisible = !isBarVisible
       },
       onToggleFullscreen = {
-        isBarVisible = !isBarVisible
+        toggleVideoFullscreen(!isFullscreenVideo)
       },
       onCursorMoved = { x, y ->
         cursorX = x
         cursorY = y
       },
       onBackHandled = {
-        if (showDisplayModeDialog) {
+        if (showDiagnosticsDialog) {
+          showDiagnosticsDialog = false
+          true
+        } else if (showUpdateDialog) {
+          showUpdateDialog = false
+          true
+        } else if (showDisplayModeDialog) {
           showDisplayModeDialog = false
           true
         } else if (showAdBlockDialog) {
@@ -485,6 +656,9 @@ fun MainScreen(
           true
         } else if (showQualityDialog) {
           showQualityDialog = false
+          true
+        } else if (isFullscreenVideo) {
+          toggleVideoFullscreen(false)
           true
         } else if (webChromeClientRef?.isCustomViewShowing() == true) {
           webChromeClientRef?.onHideCustomView()
@@ -522,7 +696,11 @@ fun MainScreen(
   }
 
   BackHandler {
-    if (showDisplayModeDialog) {
+    if (showDiagnosticsDialog) {
+      showDiagnosticsDialog = false
+    } else if (showUpdateDialog) {
+      showUpdateDialog = false
+    } else if (showDisplayModeDialog) {
       showDisplayModeDialog = false
     } else if (showFavoritesDialog) {
       showFavoritesDialog = false
@@ -534,6 +712,8 @@ fun MainScreen(
       showSubtitlesDialog = false
     } else if (showQualityDialog) {
       showQualityDialog = false
+    } else if (isFullscreenVideo) {
+      toggleVideoFullscreen(false)
     } else if (webChromeClientRef?.isCustomViewShowing() == true) {
       webChromeClientRef?.onHideCustomView()
     } else if (!isHomeActive) {
@@ -559,7 +739,6 @@ fun MainScreen(
     topBar = {
       if (!isHomeActive && isBarVisible && !isFullscreenVideo) {
         if (isGeneralBrowserSession) {
-          // General Browser Omnibox Top Bar (only for Asser Browser / Google web browsing)
           TvTopBar(
             activePortal = activePortal,
             currentUrl = currentUrl,
@@ -612,7 +791,7 @@ fun MainScreen(
               }
             },
             onToggleFullscreen = {
-              isBarVisible = !isBarVisible
+              toggleVideoFullscreen(!isFullscreenVideo)
             },
             onOpenGuide = { showGuideDialog = true },
             onOpenAdBlockSettings = { showAdBlockDialog = true },
@@ -622,7 +801,7 @@ fun MainScreen(
             modifier = if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding() else Modifier
           )
         } else {
-          // Clean Clipbox Theater Player Top Bar for Asser TV (No website URL bar or browser clutter!)
+          // Clean Clipbox Theater Player Top Bar for Asser TV
           Surface(
             color = CinemaDarkBackground,
             border = BorderStroke(1.dp, CinemaBorder),
@@ -684,8 +863,9 @@ fun MainScreen(
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
+                val qBadge = if (currentVideoQuality == "auto") "تلقائي" else "${currentVideoQuality}p"
                 Text(
-                  text = "المصدر: ${activePortal.displayNameArabic} • الجودة: ${currentVideoQuality.uppercase()}",
+                  text = "المصدر: ${activePortal.displayNameArabic} • الجودة: $qBadge",
                   color = CinemaAccent,
                   fontSize = 10.sp,
                   maxLines = 1,
@@ -693,17 +873,49 @@ fun MainScreen(
                 )
               }
 
-              Spacer(modifier = Modifier.width(8.dp))
+              Spacer(modifier = Modifier.width(6.dp))
 
-              // Quick Subtitles & Toggle Side Panel Controls
+              // Quick Diagnostics, Update, Subtitles, Side Panel & Fullscreen Controls
               Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 IconButton(
+                  onClick = { showDiagnosticsDialog = true },
+                  modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(CinemaSurface)
+                    .testTag("btn_top_diagnostics_log")
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.BugReport,
+                    contentDescription = "سجل الأعطال واللوج",
+                    tint = CinemaSecondary,
+                    modifier = Modifier.size(17.dp)
+                  )
+                }
+
+                IconButton(
+                  onClick = { showUpdateDialog = true },
+                  modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(CinemaSurface)
+                    .testTag("btn_top_github_update")
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.SystemUpdate,
+                    contentDescription = "التحديث الداخلي من جيت هب",
+                    tint = CinemaAccent,
+                    modifier = Modifier.size(17.dp)
+                  )
+                }
+
+                IconButton(
                   onClick = { showSubtitlesDialog = true },
                   modifier = Modifier
-                    .size(36.dp)
+                    .size(34.dp)
                     .clip(CircleShape)
                     .background(CinemaSurface)
                 ) {
@@ -711,14 +923,14 @@ fun MainScreen(
                     imageVector = Icons.Default.Subtitles,
                     contentDescription = "الترجمة",
                     tint = CinemaAccent,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(17.dp)
                   )
                 }
 
                 IconButton(
                   onClick = { isWatchSidePanelOpen = !isWatchSidePanelOpen },
                   modifier = Modifier
-                    .size(36.dp)
+                    .size(34.dp)
                     .clip(CircleShape)
                     .background(if (isWatchSidePanelOpen) ClipboxWhite else CinemaSurface)
                 ) {
@@ -726,23 +938,23 @@ fun MainScreen(
                     imageVector = Icons.Default.VideoLibrary,
                     contentDescription = "إظهار/إخفاء لوحة المصادر والحلقات",
                     tint = if (isWatchSidePanelOpen) Color.Black else Color.White,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(17.dp)
                   )
                 }
 
                 IconButton(
                   onClick = {
-                    isFullscreenVideo = true
-                    isBarVisible = false
+                    toggleVideoFullscreen(true)
                   },
                   modifier = Modifier
-                    .size(36.dp)
+                    .size(34.dp)
                     .clip(CircleShape)
                     .background(CinemaSurface)
+                    .testTag("btn_top_video_fullscreen")
                 ) {
                   Icon(
                     imageVector = Icons.Default.Fullscreen,
-                    contentDescription = "ملء الشاشة",
+                    contentDescription = "ملء شاشة الفيديو",
                     tint = Color.White,
                     modifier = Modifier.size(18.dp)
                   )
@@ -754,7 +966,6 @@ fun MainScreen(
       }
     },
     bottomBar = {
-      // Only show bottom browser bar when on Home or inside General Browser session
       if (isBarVisible && !isFullscreenVideo && (isHomeActive || isGeneralBrowserSession)) {
         TvNavBar(
           activePortal = activePortal,
@@ -810,7 +1021,9 @@ fun MainScreen(
           onOpenDisplayMode = { showDisplayModeDialog = true },
           onOpenBookmarks = { showFavoritesDialog = true },
           onOpenHistory = { showHistoryDialog = true },
-          onOpenAdBlock = { showAdBlockDialog = true }
+          onOpenAdBlock = { showAdBlockDialog = true },
+          onOpenUpdate = { showUpdateDialog = true },
+          onOpenDiagnostics = { showDiagnosticsDialog = true }
         )
 
         if (selectedMainTab == AppMainTab.BROWSER) {
@@ -891,7 +1104,6 @@ fun MainScreen(
                   )
 
                   setBackgroundColor(android.graphics.Color.BLACK)
-                  // Keep standard hardware-accelerated rendering enabled so HTML5 <video> and <iframe> video surfaces render properly
                   setLayerType(View.LAYER_TYPE_NONE, null)
 
                   isClickable = true
@@ -935,7 +1147,7 @@ fun MainScreen(
                       safeBrowsingEnabled = false
                     }
 
-                    val useAndroidUa = isGeneralBrowserSession || currentUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE
+                    val useAndroidUa = isGeneralBrowserSession && (currentUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE)
                     userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
                   }
 
@@ -945,16 +1157,43 @@ fun MainScreen(
                       onVideoTimeUpdate = { _, _ -> },
                       onCenterClickFiltered = { _, _ -> },
                       onVideoDetected = { url ->
-                        if (url.startsWith("http") && url != detectedVideoUrl) {
-                          detectedVideoUrl = url
-                          if (!isGeneralBrowserSession && preferNativePlayer) {
-                            post {
-                              evaluateJavascript(
-                                "(function() { document.querySelectorAll('video').forEach(function(v) { v.pause(); }); })()",
-                                null
+                        post {
+                          onStreamUrlIntercepted(
+                            url = url,
+                            headers = mapOf(
+                              "Referer" to activeEmbedRefererUrl.ifBlank { currentUrl },
+                              "User-Agent" to desktopChromeUa
+                            ),
+                            sourceTag = "JS-Bridge"
+                          )
+                        }
+                      },
+                      onQualitiesDetected = { jsonStr ->
+                        post {
+                          try {
+                            val arr = JSONArray(jsonStr)
+                            val list = mutableListOf<VideoQualityOption>()
+                            for (i in 0 until arr.length()) {
+                              val obj = arr.optJSONObject(i) ?: continue
+                              val h = obj.optInt("height", 0)
+                              if (h in 140..4320) {
+                                list.add(
+                                  VideoQualityOption(
+                                    id = h.toString(),
+                                    label = obj.optString("label").ifBlank { "${h}p" },
+                                    height = h
+                                  )
+                                )
+                              }
+                            }
+                            if (list.isNotEmpty()) {
+                              mergeDetectedQualities(list)
+                              AppDiagnosticsLogger.log(
+                                "QUALITY",
+                                "تم التقاط الجودات من مشغل الويب: ${list.joinToString { it.label }}"
                               )
                             }
-                            playNativeVideoUrl = url
+                          } catch (_: Exception) {
                           }
                         }
                       }
@@ -968,8 +1207,7 @@ fun MainScreen(
                   val chromeClient = TvWebChromeClient(
                     fullscreenContainer = fsContainer,
                     onFullscreenChanged = { isFs ->
-                      isFullscreenVideo = isFs
-                      isBarVisible = !isFs
+                      toggleVideoFullscreen(isFs)
                     },
                     onProgressUpdate = { p -> loadingProgress = p },
                     onTitleUpdate = { t ->
@@ -998,21 +1236,15 @@ fun MainScreen(
                       webViewRecreateKey++
                     },
                     onAdBlockedCallback = { blockedHostOrUrl ->
-                      Toast.makeText(context, "🚫 تم منع إعلان منبثق ($blockedHostOrUrl)", Toast.LENGTH_SHORT).show()
+                      AppDiagnosticsLogger.log("ADBLOCK", "منع إعلان: $blockedHostOrUrl")
                     },
                     onVideoDetectedCallback = { url, headers ->
-                      if (url.startsWith("http") && url != detectedVideoUrl) {
-                        detectedVideoUrl = url
-                        detectedVideoHeaders = headers
-                        if (!isGeneralBrowserSession && preferNativePlayer) {
-                          post {
-                            evaluateJavascript(
-                              "(function() { document.querySelectorAll('video').forEach(function(v) { v.pause(); }); })()",
-                              null
-                            )
-                          }
-                          playNativeVideoUrl = url
-                        }
+                      post {
+                        onStreamUrlIntercepted(
+                          url = url,
+                          headers = headers,
+                          sourceTag = "WebView-Interceptor"
+                        )
                       }
                     }
                   )
@@ -1052,45 +1284,6 @@ fun MainScreen(
             )
           }
 
-          // Floating Toggle Button when Top Bar or Side Panel is hidden
-          if (!isGeneralBrowserSession && !isFullscreenVideo && (!isWatchSidePanelOpen || !isBarVisible)) {
-            Surface(
-              onClick = {
-                isBarVisible = true
-                isWatchSidePanelOpen = true
-              },
-              color = CinemaPrimary.copy(alpha = 0.92f),
-              shape = RoundedCornerShape(50),
-              border = BorderStroke(1.dp, ClipboxWhite.copy(alpha = 0.6f)),
-              modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(12.dp)
-                .testTag("btn_open_watch_side_panel")
-            ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-              ) {
-                Icon(
-                  imageVector = Icons.Default.VideoLibrary,
-                  contentDescription = null,
-                  tint = Color.White,
-                  modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = "السيرفرات والحلقات والجودة",
-                  color = Color.White,
-                  fontSize = 11.sp,
-                  fontWeight = FontWeight.ExtraBold,
-                  maxLines = 1,
-                  softWrap = false
-                )
-              }
-            }
-          }
-
-          // Floating Direct Stream Banner (shown if user temporarily switched to Web player and wants to return to Primary Native Player)
           val isSocialOrSearchFeed = currentUrl.contains("facebook.com") ||
               currentUrl.contains("google.com") ||
               currentUrl.contains("instagram.com") ||
@@ -1099,102 +1292,150 @@ fun MainScreen(
               !isSocialOrSearchFeed &&
               (playNativeVideoUrl != null || (preferNativePlayer && isScrapingSeries))
 
-          if (detectedVideoUrl != null && !showPrimaryNativePlayer && !isSocialOrSearchFeed) {
-            Box(
+          // Floating Top-Left Video Fullscreen & Diagnostics Controls when using Embedded WebView Player
+          // (Placed at TopStart so it NEVER covers the bottom seekbar or controls of the embedded player!)
+          if (!isGeneralBrowserSession && !showPrimaryNativePlayer) {
+            Row(
               modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 10.dp)
-                .background(Color(0xF2101720), RoundedCornerShape(12.dp))
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .align(Alignment.TopStart)
+                .padding(8.dp),
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              verticalAlignment = Alignment.CenterVertically
             ) {
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              Surface(
+                onClick = { toggleVideoFullscreen(!isFullscreenVideo) },
+                color = Color.Black.copy(alpha = 0.78f),
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f)),
+                modifier = Modifier
+                  .heightIn(min = 32.dp)
+                  .testTag("btn_embedded_video_fullscreen")
               ) {
-                Column(modifier = Modifier.weight(1f)) {
-                  Text(
-                    text = "🎬 البث المباشر جاهز للتشغيل في المشغل الأساسي!",
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                Row(
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Icon(
+                    imageVector = if (isFullscreenVideo) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    contentDescription = "تكبير الفيديو",
+                    tint = CinemaAccent,
+                    modifier = Modifier.size(16.dp)
                   )
+                  Spacer(modifier = Modifier.width(4.dp))
                   Text(
-                    text = "اضغط للعودة إلى مشغل التطبيق الأساسي بجودة (${currentVideoQuality.uppercase()})",
-                    color = CinemaAccent,
+                    text = if (isFullscreenVideo) "تصغير الشاشة" else "تكبير الفيديو",
+                    color = Color.White,
                     fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    fontWeight = FontWeight.ExtraBold
                   )
                 }
-                Button(
-                  onClick = {
-                    preferNativePlayer = true
-                    webViewRef?.evaluateJavascript(
-                      "(function() { document.querySelectorAll('video').forEach(function(v) { v.pause(); }); })()",
-                      null
-                    )
-                    playNativeVideoUrl = detectedVideoUrl
-                  },
-                  colors = ButtonDefaults.buttonColors(
-                    containerColor = ClipboxWhite,
-                    contentColor = Color.Black
-                  ),
-                  shape = RoundedCornerShape(50),
-                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                  modifier = Modifier
-                    .heightIn(min = 34.dp)
-                    .testTag("play_native_video_button")
+              }
+
+              Surface(
+                onClick = { showDiagnosticsDialog = true },
+                color = Color.Black.copy(alpha = 0.78f),
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, CinemaSecondary.copy(alpha = 0.7f)),
+                modifier = Modifier
+                  .heightIn(min = 32.dp)
+                  .testTag("btn_embedded_diagnostics")
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                  verticalAlignment = Alignment.CenterVertically
                 ) {
+                  Icon(
+                    imageVector = Icons.Default.BugReport,
+                    contentDescription = "اللوج",
+                    tint = CinemaSecondary,
+                    modifier = Modifier.size(14.dp)
+                  )
+                  Spacer(modifier = Modifier.width(4.dp))
                   Text(
-                    text = "▶ المشغل الأساسي",
-                    color = Color.Black,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    softWrap = false
+                    text = "اللوج",
+                    color = CinemaSecondary,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
                   )
                 }
               }
             }
           }
 
+          // Floating Toggle Button when Top Bar or Side Panel is hidden
+          if (!isGeneralBrowserSession && (!isWatchSidePanelOpen || !isBarVisible || isFullscreenVideo) && !showPrimaryNativePlayer) {
+            Surface(
+              onClick = {
+                if (isFullscreenVideo) {
+                  toggleVideoFullscreen(false)
+                } else {
+                  isBarVisible = true
+                  isWatchSidePanelOpen = true
+                }
+              },
+              color = CinemaPrimary.copy(alpha = 0.92f),
+              shape = RoundedCornerShape(50),
+              border = BorderStroke(1.dp, ClipboxWhite.copy(alpha = 0.6f)),
+              modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
+                .testTag("btn_open_watch_side_panel")
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Icon(
+                  imageVector = Icons.Default.VideoLibrary,
+                  contentDescription = null,
+                  tint = Color.White,
+                  modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                  text = if (isFullscreenVideo) "إظهار الحلقات والسيرفرات" else "السيرفرات والحلقات",
+                  color = Color.White,
+                  fontSize = 10.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
+            }
+          }
+
           if (showPrimaryNativePlayer) {
-            val activeUa = webViewRef?.settings?.userAgentString ?: cleanAndroidChromeUa
             NativeTvExoPlayer(
               videoUrl = playNativeVideoUrl ?: "",
               title = pageTitle.ifBlank { lastSearchQuery },
-              refererUrl = currentUrl.ifBlank { activeWatchPageUrl },
+              refererUrl = activeEmbedRefererUrl.ifBlank { currentUrl.ifBlank { activeWatchPageUrl } },
               capturedHeaders = detectedVideoHeaders,
-              userAgent = activeUa,
+              userAgent = desktopChromeUa,
               selectedQuality = currentVideoQuality,
               activeSubtitle = activeSubtitleItem,
               isFullscreen = isFullscreenVideo,
               onToggleFullscreen = {
-                isFullscreenVideo = !isFullscreenVideo
-                isBarVisible = !isFullscreenVideo
-                if (!isFullscreenVideo) {
-                  isWatchSidePanelOpen = true
-                }
+                toggleVideoFullscreen(!isFullscreenVideo)
               },
               onOpenSubtitles = {
                 showSubtitlesDialog = true
               },
+              onOpenDiagnostics = {
+                showDiagnosticsDialog = true
+              },
+              onQualitiesDetected = { exoQualities ->
+                mergeDetectedQualities(exoQualities)
+              },
               onDismiss = {
                 if (isFullscreenVideo) {
-                  isFullscreenVideo = false
-                  isBarVisible = true
-                  isWatchSidePanelOpen = true
+                  toggleVideoFullscreen(false)
                 } else {
+                  userManuallyDismissedNativePlayer = true
                   preferNativePlayer = false
                   playNativeVideoUrl = null
                 }
               },
               onFallbackToWebPlayer = {
-                preferNativePlayer = false
                 playNativeVideoUrl = null
                 webViewRef?.evaluateJavascript(
                   "(function() { document.querySelectorAll('video').forEach(function(v) { v.play(); }); })()",
@@ -1202,12 +1443,55 @@ fun MainScreen(
                 )
                 Toast.makeText(
                   context,
-                  "تم التبديل لمشغل السيرفر المدمج",
+                  "تم التبديل لمشغل السيرفر المدمج (يمكنك نسخ اللوج 🐞 لمعرفة السبب)",
                   Toast.LENGTH_SHORT
                 ).show()
               },
               modifier = Modifier.fillMaxSize()
             )
+          }
+        }
+      }
+
+      val isNativeActiveNow = playNativeVideoUrl != null
+      val hasDetectedDirectStream = !detectedVideoUrl.isNullOrBlank()
+
+      fun switchOrRetryNativePlayer() {
+        userManuallyDismissedNativePlayer = false
+        preferNativePlayer = true
+        val existingUrl = detectedVideoUrl ?: seriesStructure.directStreamUrl
+        if (existingUrl.isNotBlank()) {
+          webViewRef?.evaluateJavascript(
+            "(function() { document.querySelectorAll('video').forEach(function(v) { v.pause(); }); })()",
+            null
+          )
+          playNativeVideoUrl = existingUrl
+          Toast.makeText(context, "تم تفعيل المشغل الأساسي للتطبيق", Toast.LENGTH_SHORT).show()
+        } else {
+          Toast.makeText(context, "جاري استخراج البث المباشر للمشغل الأساسي...", Toast.LENGTH_SHORT).show()
+          val targetEmbed = activeEmbedRefererUrl.ifBlank { currentUrl }
+          scope.launch {
+            val resolution = searchService.extractDirectStreamFromServer(
+              embedUrl = targetEmbed,
+              refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
+            )
+            if (resolution.primaryStreamUrl.isNotBlank()) {
+              detectedVideoUrl = resolution.primaryStreamUrl
+              detectedVideoHeaders = mapOf(
+                "Referer" to resolution.refererUrl.ifBlank { targetEmbed },
+                "User-Agent" to desktopChromeUa
+              )
+              if (resolution.detectedQualities.isNotEmpty()) {
+                mergeDetectedQualities(resolution.detectedQualities)
+              }
+              playNativeVideoUrl = resolution.primaryStreamUrl
+            } else {
+              Toast.makeText(
+                context,
+                "اضغط تشغيل داخل الفيديو ليقوم التطبيق بالتقاط البث تلقائياً",
+                Toast.LENGTH_SHORT
+              ).show()
+            }
           }
         }
       }
@@ -1229,8 +1513,18 @@ fun MainScreen(
               seriesStructure = seriesStructure,
               isScrapingSeries = isScrapingSeries,
               currentQuality = currentVideoQuality,
+              detectedQualities = detectedVideoQualities,
+              isNativePlayerActive = isNativeActiveNow,
+              hasDetectedDirectStream = hasDetectedDirectStream,
+              onSwitchToNativePlayer = { switchOrRetryNativePlayer() },
+              onToggleVideoFullscreen = { toggleVideoFullscreen(!isFullscreenVideo) },
+              onOpenDiagnostics = { showDiagnosticsDialog = true },
+              onOpenUpdate = { showUpdateDialog = true },
               onSelectWatchServer = { server ->
+                userManuallyDismissedNativePlayer = false
                 preferNativePlayer = true
+                activeEmbedRefererUrl = server.embedUrl
+                AppDiagnosticsLogger.activeServerName = server.name
                 loadServerIntoWebView(
                   targetWebView = webViewRef,
                   targetServerUrl = server.embedUrl,
@@ -1238,17 +1532,21 @@ fun MainScreen(
                   portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                 )
                 scope.launch {
-                  val direct = searchService.extractDirectStreamFromServer(
+                  val resolution = searchService.extractDirectStreamFromServer(
                     embedUrl = server.embedUrl,
                     refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                   )
-                  if (direct.isNotBlank() && preferNativePlayer) {
-                    detectedVideoUrl = direct
+                  if (resolution.primaryStreamUrl.isNotBlank() && preferNativePlayer) {
+                    activeEmbedRefererUrl = resolution.refererUrl.ifBlank { server.embedUrl }
+                    detectedVideoUrl = resolution.primaryStreamUrl
                     detectedVideoHeaders = mapOf(
-                      "Referer" to server.embedUrl,
+                      "Referer" to activeEmbedRefererUrl,
                       "User-Agent" to desktopChromeUa
                     )
-                    playNativeVideoUrl = direct
+                    if (resolution.detectedQualities.isNotEmpty()) {
+                      mergeDetectedQualities(resolution.detectedQualities)
+                    }
+                    playNativeVideoUrl = resolution.primaryStreamUrl
                   }
                 }
                 Toast.makeText(context, "جاري تشغيل: ${server.name}", Toast.LENGTH_SHORT).show()
@@ -1281,6 +1579,7 @@ fun MainScreen(
                 )
               },
               onRescrapePage = {
+                userManuallyDismissedNativePlayer = false
                 preferNativePlayer = true
                 refreshSeriesSeasonsAndEpisodes(
                   targetUrl = activeWatchPageUrl.ifBlank { currentUrl },
@@ -1290,8 +1589,8 @@ fun MainScreen(
                   autoLoadBestEmbed = true
                 )
               },
-              onSelectQuality = { qId, qLabel ->
-                applyVideoQualityInPlayer(qId, qLabel)
+              onSelectQuality = { option ->
+                applyVideoQualityInPlayer(option.id, option.label, option.streamUrl)
               },
               onOpenSubtitles = { showSubtitlesDialog = true },
               onClosePanel = { isWatchSidePanelOpen = false },
@@ -1318,8 +1617,18 @@ fun MainScreen(
               seriesStructure = seriesStructure,
               isScrapingSeries = isScrapingSeries,
               currentQuality = currentVideoQuality,
+              detectedQualities = detectedVideoQualities,
+              isNativePlayerActive = isNativeActiveNow,
+              hasDetectedDirectStream = hasDetectedDirectStream,
+              onSwitchToNativePlayer = { switchOrRetryNativePlayer() },
+              onToggleVideoFullscreen = { toggleVideoFullscreen(!isFullscreenVideo) },
+              onOpenDiagnostics = { showDiagnosticsDialog = true },
+              onOpenUpdate = { showUpdateDialog = true },
               onSelectWatchServer = { server ->
+                userManuallyDismissedNativePlayer = false
                 preferNativePlayer = true
+                activeEmbedRefererUrl = server.embedUrl
+                AppDiagnosticsLogger.activeServerName = server.name
                 loadServerIntoWebView(
                   targetWebView = webViewRef,
                   targetServerUrl = server.embedUrl,
@@ -1327,17 +1636,21 @@ fun MainScreen(
                   portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                 )
                 scope.launch {
-                  val direct = searchService.extractDirectStreamFromServer(
+                  val resolution = searchService.extractDirectStreamFromServer(
                     embedUrl = server.embedUrl,
                     refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                   )
-                  if (direct.isNotBlank() && preferNativePlayer) {
-                    detectedVideoUrl = direct
+                  if (resolution.primaryStreamUrl.isNotBlank() && preferNativePlayer) {
+                    activeEmbedRefererUrl = resolution.refererUrl.ifBlank { server.embedUrl }
+                    detectedVideoUrl = resolution.primaryStreamUrl
                     detectedVideoHeaders = mapOf(
-                      "Referer" to server.embedUrl,
+                      "Referer" to activeEmbedRefererUrl,
                       "User-Agent" to desktopChromeUa
                     )
-                    playNativeVideoUrl = direct
+                    if (resolution.detectedQualities.isNotEmpty()) {
+                      mergeDetectedQualities(resolution.detectedQualities)
+                    }
+                    playNativeVideoUrl = resolution.primaryStreamUrl
                   }
                 }
                 Toast.makeText(context, "جاري تشغيل: ${server.name}", Toast.LENGTH_SHORT).show()
@@ -1370,6 +1683,8 @@ fun MainScreen(
                 )
               },
               onRescrapePage = {
+                userManuallyDismissedNativePlayer = false
+                preferNativePlayer = true
                 refreshSeriesSeasonsAndEpisodes(
                   targetUrl = activeWatchPageUrl.ifBlank { currentUrl },
                   portal = activePortal,
@@ -1378,8 +1693,8 @@ fun MainScreen(
                   autoLoadBestEmbed = true
                 )
               },
-              onSelectQuality = { qId, qLabel ->
-                applyVideoQualityInPlayer(qId, qLabel)
+              onSelectQuality = { option ->
+                applyVideoQualityInPlayer(option.id, option.label, option.streamUrl)
               },
               onOpenSubtitles = { showSubtitlesDialog = true },
               onClosePanel = { isWatchSidePanelOpen = false },
@@ -1531,13 +1846,13 @@ fun MainScreen(
       onModeSelected = { mode ->
         repository.setDisplayMode(mode)
         showDisplayModeDialog = false
-        val useAndroidUa = isGeneralBrowserSession || currentUrl.contains("google.") || mode == AppDisplayMode.MOBILE
+        val useAndroidUa = isGeneralBrowserSession && (currentUrl.contains("google.") || mode == AppDisplayMode.MOBILE)
         webViewRef?.settings?.userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
         if (mode == AppDisplayMode.TV) {
-          activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+          activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
           Toast.makeText(context, "تم التحويل إلى منظور الشاشة أو التابلت (أفقي 16:9) 📺", Toast.LENGTH_SHORT).show()
         } else {
-          activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+          activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
           Toast.makeText(context, "تم التحويل إلى منظور الهاتف المحمول (رأسي/لمس) 📱", Toast.LENGTH_SHORT).show()
         }
         webViewRef?.reload()
@@ -1560,6 +1875,12 @@ fun MainScreen(
     AppUpdateDialog(
       repository = repository,
       onDismiss = { showUpdateDialog = false }
+    )
+  }
+
+  if (showDiagnosticsDialog) {
+    DiagnosticsLogDialog(
+      onDismiss = { showDiagnosticsDialog = false }
     )
   }
 }

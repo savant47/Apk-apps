@@ -46,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -96,6 +97,7 @@ fun AppUpdateDialog(
   val currentVersion = BuildConfig.VERSION_NAME
 
   var repoInput by remember { mutableStateOf(repository.getGitHubRepo()) }
+  var tokenInput by remember { mutableStateOf(repository.getGitHubToken()) }
   var isEditingRepo by remember { mutableStateOf(false) }
 
   var updateState by remember { mutableStateOf<UpdateDownloadState>(UpdateDownloadState.Idle) }
@@ -107,13 +109,13 @@ fun AppUpdateDialog(
   fun startCheck() {
     updateState = UpdateDownloadState.Checking
     scope.launch {
-      val res = updateManager.checkForUpdates(repoInput, currentVersion)
+      val res = updateManager.checkForUpdates(repoInput, currentVersion, tokenInput)
       res.onSuccess { info ->
         releaseInfo = info
         if (info.isNewer) {
           updateState = UpdateDownloadState.UpdateAvailable(info)
         } else {
-          updateState = UpdateDownloadState.UpToDate(currentVersion)
+          updateState = UpdateDownloadState.UpToDate(currentVersion, info)
         }
       }.onFailure { err ->
         updateState = UpdateDownloadState.Error(err.localizedMessage ?: "فشل فحص التحديثات")
@@ -121,17 +123,21 @@ fun AppUpdateDialog(
     }
   }
 
-  fun startDownload(url: String) {
+  fun startDownload(info: UpdateReleaseInfo) {
     updateState = UpdateDownloadState.Downloading(0f, "0 MB", "...")
     scope.launch {
-      val res = updateManager.downloadApk(url) { prog, down, tot ->
+      val res = updateManager.downloadApk(
+        downloadUrl = info.apkDownloadUrl,
+        apiAssetUrl = info.apkApiAssetUrl,
+        githubToken = tokenInput
+      ) { prog, down, tot ->
         downloadProgress = prog
         downloadedSizeText = down
         totalSizeText = tot
         updateState = UpdateDownloadState.Downloading(prog, down, tot)
       }
       res.onSuccess { file ->
-        updateState = UpdateDownloadState.ReadyToInstall(file, releaseInfo)
+        updateState = UpdateDownloadState.ReadyToInstall(file, info)
       }.onFailure { err ->
         updateState = UpdateDownloadState.Error(err.localizedMessage ?: "فشل تنزيل ملف التحديث")
       }
@@ -143,6 +149,11 @@ fun AppUpdateDialog(
     res.onFailure { err ->
       Toast.makeText(context, err.localizedMessage, Toast.LENGTH_LONG).show()
     }
+  }
+
+  // Automatically check GitHub Releases when dialog opens
+  LaunchedEffect(Unit) {
+    startCheck()
   }
 
   Dialog(
@@ -191,15 +202,15 @@ fun AppUpdateDialog(
 
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "تحديث التطبيق المباشر",
+                text = "التحديث الداخلي عبر GitHub Releases",
                 color = Color.White,
-                fontSize = 17.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
               )
               Text(
-                text = "تثبيت النسخ الجديدة وحفظ بياناتك وسجل المشاهدة",
+                text = "تنزيل وتثبيت أحدث نسخة APK من قسم النسخ (Releases) مباشرة",
                 color = Color.LightGray,
-                fontSize = 11.5.sp
+                fontSize = 11.sp
               )
             }
 
@@ -273,15 +284,15 @@ fun AppUpdateDialog(
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 Text(
-                  text = "مصدر التحديثات (GitHub):",
+                  text = "مستودع GitHub Releases:",
                   color = Color.LightGray,
                   fontSize = 12.sp,
                   fontWeight = FontWeight.Medium
                 )
                 Text(
-                  text = if (isEditingRepo) "إلغاء التعديل" else "تعديل ⚙️",
+                  text = if (isEditingRepo) "إلغاء التعديل" else "تعديل المصدر / Token ⚙️",
                   color = CinemaAccent,
-                  fontSize = 12.sp,
+                  fontSize = 11.5.sp,
                   fontWeight = FontWeight.Bold,
                   modifier = Modifier
                     .clickable { isEditingRepo = !isEditingRepo }
@@ -294,7 +305,21 @@ fun AppUpdateDialog(
                   OutlinedTextField(
                     value = repoInput,
                     onValueChange = { repoInput = it },
-                    placeholder = { Text("username/repository", fontSize = 12.sp) },
+                    label = { Text("اسم المستودع (مثل: savant47/Apk-apps)", fontSize = 11.sp) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                      focusedTextColor = Color.White,
+                      unfocusedTextColor = Color.White,
+                      focusedBorderColor = CinemaAccent,
+                      unfocusedBorderColor = CinemaBorder
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                  )
+                  OutlinedTextField(
+                    value = tokenInput,
+                    onValueChange = { tokenInput = it },
+                    label = { Text("GitHub Token (اختياري إذا كان المستودع Private 🔒)", fontSize = 10.5.sp) },
+                    placeholder = { Text("ghp_xxxxxxxxxxxx", fontSize = 11.sp) },
                     colors = OutlinedTextFieldDefaults.colors(
                       focusedTextColor = Color.White,
                       unfocusedTextColor = Color.White,
@@ -307,13 +332,15 @@ fun AppUpdateDialog(
                   Button(
                     onClick = {
                       repository.setGitHubRepo(repoInput)
+                      repository.setGitHubToken(tokenInput)
                       isEditingRepo = false
-                      Toast.makeText(context, "تم حفظ مصدر التحديث", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(context, "تم حفظ إعدادات التحديث من GitHub", Toast.LENGTH_SHORT).show()
+                      startCheck()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
                     modifier = Modifier.fillMaxWidth().height(38.dp)
                   ) {
-                    Text("حفظ التغييرات", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("حفظ وفحص التحديثات", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                   }
                 }
               } else {
@@ -323,7 +350,7 @@ fun AppUpdateDialog(
                   modifier = Modifier.fillMaxWidth()
                 ) {
                   Text(
-                    text = repoInput,
+                    text = "$repoInput (Releases)",
                     color = CinemaAccent,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -367,7 +394,7 @@ fun AppUpdateDialog(
                   )
                   Spacer(modifier = Modifier.width(10.dp))
                   Text(
-                    text = "جاري الاتصال بـ GitHub وفحص أحدث إصدار...",
+                    text = "جاري الاتصال بـ GitHub Releases وفحص أحدث إصدار...",
                     color = Color.White,
                     fontSize = 12.5.sp
                   )
@@ -387,7 +414,7 @@ fun AppUpdateDialog(
                     .fillMaxWidth()
                     .padding(14.dp),
                   horizontalAlignment = Alignment.CenterHorizontally,
-                  verticalArrangement = Arrangement.spacedBy(6.dp)
+                  verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                   Icon(
                     imageVector = Icons.Default.CheckCircle,
@@ -402,11 +429,20 @@ fun AppUpdateDialog(
                     fontWeight = FontWeight.Bold
                   )
                   Text(
-                    text = "أنت تستخدم أحدث نسخة مستقرة لـ AsserTV",
+                    text = "أحدث إصدار على GitHub Releases: ${state.latestInfo?.tagName ?: state.currentVersion}",
                     color = Color.LightGray,
                     fontSize = 11.5.sp
                   )
-                  Spacer(modifier = Modifier.height(2.dp))
+                  if (state.latestInfo != null) {
+                    TvDialogButton(
+                      text = "إعادة تنزيل وتثبيت النسخة (${state.latestInfo.tagName}) 🚀",
+                      icon = Icons.Default.Download,
+                      containerColor = CinemaSuccess,
+                      contentColor = Color.Black,
+                      onClick = { startDownload(state.latestInfo) },
+                      testTag = "btn_force_download_update"
+                    )
+                  }
                   OutlinedButton(
                     onClick = { startCheck() },
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
@@ -487,7 +523,7 @@ fun AppUpdateDialog(
                     icon = Icons.Default.Download,
                     containerColor = CinemaSuccess,
                     contentColor = Color.Black,
-                    onClick = { startDownload(info.apkDownloadUrl) },
+                    onClick = { startDownload(info) },
                     testTag = "btn_download_update"
                   )
                 }
@@ -512,9 +548,9 @@ fun AppUpdateDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                   ) {
                     Text(
-                      text = "جاري تنزيل ملف التحديث...",
+                      text = "جاري تنزيل ملف التحديث من GitHub Releases...",
                       color = Color.White,
-                      fontSize = 13.5.sp,
+                      fontSize = 13.sp,
                       fontWeight = FontWeight.Bold
                     )
                     Text(
@@ -536,7 +572,7 @@ fun AppUpdateDialog(
                   )
 
                   Text(
-                    text = "تم تنزيل: $downloadedSizeText من $totalSizeText",
+                    text = "تم تنزيل: $downloadedSizeText من $totalSizeText MB",
                     color = Color.LightGray,
                     fontSize = 11.sp
                   )
@@ -626,7 +662,7 @@ fun AppUpdateDialog(
             }
           }
 
-          // 5. Local Backup & Restore Box (Organized in Column with full-width buttons)
+          // 5. Local Backup & Restore Box
           Surface(
             shape = RoundedCornerShape(12.dp),
             color = CinemaSurfaceVariant.copy(alpha = 0.3f),

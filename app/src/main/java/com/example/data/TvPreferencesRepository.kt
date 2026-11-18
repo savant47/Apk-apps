@@ -282,11 +282,24 @@ class TvPreferencesRepository(context: Context) {
   }
 
   fun getGitHubRepo(): String {
-    return prefs.getString(KEY_GITHUB_REPO, DEFAULT_GITHUB_REPO) ?: DEFAULT_GITHUB_REPO
+    val saved = prefs.getString(KEY_GITHUB_REPO, DEFAULT_GITHUB_REPO) ?: DEFAULT_GITHUB_REPO
+    return if (saved.equals("Savant47/cinema-tv", ignoreCase = true) || saved.isBlank()) {
+      DEFAULT_GITHUB_REPO
+    } else {
+      saved
+    }
   }
 
   fun setGitHubRepo(repo: String) {
     prefs.edit().putString(KEY_GITHUB_REPO, repo.trim()).apply()
+  }
+
+  fun getGitHubToken(): String {
+    return prefs.getString(KEY_GITHUB_TOKEN, "") ?: ""
+  }
+
+  fun setGitHubToken(token: String) {
+    prefs.edit().putString(KEY_GITHUB_TOKEN, token.trim()).apply()
   }
 
   /**
@@ -337,6 +350,7 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_ADGUARD_DNS = "adguard_dns_enabled"
     private const val KEY_STRICT_POPUP_BLOCKER = "strict_popup_blocker_enabled"
     private const val KEY_GITHUB_REPO = "github_repo_slug"
-    const val DEFAULT_GITHUB_REPO = "Savant47/cinema-tv"
+    private const val KEY_GITHUB_TOKEN = "github_pat_token"
+    const val DEFAULT_GITHUB_REPO = "savant47/Apk-apps"
   }
 }

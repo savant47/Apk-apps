@@ -23,6 +23,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import android.util.Log
+import com.example.data.AppDiagnosticsLogger
 
 class TvWebChromeClient(
   private val fullscreenContainer: FrameLayout,
@@ -428,6 +429,10 @@ class TvWebViewClient(
         } catch (_: Exception) {
           emptyMap()
         }
+        AppDiagnosticsLogger.log(
+          "WebViewIntercept",
+          "Intercepted media stream: $urlStr | Referer=${capturedHeaders["Referer"] ?: capturedHeaders["referer"] ?: "none"}"
+        )
         if (view != null) {
           view.post {
             onVideoDetectedCallback?.invoke(urlStr, capturedHeaders)
@@ -801,12 +806,66 @@ class TvWebViewClient(
           }
         } catch(e) {}
 
-        // 5. Video Source Sniffer to feed Native ExoPlayer Bridge
+        // 5. Video Source & Real Quality Sniffer + Auto-Play Trigger to feed Native ExoPlayer Bridge
         function sniffVideoUrls() {
           try {
+            // Auto-start JWPlayer / Video.js / Plyr initial overlay once so the embed requests its .m3u8/.mp4 immediately
+            if (!window.__asserAutoStartedEmbed) {
+              if (window.jwplayer && typeof window.jwplayer === 'function') {
+                var jp = window.jwplayer();
+                if (jp && typeof jp.play === 'function' && jp.getState && jp.getState() === 'idle') {
+                  window.__asserAutoStartedEmbed = true;
+                  jp.play(true);
+                }
+              }
+              var bigPlay = document.querySelector('.jw-display-icon-container .jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid');
+              if (bigPlay && !window.__asserAutoStartedEmbed) {
+                window.__asserAutoStartedEmbed = true;
+                bigPlay.click();
+              }
+            }
+
+            // Sniff real available video qualities from JWPlayer / HLS.js / HTML5 Video
+            var detectedQuals = [];
+            var seenQ = {};
+            function addQ(h) {
+              var num = parseInt(h, 10);
+              if (num && num >= 144 && num <= 2160 && !seenQ[num]) {
+                seenQ[num] = true;
+                detectedQuals.push(num);
+              }
+            }
+            if (window.jwplayer && typeof window.jwplayer === 'function') {
+              var p = window.jwplayer();
+              if (p && p.getQualityLevels) {
+                var levels = p.getQualityLevels() || [];
+                for (var i = 0; i < levels.length; i++) {
+                  var lbl = String(levels[i].label || '');
+                  var m = lbl.match(/([0-9]{3,4})/);
+                  if (m) addQ(m[1]);
+                  else if (levels[i].height) addQ(levels[i].height);
+                }
+              }
+            }
+            if (window.hls && window.hls.levels) {
+              for (var h = 0; h < window.hls.levels.length; h++) {
+                if (window.hls.levels[h].height) addQ(window.hls.levels[h].height);
+              }
+            }
+
             var vids = document.querySelectorAll('video');
             vids.forEach(function(v) {
-              var src = v.src || '';
+              if (v.videoHeight && v.videoHeight >= 144) {
+                addQ(v.videoHeight);
+              }
+              var sources = v.querySelectorAll('source');
+              sources.forEach(function(s) {
+                var sz = s.getAttribute('size') || s.getAttribute('label') || s.getAttribute('res') || '';
+                var m = String(sz).match(/([0-9]{3,4})/);
+                if (m) addQ(m[1]);
+              });
+
+              var src = v.src || v.currentSrc || '';
               if (!src) {
                 var source = v.querySelector('source');
                 if (source) src = source.src || '';
@@ -817,9 +876,17 @@ class TvWebViewClient(
                 }
               }
             });
+
+            if (detectedQuals.length > 0 && window.AndroidTvBridge && typeof window.AndroidTvBridge.onQualitiesDetected === 'function') {
+              var qKey = detectedQuals.sort(function(a,b){return b-a;}).join(',');
+              if (window.__lastReportedQuals !== qKey) {
+                window.__lastReportedQuals = qKey;
+                window.AndroidTvBridge.onQualitiesDetected(qKey);
+              }
+            }
           } catch(e) {}
         }
-        setInterval(sniffVideoUrls, 1500);
+        setInterval(sniffVideoUrls, 1200);
 
         // Listen to postMessage from cross-origin iframes
         window.addEventListener('message', function(event) {
@@ -1336,12 +1403,27 @@ open class TvPlayerBridge(
   private val onVideoEnded: () -> Unit = {},
   private val onVideoTimeUpdate: (currentTime: Float, duration: Float) -> Unit = { _, _ -> },
   private val onCenterClickFiltered: (target: String, isPlaying: Boolean) -> Unit = { _, _ -> },
-  private val onVideoDetected: (String) -> Unit = {}
+  private val onVideoDetected: (String) -> Unit = {},
+  private val onQualitiesDetected: (List<Int>) -> Unit = {}
 ) {
   @android.webkit.JavascriptInterface
   open fun onVideoDetected(src: String) {
     if (!src.isNullOrBlank() && src.startsWith("http")) {
       this.onVideoDetected.invoke(src)
+    }
+  }
+
+  @android.webkit.JavascriptInterface
+  open fun onQualitiesDetected(csvHeights: String) {
+    if (!csvHeights.isNullOrBlank()) {
+      val heights = csvHeights.split(",")
+        .mapNotNull { it.trim().toIntOrNull() }
+        .filter { it in 144..2160 }
+        .distinct()
+        .sortedDescending()
+      if (heights.isNotEmpty()) {
+        this.onQualitiesDetected.invoke(heights)
+      }
     }
   }
 

@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
@@ -72,14 +73,20 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.example.data.AppDiagnosticsLogger
 import com.example.model.SubtitleItem
+import com.example.model.VideoQualityOption
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaPrimary
@@ -102,6 +109,8 @@ fun NativeTvExoPlayer(
   isFullscreen: Boolean = false,
   onToggleFullscreen: () -> Unit = {},
   onOpenSubtitles: () -> Unit = {},
+  onOpenDiagnostics: () -> Unit = {},
+  onQualitiesDetected: (List<VideoQualityOption>) -> Unit = {},
   onFallbackToWebPlayer: () -> Unit = onDismiss
 ) {
   val context = LocalContext.current
@@ -110,12 +119,13 @@ fun NativeTvExoPlayer(
   var isControllerVisible by remember { mutableStateOf(true) }
   var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
   var isLandscapeForced by remember { mutableStateOf(false) }
+  var actualVideoResolution by remember(videoUrl) { mutableStateOf("") }
 
   val httpDataSourceFactory = remember {
     DefaultHttpDataSource.Factory()
       .setAllowCrossProtocolRedirects(true)
-      .setConnectTimeoutMs(12_000)
-      .setReadTimeoutMs(15_000)
+      .setConnectTimeoutMs(15_000)
+      .setReadTimeoutMs(18_000)
   }
 
   val trackSelector = remember {
@@ -131,27 +141,133 @@ fun NativeTvExoPlayer(
       }
   }
 
-  // Dynamically apply the user's selected quality (Auto, 240p, 360p, 480p, 720p, 1080p)
-  LaunchedEffect(selectedQuality) {
+  fun applyQualityToTrackSelector(targetQualityId: String) {
     val paramsBuilder = trackSelector.buildUponParameters()
-    when (selectedQuality) {
-      "240" -> paramsBuilder.setMaxVideoSize(426, 240).setMaxVideoBitrate(450_000)
-      "360" -> paramsBuilder.setMaxVideoSize(640, 360).setMaxVideoBitrate(850_000)
-      "480" -> paramsBuilder.setMaxVideoSize(854, 480).setMaxVideoBitrate(1_500_000)
-      "720" -> paramsBuilder.setMaxVideoSize(1280, 720).setMaxVideoBitrate(3_200_000)
-      "1080" -> paramsBuilder.setMaxVideoSize(1920, 1080).setMaxVideoBitrate(6_800_000)
-      else -> paramsBuilder.clearVideoSizeConstraints().setMaxVideoBitrate(Int.MAX_VALUE)
+    paramsBuilder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+    val targetHeight = targetQualityId.toIntOrNull()
+
+    if (targetHeight != null && targetHeight > 0) {
+      var appliedExplicitOverride = false
+      val currentTracks = player.currentTracks
+      for (group in currentTracks.groups) {
+        if (group.type == C.TRACK_TYPE_VIDEO && group.length > 0) {
+          val matchingIndices = mutableListOf<Int>()
+          for (i in 0 until group.length) {
+            val fmt = group.getTrackFormat(i)
+            if (fmt.height == targetHeight || (fmt.height in (targetHeight - 60)..(targetHeight + 60))) {
+              matchingIndices.add(i)
+            }
+          }
+          if (matchingIndices.isNotEmpty()) {
+            paramsBuilder.setOverrideForType(
+              TrackSelectionOverride(group.mediaTrackGroup, matchingIndices)
+            )
+            appliedExplicitOverride = true
+            break
+          }
+        }
+      }
+
+      if (!appliedExplicitOverride) {
+        when (targetHeight) {
+          240 -> paramsBuilder.setMaxVideoSize(480, 260).setMinVideoSize(0, 0)
+          360 -> paramsBuilder.setMaxVideoSize(680, 380).setMinVideoSize(0, 300)
+          480 -> paramsBuilder.setMaxVideoSize(900, 500).setMinVideoSize(0, 400)
+          720 -> paramsBuilder.setMaxVideoSize(1366, 760).setMinVideoSize(0, 640)
+          1080 -> paramsBuilder.setMaxVideoSize(1980, 1120).setMinVideoSize(0, 960)
+          else -> paramsBuilder.setMaxVideoSize(Int.MAX_VALUE, targetHeight + 60)
+        }
+      } else {
+        paramsBuilder.clearVideoSizeConstraints()
+      }
+      AppDiagnosticsLogger.log("ExoPlayerQuality", "Applied target quality ${targetHeight}p (explicitOverride=$appliedExplicitOverride)")
+    } else {
+      paramsBuilder.clearVideoSizeConstraints().setMaxVideoBitrate(Int.MAX_VALUE)
+      AppDiagnosticsLogger.log("ExoPlayerQuality", "Applied Auto quality selection")
     }
     trackSelector.setParameters(paramsBuilder)
   }
 
-  // Handle 403 / Source Errors gracefully: retry with alternate Referer/UA combinations before fallback
-  DisposableEffect(player) {
+  // Dynamically apply the user's selected quality whenever selectedQuality changes
+  LaunchedEffect(selectedQuality) {
+    AppDiagnosticsLogger.selectedQualityId = selectedQuality
+    applyQualityToTrackSelector(selectedQuality)
+  }
+
+  // Listen to tracks, actual resolution, and playback errors
+  DisposableEffect(player, videoUrl) {
     val listener = object : Player.Listener {
+      override fun onTracksChanged(tracks: Tracks) {
+        val heights = mutableSetOf<Int>()
+        for (group in tracks.groups) {
+          if (group.type == C.TRACK_TYPE_VIDEO) {
+            for (i in 0 until group.length) {
+              val fmt = group.getTrackFormat(i)
+              if (fmt.height in 144..2160) {
+                heights.add(fmt.height)
+              }
+            }
+          }
+        }
+        if (heights.isNotEmpty()) {
+          val sorted = heights.sortedDescending()
+          val options = mutableListOf(
+            VideoQualityOption(
+              id = "auto",
+              label = "تلقائي Auto (${sorted.first()}p)",
+              height = 0,
+              isAuto = true
+            )
+          )
+          for (h in sorted) {
+            val badge = when {
+              h >= 1080 -> "${h}p FHD"
+              h >= 720 -> "${h}p HD"
+              h >= 480 -> "${h}p SD"
+              else -> "${h}p توفير"
+            }
+            options.add(VideoQualityOption(id = h.toString(), label = badge, height = h))
+          }
+          AppDiagnosticsLogger.detectedQualitiesSummary = options.joinToString { it.label }
+          AppDiagnosticsLogger.log("ExoPlayerTracks", "Detected real video tracks: ${sorted.joinToString { "${it}p" }}")
+          onQualitiesDetected(options)
+          if (selectedQuality != "auto") {
+            applyQualityToTrackSelector(selectedQuality)
+          }
+        }
+      }
+
+      override fun onVideoSizeChanged(videoSize: VideoSize) {
+        if (videoSize.width > 0 && videoSize.height > 0) {
+          actualVideoResolution = "${videoSize.height}p"
+          AppDiagnosticsLogger.actualPlayingResolution = "${videoSize.width}x${videoSize.height} (${videoSize.height}p)"
+          AppDiagnosticsLogger.log("ExoPlayerVideo", "Playing resolution: ${videoSize.width}x${videoSize.height}")
+        }
+      }
+
+      override fun onPlaybackStateChanged(playbackState: Int) {
+        if (playbackState == Player.STATE_READY) {
+          AppDiagnosticsLogger.activePlayerMode = "Native ExoPlayer (يعمل بنجاح ✅)"
+          AppDiagnosticsLogger.log("ExoPlayer", "Playback STATE_READY for $videoUrl")
+        }
+      }
+
       override fun onPlayerError(error: PlaybackException) {
+        val cause = error.cause
+        val httpCode = if (cause is HttpDataSource.InvalidResponseCodeException) {
+          "HTTP ${cause.responseCode}"
+        } else {
+          error.errorCodeName
+        }
+        AppDiagnosticsLogger.log(
+          "ExoPlayerError",
+          "Attempt $retryAttempt failed ($httpCode): ${cause?.message ?: error.message} | URL=$videoUrl",
+          isError = true
+        )
         if (retryAttempt < 2) {
           retryAttempt += 1
         } else {
+          AppDiagnosticsLogger.activePlayerMode = "WebView Fallback (بسبب $httpCode)"
           onFallbackToWebPlayer()
         }
       }
@@ -159,12 +275,18 @@ fun NativeTvExoPlayer(
     player.addListener(listener)
     onDispose {
       player.removeListener(listener)
+    }
+  }
+
+  DisposableEffect(Unit) {
+    onDispose {
       player.release()
     }
   }
 
   LaunchedEffect(videoUrl, refererUrl, capturedHeaders, userAgent, retryAttempt, activeSubtitle) {
     if (videoUrl.isNotBlank()) {
+      AppDiagnosticsLogger.extractedStreamUrl = videoUrl
       val videoHostOrigin = try {
         val vUri = Uri.parse(videoUrl)
         "${vUri.scheme}://${vUri.host}"
@@ -192,6 +314,7 @@ fun NativeTvExoPlayer(
         1 -> capturedRefererOrigin
         else -> "$videoHostOrigin/"
       }
+      AppDiagnosticsLogger.streamReferer = effectiveReferer
 
       val effectiveOrigin = try {
         val rUri = Uri.parse(effectiveReferer)
@@ -204,11 +327,11 @@ fun NativeTvExoPlayer(
         videoHostOrigin
       }
 
-      val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      val standardDesktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
       val effectiveUa = when (retryAttempt) {
-        0 -> capturedHeaders["User-Agent"] ?: capturedHeaders["user-agent"] ?: desktopUa
-        1 -> desktopUa
-        else -> userAgent.ifBlank { desktopUa }
+        0 -> capturedHeaders["User-Agent"] ?: capturedHeaders["user-agent"] ?: userAgent.ifBlank { standardDesktopUa }
+        1 -> standardDesktopUa
+        else -> userAgent.ifBlank { standardDesktopUa }
       }
 
       val cookieManager = try { CookieManager.getInstance() } catch (_: Exception) { null }
@@ -219,18 +342,37 @@ fun NativeTvExoPlayer(
         .distinct()
         .joinToString("; ")
 
-      val headersMap = mutableMapOf(
-        "Referer" to effectiveReferer,
-        "Origin" to effectiveOrigin,
-        "Accept" to "*/*",
-        "Accept-Language" to "ar,en-US;q=0.9,en;q=0.8"
-      )
+      val headersMap = mutableMapOf<String, String>()
+      // Preserve relevant headers captured from WebView
+      for ((k, v) in capturedHeaders) {
+        val kl = k.lowercase()
+        if (kl != "host" && kl != "connection" && kl != "range" && kl != "accept-encoding" && v.isNotBlank()) {
+          headersMap[k] = v
+        }
+      }
+      headersMap["Referer"] = effectiveReferer
+      headersMap["Accept"] = "*/*"
+      headersMap["Accept-Language"] = "ar,en-US;q=0.9,en;q=0.8"
+
+      // Only send Origin if it was originally in capturedHeaders or on retryAttempt == 1
+      if (retryAttempt == 1 && !headersMap.containsKey("Origin") && !headersMap.containsKey("origin")) {
+        headersMap["Origin"] = effectiveOrigin
+      } else if (retryAttempt == 2) {
+        headersMap.remove("Origin")
+        headersMap.remove("origin")
+      }
+
       if (combinedCookie.isNotBlank()) {
         headersMap["Cookie"] = combinedCookie
       }
 
       httpDataSourceFactory.setUserAgent(effectiveUa)
       httpDataSourceFactory.setDefaultRequestProperties(headersMap)
+
+      AppDiagnosticsLogger.log(
+        "ExoPlayerInit",
+        "Loading stream (attempt $retryAttempt): $videoUrl | Referer=$effectiveReferer | UA=${effectiveUa.take(42)}..."
+      )
 
       val currentPos = if (retryAttempt == 0) player.currentPosition.coerceAtLeast(0L) else 0L
       val mediaItemBuilder = MediaItem.Builder().setUri(videoUrl)
@@ -270,13 +412,20 @@ fun NativeTvExoPlayer(
     }
   }
 
-  val qualityDisplayLabel = when (selectedQuality) {
-    "240" -> "240p توفير الباقة"
-    "360" -> "360p متوسط"
-    "480" -> "480p SD"
-    "720" -> "720p HD"
-    "1080" -> "1080p Full HD"
-    else -> "تلقائي (Auto HD)"
+  val qualityDisplayLabel = buildString {
+    append(
+      when (selectedQuality) {
+        "240" -> "240p توفير"
+        "360" -> "360p متوسط"
+        "480" -> "480p SD"
+        "720" -> "720p HD"
+        "1080" -> "1080p FHD"
+        else -> "Auto تلقائي"
+      }
+    )
+    if (actualVideoResolution.isNotBlank()) {
+      append(" ($actualVideoResolution)")
+    }
   }
 
   Box(
@@ -534,7 +683,24 @@ fun NativeTvExoPlayer(
             )
           }
 
-          // Prominent Full-Screen Button (ملء الشاشة)
+          // Diagnostics & Log Button inside player
+          IconButton(
+            onClick = onOpenDiagnostics,
+            modifier = Modifier
+              .size(34.dp)
+              .clip(CircleShape)
+              .background(CinemaSurface)
+              .testTag("exo_diagnostics_button")
+          ) {
+            Icon(
+              imageVector = Icons.Default.BugReport,
+              contentDescription = "لوج الأعطال",
+              tint = CinemaAccent,
+              modifier = Modifier.size(16.dp)
+            )
+          }
+
+          // Prominent Full-Screen Button (ملء الشاشة للمشغل نفسه)
           Surface(
             onClick = onToggleFullscreen,
             color = if (isFullscreen) ClipboxWhite else CinemaPrimary,

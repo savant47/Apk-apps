@@ -27,6 +27,20 @@ data class CatalogMediaItem(
   val rank: Int? = null
 )
 
+data class VideoQualityOption(
+  val id: String,
+  val label: String,
+  val height: Int = 0,
+  val streamUrl: String = "",
+  val isAuto: Boolean = false
+)
+
+data class DirectStreamResolution(
+  val primaryStreamUrl: String = "",
+  val refererUrl: String = "",
+  val detectedQualities: List<VideoQualityOption> = emptyList()
+)
+
 data class ScrapedWatchServer(
   val id: String,
   val name: String,
@@ -59,7 +73,8 @@ data class ScrapedSeriesStructure(
   val watchServers: List<ScrapedWatchServer> = emptyList(),
   val bestCleanPlayerUrl: String = "",
   val directStreamUrl: String = "",
-  val directStreamReferer: String = ""
+  val directStreamReferer: String = "",
+  val detectedQualities: List<VideoQualityOption> = emptyList()
 )
 
 enum class SubtitleSourceFilter(val titleArabic: String, val id: String) {
