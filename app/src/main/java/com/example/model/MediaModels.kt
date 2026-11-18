@@ -9,8 +9,67 @@ data class SearchResultItem(
   val type: String = "فيلم / مسلسل",
   val year: String = "",
   val quality: String = "1080p Web-DL",
-  val description: String = ""
+  val description: String = "",
+  val rating: String = "8.2"
 )
+
+data class CatalogMediaItem(
+  val id: String,
+  val title: String,
+  val searchTitle: String = title,
+  val posterUrl: String,
+  val backdropUrl: String = posterUrl,
+  val rating: String = "8.4",
+  val year: String = "2025",
+  val genre: String = "Drama • Action",
+  val overview: String = "",
+  val mediaType: String = "tv", // "movie" or "tv"
+  val rank: Int? = null
+)
+
+data class ScrapedWatchServer(
+  val id: String,
+  val name: String,
+  val embedUrl: String,
+  val qualityLabel: String = "Auto HD",
+  val isDirectEmbed: Boolean = true,
+  val directStreamUrl: String = ""
+)
+
+data class ScrapedSeasonItem(
+  val seasonNumber: Int,
+  val title: String,
+  val url: String
+)
+
+data class ScrapedEpisodeItem(
+  val episodeNumber: Int,
+  val title: String,
+  val url: String,
+  val seasonNumber: Int = 1
+)
+
+data class ScrapedSeriesStructure(
+  val isSeries: Boolean = false,
+  val seriesTitle: String = "",
+  val currentSeason: Int = 1,
+  val selectedSeasonNumber: Int = currentSeason,
+  val seasons: List<ScrapedSeasonItem> = emptyList(),
+  val episodes: List<ScrapedEpisodeItem> = emptyList(),
+  val watchServers: List<ScrapedWatchServer> = emptyList(),
+  val bestCleanPlayerUrl: String = "",
+  val directStreamUrl: String = "",
+  val directStreamReferer: String = ""
+)
+
+enum class SubtitleSourceFilter(val titleArabic: String, val id: String) {
+  ALL("الكل (OpenSubtitles + Addic7ed)", "all"),
+  OPEN_SUBTITLES("OpenSubtitles.org", "opensubtitles"),
+  ADDIC7ED("Addic7ed.com", "addic7ed");
+
+  val labelAr: String
+    get() = titleArabic
+}
 
 data class SubtitleItem(
   val id: String,
@@ -20,5 +79,9 @@ data class SubtitleItem(
   val format: String = "vtt",
   val downloadUrl: String,
   val source: String = "OpenSubtitles.org",
-  val rating: Float = 5.0f
-)
+  val rating: Float = 5.0f,
+  val rawVttDataUri: String = ""
+) {
+  val sourceSite: String
+    get() = source
+}

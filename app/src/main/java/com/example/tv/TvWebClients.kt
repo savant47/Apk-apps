@@ -65,16 +65,7 @@ class TvWebChromeClient(
           ViewGroup.LayoutParams.MATCH_PARENT,
           ViewGroup.LayoutParams.MATCH_PARENT
         )
-        // Ensure hardware layer acceleration for smooth 60fps video playback on Mali-450 GPU, but fallback to software on emulator to prevent Mesa errors
-        val isEmu = android.os.Build.HARDWARE.lowercase().contains("goldfish") || 
-                    android.os.Build.HARDWARE.lowercase().contains("ranchu") ||
-                    android.os.Build.HARDWARE.lowercase().contains("cuttlefish") ||
-                    android.os.Build.FINGERPRINT.lowercase().startsWith("generic")
-        if (isEmu) {
-          fullscreenContainer.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-        } else {
-          fullscreenContainer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        }
+        fullscreenContainer.setLayerType(View.LAYER_TYPE_NONE, null)
         fullscreenContainer.addView(view)
         fullscreenContainer.visibility = View.VISIBLE
         fullscreenContainer.bringToFront()
@@ -91,15 +82,7 @@ class TvWebChromeClient(
     try {
       fullscreenContainer.removeView(view)
       fullscreenContainer.visibility = View.GONE
-      val isEmu = android.os.Build.HARDWARE.lowercase().contains("goldfish") || 
-                  android.os.Build.HARDWARE.lowercase().contains("ranchu") ||
-                  android.os.Build.HARDWARE.lowercase().contains("cuttlefish") ||
-                  android.os.Build.FINGERPRINT.lowercase().startsWith("generic")
-      if (isEmu) {
-        fullscreenContainer.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-      } else {
-        fullscreenContainer.setLayerType(View.LAYER_TYPE_NONE, null)
-      }
+      fullscreenContainer.setLayerType(View.LAYER_TYPE_NONE, null)
       customView = null
       customViewCallback?.onCustomViewHidden()
       customViewCallback = null
@@ -108,6 +91,14 @@ class TvWebChromeClient(
       customView = null
       customViewCallback = null
       onFullscreenChanged(false)
+    }
+  }
+
+  override fun getDefaultVideoPoster(): Bitmap? {
+    return try {
+      Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+    } catch (_: Exception) {
+      super.getDefaultVideoPoster()
     }
   }
 
@@ -136,8 +127,13 @@ class TvWebChromeClient(
   override fun onPermissionRequest(request: android.webkit.PermissionRequest?) {
     try {
       val resources = request?.resources ?: emptyArray()
-      if (resources.isNotEmpty()) {
-        request?.grant(resources)
+      // Exclude RESOURCE_PROTECTED_MEDIA_ID to prevent DrmHalHidl passthrough factory errors
+      // and force HTML5 players to serve standard unencrypted HLS/MP4 streams
+      val nonDrmResources = resources
+        .filter { it != android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID }
+        .toTypedArray()
+      if (nonDrmResources.isNotEmpty()) {
+        request?.grant(nonDrmResources)
       } else {
         request?.deny()
       }
@@ -164,7 +160,7 @@ class TvWebViewClient(
   private val onPageFinishedCallback: (String) -> Unit,
   private val onRenderProcessGoneCallback: (() -> Unit)? = null,
   private val onAdBlockedCallback: ((String) -> Unit)? = null,
-  private val onVideoDetectedCallback: ((String) -> Unit)? = null,
+  private val onVideoDetectedCallback: ((String, Map<String, String>) -> Unit)? = null,
   private val isGeneralBrowserMode: () -> Boolean = { false }
 ) : WebViewClient() {
 
@@ -387,10 +383,10 @@ class TvWebViewClient(
       if (!isBlockedAd) {
         if (view != null) {
           view.post {
-            onVideoDetectedCallback?.invoke(url)
+            onVideoDetectedCallback?.invoke(url, emptyMap())
           }
         } else {
-          onVideoDetectedCallback?.invoke(url)
+          onVideoDetectedCallback?.invoke(url, emptyMap())
         }
       }
     }
@@ -427,12 +423,17 @@ class TvWebViewClient(
         if (host.contains(ad)) { isBlockedAd = true; break }
       }
       if (!isBlockedAd) {
+        val capturedHeaders = try {
+          request.requestHeaders?.toMap() ?: emptyMap()
+        } catch (_: Exception) {
+          emptyMap()
+        }
         if (view != null) {
           view.post {
-            onVideoDetectedCallback?.invoke(urlStr)
+            onVideoDetectedCallback?.invoke(urlStr, capturedHeaders)
           }
         } else {
-          onVideoDetectedCallback?.invoke(urlStr)
+          onVideoDetectedCallback?.invoke(urlStr, capturedHeaders)
         }
       }
     }
@@ -485,6 +486,13 @@ class TvWebViewClient(
     val preInjectJs = """
       (function() {
         try {
+          // 0. Disable EME/DRM probing to prevent DrmHalHidl passthrough factory errors and force standard HLS/MP4
+          if (typeof navigator !== 'undefined' && navigator.requestMediaKeySystemAccess) {
+            navigator.requestMediaKeySystemAccess = function() {
+              return Promise.reject(new DOMException('EME disabled - using direct HLS/MP4', 'NotSupportedError'));
+            };
+          }
+
           // 1. Element.prototype.matches & closest polyfills for Chromium < 55
           if (!Element.prototype.matches) {
             Element.prototype.matches = Element.prototype.msMatchesSelector || 
@@ -733,37 +741,65 @@ class TvWebViewClient(
           } catch(e) {}
         }, 3000);
 
-        // 4. Force Low-Quality (240p/360p/480p) Automatic Selection in Web Players:
-        function enforceLowQuality() {
+        // 4. Dynamic Quality Controller & Clean Player Isolation:
+        function enforceSelectedQuality() {
           try {
-            // A. JWPlayer quality selector
+            var targetQ = window.__asserTargetQuality || 'auto';
             if (window.jwplayer && typeof window.jwplayer === 'function') {
               var p = window.jwplayer();
               if (p && p.getQualityLevels) {
                 var levels = p.getQualityLevels();
-                if (levels && levels.length > 0) {
-                  // Target lowest available (usually level index 0 is lowest or index with 360p/480p)
-                  var bestIdx = 0;
+                if (levels && levels.length > 0 && targetQ !== 'auto') {
                   for (var i = 0; i < levels.length; i++) {
                     var lbl = (levels[i].label || '').toLowerCase();
-                    if (lbl.indexOf('360') !== -1 || lbl.indexOf('480') !== -1 || lbl.indexOf('240') !== -1 || lbl.indexOf('sd') !== -1) {
-                      bestIdx = i;
+                    var h = levels[i].height ? levels[i].height.toString() : '';
+                    if (lbl.indexOf(targetQ) !== -1 || h === targetQ) {
+                      p.setCurrentQuality(i);
                       break;
                     }
                   }
-                  p.setCurrentQuality(bestIdx);
                 }
               }
             }
-            // B. HLS.js cap
             if (window.Hls) {
               window.Hls.DefaultConfig = window.Hls.DefaultConfig || {};
-              window.Hls.DefaultConfig.maxMaxBufferLength = 10;
-              window.Hls.DefaultConfig.capLevelToPlayerSize = true;
+              window.Hls.DefaultConfig.maxMaxBufferLength = 15;
             }
           } catch(e) {}
         }
-        setInterval(enforceLowQuality, 2000);
+        setInterval(enforceSelectedQuality, 2500);
+
+        // 4b. Auto-upgrade LaRoza (video.php -> play.php) & TopCinema episode/movie pages (-> /watch/)
+        // and isolate the video player container cleanly!
+        try {
+          var loc = window.location.href || '';
+          if (loc.indexOf('video.php?vid=') !== -1) {
+            window.location.replace(loc.replace('video.php?vid=', 'play.php?vid='));
+            return;
+          }
+          if (window.location.hostname.indexOf('topcinema') !== -1 &&
+              window.location.pathname.length > 8 &&
+              window.location.pathname.indexOf('/watch') === -1 &&
+              window.location.pathname.indexOf('/series/') === -1 &&
+              window.location.pathname.indexOf('/category/') === -1 &&
+              window.location.pathname.indexOf('/search') === -1) {
+            var watchBtn = document.querySelector('a.watch, a[href*="/watch"]');
+            if (watchBtn && watchBtn.href) {
+              window.location.replace(watchBtn.href);
+              return;
+            }
+          }
+          if (!document.getElementById('asser-clean-player-css')) {
+            var style = document.createElement('style');
+            style.id = 'asser-clean-player-css';
+            style.innerHTML = 'header, nav, footer, .navbar, #header, #footer, .site-header, .site-footer, .breadcrumb, .breadcrumbs, #comments, .comments-area, .share-buttons, .social-share, .pm-top-head, #pm-menu, .MasterHeader, .TopBar, .Single--Sidebar, .related--posts, .allepcont, .seasons--episodes { display: none !important; } body { background-color: #070A0E !important; padding-top: 0 !important; margin-top: 0 !important; } .player--iframe, #player, #movie-player, #Playerholder { width: 100% !important; min-height: 230px !important; margin: 0 auto !important; } .player--iframe iframe, #Playerholder iframe { width: 100% !important; height: 240px !important; min-height: 230px !important; display: block !important; }';
+            document.head.appendChild(style);
+          }
+          var mainPlayer = document.querySelector('.player--iframe, #Playerholder, #player, #movie-player, iframe[src*="embed"], video');
+          if (mainPlayer && mainPlayer.scrollIntoView) {
+            mainPlayer.scrollIntoView({ behavior: 'instant', block: 'start' });
+          }
+        } catch(e) {}
 
         // 5. Video Source Sniffer to feed Native ExoPlayer Bridge
         function sniffVideoUrls() {
