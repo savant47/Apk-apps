@@ -3,6 +3,8 @@ package com.example.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,8 +54,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.TvPreferencesRepository
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
+import com.example.ui.theme.CinemaFocusGlow
 import com.example.ui.theme.CinemaPrimary
 import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSuccess
@@ -72,19 +76,27 @@ data class VideoQualityOption(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VideoQualityDialog(
-  currentQuality: String = "auto",
+  currentQuality: String = TvPreferencesRepository.QUALITY_LOWEST,
   onSelectQuality: (qualityId: String, qualityLabel: String) -> Unit,
   onDismiss: () -> Unit
 ) {
-  var selectedId by remember { mutableStateOf(currentQuality) }
+  var selectedId by remember(currentQuality) { mutableStateOf(TvPreferencesRepository.normalizeQualityId(currentQuality)) }
 
   val options = remember {
     listOf(
       VideoQualityOption(
-        id = "auto",
+        id = TvPreferencesRepository.QUALITY_LOWEST,
+        title = "أقل جودة (توفير الباقة)",
+        subtitle = "يختار تلقائياً أقل دقة متاحة (240p - 480p) لمنع استهلاك الباقة قبل بدء البث",
+        badge = "توفير الباقة",
+        icon = Icons.Default.Speed,
+        color = CinemaSuccess
+      ),
+      VideoQualityOption(
+        id = TvPreferencesRepository.QUALITY_AUTO,
         title = "تلقائي (Auto)",
-        subtitle = "ضبط ديناميكي حسب سرعة الإنترنت المتوفرة لمنع التوقف",
-        badge = "موصى به",
+        subtitle = "ضبط ديناميكي حسب سرعة الإنترنت المتوفرة (قد يختار 1080p على الشبكات السريعة)",
+        badge = "Auto",
         icon = Icons.Default.AutoMode,
         color = CinemaAccent
       ),
@@ -214,20 +226,22 @@ fun VideoQualityDialog(
         ) {
           options.forEach { opt ->
             val isSelected = selectedId == opt.id
+            val itemInteraction = remember { MutableInteractionSource() }
+            val isFocused by itemInteraction.collectIsFocusedAsState()
             Surface(
+              onClick = {
+                selectedId = opt.id
+                onSelectQuality(opt.id, opt.title)
+              },
+              interactionSource = itemInteraction,
               shape = RoundedCornerShape(12.dp),
-              color = if (isSelected) CinemaSurfaceVariant else CinemaSurface,
+              color = if (isFocused || isSelected) CinemaSurfaceVariant else CinemaSurface,
               border = BorderStroke(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) opt.color else CinemaBorder
+                width = if (isFocused) 2.5.dp else if (isSelected) 2.dp else 1.dp,
+                color = if (isFocused) CinemaFocusGlow else if (isSelected) opt.color else CinemaBorder
               ),
               modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable {
-                  selectedId = opt.id
-                  onSelectQuality(opt.id, opt.title)
-                }
                 .testTag("quality_option_${opt.id}")
             ) {
               Row(

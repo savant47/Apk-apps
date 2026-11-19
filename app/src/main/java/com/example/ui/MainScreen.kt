@@ -154,7 +154,7 @@ fun MainScreen(
   var showUpdateDialog by remember { mutableStateOf(false) }
   var showDiagnosticsDialog by remember { mutableStateOf(false) }
 
-  var currentVideoQuality by remember { mutableStateOf("auto") }
+  val currentVideoQuality by repository.preferredQualityFlow.collectAsState()
   var detectedVideoQualities by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
   var isHomeActive by remember { mutableStateOf(true) }
   var selectedMainTab by remember { mutableStateOf(AppMainTab.BROWSER) }
@@ -270,18 +270,63 @@ fun MainScreen(
     if (newOptions.isEmpty()) return
     // Combine and preserve existing higher/lower qualities from Master HLS so single-track reports never wipe them out!
     val combinedVariants = (newOptions + detectedVideoQualities)
-      .filter { it.id != "auto" && !it.isAuto && it.height > 0 }
+      .filter {
+        it.id != TvPreferencesRepository.QUALITY_AUTO &&
+          it.id != TvPreferencesRepository.QUALITY_LOWEST &&
+          !it.isAuto &&
+          it.height > 0
+      }
       .distinctBy { it.height }
       .sortedByDescending { it.height }
 
     val bestHeight = combinedVariants.firstOrNull()?.height ?: 0
+    val lowestHeight = combinedVariants.lastOrNull()?.height ?: 0
+    val lowestLabel = if (lowestHeight > 0) "أقل جودة (توفير الباقة • ${lowestHeight}p)" else "أقل جودة (توفير الباقة)"
     val autoLabel = if (bestHeight > 0) "تلقائي Auto (${bestHeight}p)" else "تلقائي (Auto)"
 
     val merged = mutableListOf<VideoQualityOption>()
-    merged.add(VideoQualityOption(id = "auto", label = autoLabel, height = 0, isAuto = true))
+    merged.add(
+      VideoQualityOption(
+        id = TvPreferencesRepository.QUALITY_LOWEST,
+        label = lowestLabel,
+        height = 0,
+        isAuto = false
+      )
+    )
+    merged.add(VideoQualityOption(id = TvPreferencesRepository.QUALITY_AUTO, label = autoLabel, height = 0, isAuto = true))
     merged.addAll(combinedVariants)
     detectedVideoQualities = merged
     AppDiagnosticsLogger.detectedQualitiesSummary = merged.joinToString { it.label }
+  }
+
+  /**
+   * Resolves the best direct stream URL for non-adaptive MP4 multi-quality embeds
+   * according to the user's saved quality preference (Data Saver LOWEST or target height cap).
+   */
+  fun selectPreferredDirectStreamUrl(
+    primaryUrl: String,
+    qualities: List<VideoQualityOption>
+  ): String {
+    if (primaryUrl.isBlank()) return primaryUrl
+    val lower = primaryUrl.lowercase()
+    // Adaptive HLS (.m3u8) / DASH (.mpd) manifests are filtered directly by ExoPlayer TrackSelector pre-prepare
+    if (lower.contains(".m3u8") || lower.contains(".mpd") || lower.contains(".urlset")) {
+      return primaryUrl
+    }
+    val mp4Variants = qualities.filter { it.height > 0 && it.streamUrl.startsWith("http") }
+    if (mp4Variants.isEmpty()) return primaryUrl
+    val pref = TvPreferencesRepository.normalizeQualityId(currentVideoQuality)
+    return when {
+      pref == TvPreferencesRepository.QUALITY_LOWEST -> {
+        mp4Variants.minByOrNull { it.height }?.streamUrl ?: primaryUrl
+      }
+      pref == TvPreferencesRepository.QUALITY_AUTO -> primaryUrl
+      else -> {
+        val cap = pref.toIntOrNull() ?: 480
+        val notExceeding = mp4Variants.filter { it.height <= cap + 45 }.maxByOrNull { it.height }
+        (notExceeding ?: mp4Variants.minByOrNull { it.height })?.streamUrl ?: primaryUrl
+      }
+    }
   }
 
   /**
@@ -366,26 +411,38 @@ fun MainScreen(
   }
 
   fun applyVideoQualityInPlayer(qualityId: String, qualityLabel: String, directVariantUrl: String = "") {
-    currentVideoQuality = qualityId
-    AppDiagnosticsLogger.selectedQualityId = qualityId
-    AppDiagnosticsLogger.log("QUALITY", "اختيار الجودة: $qualityLabel (id=$qualityId) | url=$directVariantUrl")
+    val normalizedId = TvPreferencesRepository.normalizeQualityId(qualityId)
+    repository.setPreferredQuality(normalizedId)
+    AppDiagnosticsLogger.selectedQualityId = normalizedId
+    AppDiagnosticsLogger.log("QUALITY", "اختيار الجودة (محفوظة): $qualityLabel (id=$normalizedId) | url=$directVariantUrl")
 
     val currentActiveStream = playNativeVideoUrl ?: ""
     val isCurrentMasterHls = currentActiveStream.contains("master.m3u8", ignoreCase = true) ||
-        currentActiveStream.contains(".urlset", ignoreCase = true)
+        currentActiveStream.contains(".urlset", ignoreCase = true) ||
+        currentActiveStream.contains(".mpd", ignoreCase = true)
 
-    // Switch URL only if it's a direct MP4 variant OR if we are not currently on a multi-variant master.m3u8
-    if (directVariantUrl.startsWith("http") && playNativeVideoUrl != null && qualityId != "auto") {
-      if ((directVariantUrl.contains(".mp4", ignoreCase = true) || !isCurrentMasterHls) &&
-          directVariantUrl != playNativeVideoUrl
+    // Switch URL only if it's a direct MP4 variant OR if we are not currently on a multi-variant adaptive manifest
+    val resolvedDirectUrl = when {
+      directVariantUrl.startsWith("http") -> directVariantUrl
+      normalizedId == TvPreferencesRepository.QUALITY_LOWEST && !isCurrentMasterHls -> {
+        detectedVideoQualities
+          .filter { it.height > 0 && it.streamUrl.startsWith("http") }
+          .minByOrNull { it.height }
+          ?.streamUrl ?: ""
+      }
+      else -> ""
+    }
+    if (resolvedDirectUrl.startsWith("http") && playNativeVideoUrl != null && normalizedId != TvPreferencesRepository.QUALITY_AUTO) {
+      if ((resolvedDirectUrl.contains(".mp4", ignoreCase = true) || !isCurrentMasterHls) &&
+          resolvedDirectUrl != playNativeVideoUrl
       ) {
-        playNativeVideoUrl = directVariantUrl
+        playNativeVideoUrl = resolvedDirectUrl
       }
     }
 
     val js = """
       (function() {
-        var qId = '$qualityId';
+        var qId = '$normalizedId';
         window.__asserTargetQuality = qId;
         function applyInWindow(win) {
           var matched = false;
@@ -395,6 +452,16 @@ fun MainScreen(
               if (qId === 'auto') {
                 win.jwplayer().setCurrentQuality(0);
                 matched = true;
+              } else if (qId === 'lowest') {
+                var lowestIdx = -1, lowestH = 99999;
+                for (var li = 0; li < levels.length; li++) {
+                  var lh = parseInt(levels[li].height || 0, 10);
+                  if (lh > 0 && lh < lowestH) { lowestH = lh; lowestIdx = li; }
+                }
+                if (lowestIdx >= 0) {
+                  win.jwplayer().setCurrentQuality(lowestIdx);
+                  matched = true;
+                }
               } else {
                 for (var i = 0; i < levels.length; i++) {
                   var lbl = (levels[i].label || '').toLowerCase();
@@ -413,6 +480,16 @@ fun MainScreen(
               if (qId === 'auto') {
                 win.hls.currentLevel = -1;
                 matched = true;
+              } else if (qId === 'lowest') {
+                var minIdx = -1, minH = 99999;
+                for (var lk = 0; lk < win.hls.levels.length; lk++) {
+                  var kh = win.hls.levels[lk].height || 0;
+                  if (kh > 0 && kh < minH) { minH = kh; minIdx = lk; }
+                }
+                if (minIdx >= 0) {
+                  win.hls.currentLevel = minIdx;
+                  matched = true;
+                }
               } else {
                 for (var k = 0; k < win.hls.levels.length; k++) {
                   if (win.hls.levels[k].height && win.hls.levels[k].height.toString() === qId) {
@@ -698,7 +775,6 @@ fun MainScreen(
 
     isScrapingSeries = true
     detectedVideoQualities = emptyList()
-    currentVideoQuality = "auto"
     userManuallyDismissedNativePlayer = false
     failedNativeStreamUrls.clear()
 
@@ -754,18 +830,19 @@ fun MainScreen(
 
       // If the scraper resolved a direct .m3u8 / .mp4 stream URL, kill any WebView and launch NativeTvExoPlayer!
       if (scraped.directStreamUrl.isNotBlank()) {
+        val chosenDirectUrl = selectPreferredDirectStreamUrl(scraped.directStreamUrl, scraped.detectedQualities)
         val streamReferer = scraped.directStreamReferer.ifBlank {
           scraped.bestCleanPlayerUrl.ifBlank { resolvedPortalWatchUrl }
         }
         activeEmbedRefererUrl = streamReferer
-        detectedVideoUrl = scraped.directStreamUrl
+        detectedVideoUrl = chosenDirectUrl
         detectedVideoHeaders = mapOf(
           "Referer" to streamReferer,
           "User-Agent" to desktopChromeUa
         )
         if (preferNativePlayer) {
           hardDestroyWebView("Direct stream resolved by scraper")
-          playNativeVideoUrl = scraped.directStreamUrl
+          playNativeVideoUrl = chosenDirectUrl
         }
       }
 
@@ -833,7 +910,6 @@ fun MainScreen(
     detectedVideoUrl = null
     detectedVideoHeaders = emptyMap()
     detectedVideoQualities = emptyList()
-    currentVideoQuality = "auto"
     playNativeVideoUrl = null
     if (title != null) pageTitle = title
     if (portal != null) {
@@ -1927,7 +2003,11 @@ fun MainScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                   )
-                  val qBadge = if (currentVideoQuality == "auto") "تلقائي" else "${currentVideoQuality}p"
+                  val qBadge = when (TvPreferencesRepository.normalizeQualityId(currentVideoQuality)) {
+                    TvPreferencesRepository.QUALITY_LOWEST -> "أقل جودة (توفير)"
+                    TvPreferencesRepository.QUALITY_AUTO -> "تلقائي"
+                    else -> "${currentVideoQuality.removeSuffix("p")}p"
+                  }
                   Text(
                     text = "${activePortal.displayNameArabic} • الجودة: $qBadge",
                     color = CinemaAccent,
@@ -2113,7 +2193,8 @@ fun MainScreen(
               refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
             )
             if (resolution.primaryStreamUrl.isNotBlank()) {
-              detectedVideoUrl = resolution.primaryStreamUrl
+              val chosenUrl = selectPreferredDirectStreamUrl(resolution.primaryStreamUrl, resolution.detectedQualities)
+              detectedVideoUrl = chosenUrl
               detectedVideoHeaders = mapOf(
                 "Referer" to resolution.refererUrl.ifBlank { targetEmbed },
                 "User-Agent" to desktopChromeUa
@@ -2121,7 +2202,7 @@ fun MainScreen(
               if (resolution.detectedQualities.isNotEmpty()) {
                 mergeDetectedQualities(resolution.detectedQualities)
               }
-              playNativeVideoUrl = resolution.primaryStreamUrl
+              playNativeVideoUrl = chosenUrl
             } else {
               Toast.makeText(
                 context,
@@ -2174,8 +2255,9 @@ fun MainScreen(
                     refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                   )
                   if (resolution.primaryStreamUrl.isNotBlank() && preferNativePlayer) {
+                    val chosenUrl = selectPreferredDirectStreamUrl(resolution.primaryStreamUrl, resolution.detectedQualities)
                     activeEmbedRefererUrl = resolution.refererUrl.ifBlank { server.embedUrl }
-                    detectedVideoUrl = resolution.primaryStreamUrl
+                    detectedVideoUrl = chosenUrl
                     detectedVideoHeaders = mapOf(
                       "Referer" to activeEmbedRefererUrl,
                       "User-Agent" to desktopChromeUa
@@ -2184,7 +2266,7 @@ fun MainScreen(
                       mergeDetectedQualities(resolution.detectedQualities)
                     }
                     hardDestroyWebView("Selected server resolved direct stream")
-                    playNativeVideoUrl = resolution.primaryStreamUrl
+                    playNativeVideoUrl = chosenUrl
                   } else {
                     val resolvedTarget = resolution.refererUrl.takeIf { it.startsWith("http") }
                       ?: server.embedUrl.takeIf { it.startsWith("http") }
@@ -2291,8 +2373,9 @@ fun MainScreen(
                     refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                   )
                   if (resolution.primaryStreamUrl.isNotBlank() && preferNativePlayer) {
+                    val chosenUrl = selectPreferredDirectStreamUrl(resolution.primaryStreamUrl, resolution.detectedQualities)
                     activeEmbedRefererUrl = resolution.refererUrl.ifBlank { server.embedUrl }
-                    detectedVideoUrl = resolution.primaryStreamUrl
+                    detectedVideoUrl = chosenUrl
                     detectedVideoHeaders = mapOf(
                       "Referer" to activeEmbedRefererUrl,
                       "User-Agent" to desktopChromeUa
@@ -2301,7 +2384,7 @@ fun MainScreen(
                       mergeDetectedQualities(resolution.detectedQualities)
                     }
                     hardDestroyWebView("Selected server resolved direct stream")
-                    playNativeVideoUrl = resolution.primaryStreamUrl
+                    playNativeVideoUrl = chosenUrl
                   } else {
                     val resolvedTarget = resolution.refererUrl.takeIf { it.startsWith("http") }
                       ?: server.embedUrl.takeIf { it.startsWith("http") }

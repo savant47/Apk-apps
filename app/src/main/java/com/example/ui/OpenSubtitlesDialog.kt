@@ -93,6 +93,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.SearchAndSubtitlesService
+import com.example.model.SubtitleEdgeStyle
 import com.example.model.SubtitleItem
 import com.example.model.SubtitleSourceFilter
 import com.example.model.SubtitleStyleConfig
@@ -1001,6 +1002,19 @@ fun SubtitleAppearanceSettingsContent(
               )
               .padding(horizontal = 16.dp, vertical = 8.dp)
           ) {
+            val previewShadow = when (style.edgeStyle) {
+              SubtitleEdgeStyle.DROP_SHADOW -> Shadow(
+                color = Color.Black,
+                offset = Offset(2.5f, 2.5f),
+                blurRadius = 8f
+              )
+              SubtitleEdgeStyle.OUTLINE -> Shadow(
+                color = Color.Black,
+                offset = Offset(0f, 0f),
+                blurRadius = 14f
+              )
+              SubtitleEdgeStyle.NONE -> Shadow.None
+            }
             Text(
               text = "ترجمة Asser TV الاحترافية • وضوح كامل لشاشات التلفاز",
               color = Color(style.textColorArgb),
@@ -1008,13 +1022,7 @@ fun SubtitleAppearanceSettingsContent(
               lineHeight = (style.fontSizeSp.coerceIn(14f, 60f) * 1.32f).sp,
               fontWeight = FontWeight.ExtraBold,
               textAlign = TextAlign.Center,
-              style = TextStyle(
-                shadow = Shadow(
-                  color = Color.Black,
-                  offset = Offset(2f, 2f),
-                  blurRadius = 8f
-                )
-              )
+              style = TextStyle(shadow = previewShadow)
             )
           }
         }
@@ -1291,7 +1299,72 @@ fun SubtitleAppearanceSettingsContent(
       }
     }
 
-    // 5. Subtitle Sync Timing Offset (تقديم وتأخير وقت الترجمة)
+    // 5. Edge / Shadow Style Selection (نمط حواف وظل النص)
+    Text(
+      text = "نمط حواف وظل الترجمة (Edge / Shadow):",
+      color = CinemaAccent,
+      fontSize = 12.sp,
+      fontWeight = FontWeight.ExtraBold
+    )
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      SubtitleEdgeStyle.values().forEach { edge ->
+        val isSelected = style.edgeStyle == edge
+        TvSubtitleSelectablePill(
+          label = edge.labelAr,
+          isSelected = isSelected,
+          selectedContainerColor = CinemaPrimary,
+          selectedContentColor = Color.White,
+          selectedBorderColor = ClipboxWhite,
+          onClick = { onStyleChange(style.copy(edgeStyle = edge)) },
+          modifier = Modifier.testTag("sub_edge_style_${edge.id}")
+        )
+      }
+    }
+
+    // 6. Vertical Position Selection (موضع الترجمة الرأسي من الأسفل)
+    val verticalPositions = remember {
+      listOf(
+        16 to "أسفل الشاشة (16dp)",
+        28 to "افتراضي (28dp)",
+        52 to "متوسط (52dp)",
+        80 to "مرتفع (80dp)",
+        110 to "أعلى (110dp)"
+      )
+    }
+    Text(
+      text = "الموضع الرأسي للترجمة (الحالي: ${style.bottomOffsetDp}dp من الأسفل):",
+      color = CinemaAccent,
+      fontSize = 12.sp,
+      fontWeight = FontWeight.ExtraBold
+    )
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      verticalPositions.forEach { (offsetDp, label) ->
+        val isSelected = style.bottomOffsetDp == offsetDp
+        TvSubtitleSelectablePill(
+          label = label,
+          isSelected = isSelected,
+          selectedContainerColor = CinemaSecondary,
+          selectedContentColor = Color.White,
+          selectedBorderColor = CinemaAccent,
+          onClick = { onStyleChange(style.copy(bottomOffsetDp = offsetDp)) },
+          modifier = Modifier.testTag("sub_pos_$offsetDp")
+        )
+      }
+    }
+
+    // 7. Subtitle Sync Timing Offset (تقديم وتأخير وقت الترجمة)
     val syncSec = style.syncOffsetMs / 1000.0
     Text(
       text = "ضبط تزامن وقت الترجمة (الحالي: ${if (syncSec >= 0) "+$syncSec" else "$syncSec"} ثانية):",

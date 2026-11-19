@@ -455,8 +455,13 @@ fun WatchSidePanel(
               }
             }
           } else {
+            val savedLabel = when (currentQuality.lowercase()) {
+              "lowest" -> "أقل جودة (توفير الباقة) • جاري رصد الجودات..."
+              "auto" -> "تلقائي Auto • جاري رصد الجودات..."
+              else -> "${currentQuality}p (محفوظة) • جاري رصد الجودات..."
+            }
             Text(
-              text = "تلقائي Auto (سيتم إظهار الجودات الفعلية فور بدء البث...)",
+              text = savedLabel,
               color = CinemaAccent,
               fontSize = 10.sp,
               fontWeight = FontWeight.SemiBold,

@@ -126,6 +126,8 @@ import androidx.media3.ui.PlayerView
 import com.example.R
 import com.example.data.AppDiagnosticsLogger
 import com.example.data.SearchAndSubtitlesService
+import com.example.data.TvPreferencesRepository
+import com.example.model.SubtitleEdgeStyle
 import com.example.model.SubtitleItem
 import com.example.model.SubtitleStyleConfig
 import com.example.model.VideoQualityOption
@@ -155,7 +157,7 @@ fun NativeTvExoPlayer(
   refererUrl: String = "https://topcinema.io",
   capturedHeaders: Map<String, String> = emptyMap(),
   userAgent: String = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-  selectedQuality: String = "auto",
+  selectedQuality: String = TvPreferencesRepository.QUALITY_LOWEST,
   availableQualities: List<VideoQualityOption> = emptyList(),
   onSelectQualityOption: (VideoQualityOption) -> Unit = {},
   activeSubtitle: SubtitleItem? = null,
@@ -274,8 +276,62 @@ fun NativeTvExoPlayer(
       .build()
   }
 
+  fun applyPrePrepareConstraints(
+    builder: DefaultTrackSelector.Parameters.Builder,
+    targetQualityId: String
+  ) {
+    val normalized = TvPreferencesRepository.normalizeQualityId(targetQualityId)
+    builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+    builder.setExceedVideoConstraintsIfNecessary(true)
+    when {
+      normalized == TvPreferencesRepository.QUALITY_LOWEST -> {
+        // Strict Data Saver ceiling BEFORE ExoPlayer.prepare(): forces lowest available track (<= 480p)
+        // so NOT A SINGLE 720p/1080p segment is ever downloaded on startup!
+        builder
+          .setForceLowestBitrate(true)
+          .setMaxVideoSize(854, 480)
+          .setMinVideoSize(0, 0)
+          .setMaxVideoBitrate(1_200_000)
+      }
+      normalized == TvPreferencesRepository.QUALITY_AUTO -> {
+        builder
+          .setForceLowestBitrate(false)
+          .clearVideoSizeConstraints()
+          .setMaxVideoBitrate(Int.MAX_VALUE)
+      }
+      else -> {
+        val targetHeight = normalized.toIntOrNull()
+        if (targetHeight != null && targetHeight > 0) {
+          val maxWidth = when {
+            targetHeight <= 240 -> 480
+            targetHeight <= 360 -> 680
+            targetHeight <= 480 -> 960
+            targetHeight <= 720 -> 1440
+            targetHeight <= 1080 -> 2160
+            else -> Int.MAX_VALUE
+          }
+          builder
+            .setForceLowestBitrate(false)
+            .setMaxVideoSize(maxWidth, targetHeight + 45)
+            .setMinVideoSize(0, 0)
+            .setMaxVideoBitrate(Int.MAX_VALUE)
+        } else {
+          builder
+            .setForceLowestBitrate(true)
+            .setMaxVideoSize(854, 480)
+            .setMinVideoSize(0, 0)
+            .setMaxVideoBitrate(1_200_000)
+        }
+      }
+    }
+  }
+
   val trackSelector = remember {
-    DefaultTrackSelector(context)
+    DefaultTrackSelector(context).apply {
+      val initialBuilder = buildUponParameters()
+      applyPrePrepareConstraints(initialBuilder, selectedQuality)
+      setParameters(initialBuilder)
+    }
   }
 
   val player = remember {
@@ -373,54 +429,120 @@ fun NativeTvExoPlayer(
     }
   }
 
-  fun applyQualityToTrackSelector(targetQualityId: String) {
-    val paramsBuilder = trackSelector.buildUponParameters()
-    paramsBuilder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
-    val targetHeight = targetQualityId.toIntOrNull()
+  var lastTrackOverrideSignature by remember(videoUrl) { mutableStateOf("") }
 
-    if (targetHeight != null && targetHeight > 0) {
-      var appliedExplicitOverride = false
-      val currentTracks = player.currentTracks
+  fun applyQualityToTrackSelector(
+    targetQualityId: String,
+    tracksOverride: Tracks? = null
+  ) {
+    val normalized = TvPreferencesRepository.normalizeQualityId(targetQualityId)
+    val paramsBuilder = trackSelector.buildUponParameters()
+    applyPrePrepareConstraints(paramsBuilder, normalized)
+
+    val currentTracks = tracksOverride ?: try { player.currentTracks } catch (_: Throwable) { Tracks.EMPTY }
+    var appliedExplicitOverride = false
+    var chosenHeight = 0
+
+    if (normalized == TvPreferencesRepository.QUALITY_LOWEST) {
+      // Find the absolute lowest positive resolution available across all video track groups
+      var minHeight = Int.MAX_VALUE
       for (group in currentTracks.groups) {
         if (group.type == C.TRACK_TYPE_VIDEO && group.length > 0) {
-          val matchingIndices = mutableListOf<Int>()
           for (i in 0 until group.length) {
-            val fmt = group.getTrackFormat(i)
-            if (fmt.height == targetHeight || (fmt.height in (targetHeight - 60)..(targetHeight + 60))) {
-              matchingIndices.add(i)
+            val h = group.getTrackFormat(i).height
+            if (h in 100..2160 && h < minHeight) {
+              minHeight = h
             }
-          }
-          if (matchingIndices.isNotEmpty()) {
-            paramsBuilder.setOverrideForType(
-              TrackSelectionOverride(group.mediaTrackGroup, matchingIndices)
-            )
-            appliedExplicitOverride = true
-            break
           }
         }
       }
-
-      // Always enforce maxVideoSize constraint alongside TrackSelectionOverride so adaptive HLS
-      // never jumps back to 1080p/1040p across track refreshes!
-      paramsBuilder
-        .setMaxVideoSize(Int.MAX_VALUE, targetHeight + 45)
-        .setMinVideoSize(0, 0)
-
+      if (minHeight != Int.MAX_VALUE) {
+        chosenHeight = minHeight
+        for (group in currentTracks.groups) {
+          if (group.type == C.TRACK_TYPE_VIDEO && group.length > 0) {
+            val matchingIndices = mutableListOf<Int>()
+            for (i in 0 until group.length) {
+              val h = group.getTrackFormat(i).height
+              if (h in (minHeight - 20)..(minHeight + 20)) {
+                matchingIndices.add(i)
+              }
+            }
+            if (matchingIndices.isNotEmpty()) {
+              paramsBuilder.setOverrideForType(
+                TrackSelectionOverride(group.mediaTrackGroup, matchingIndices)
+              )
+              appliedExplicitOverride = true
+              break
+            }
+          }
+        }
+        paramsBuilder
+          .setForceLowestBitrate(true)
+          .setMaxVideoSize(Int.MAX_VALUE, minHeight + 20)
+          .setMinVideoSize(0, 0)
+      }
       AppDiagnosticsLogger.log(
         "ExoPlayerQuality",
-        "Applied target quality ${targetHeight}p (explicitOverride=$appliedExplicitOverride)"
+        "Applied Data Saver LOWEST quality (chosen=${if (chosenHeight > 0) "${chosenHeight}p" else "<=480p pre-cap"}, explicitOverride=$appliedExplicitOverride)"
       )
+    } else if (normalized != TvPreferencesRepository.QUALITY_AUTO) {
+      val targetHeight = normalized.toIntOrNull()
+      if (targetHeight != null && targetHeight > 0) {
+        // Pick the closest available resolution NOT exceeding targetHeight (or lowest available if all exceed)
+        val allHeights = mutableListOf<Int>()
+        for (group in currentTracks.groups) {
+          if (group.type == C.TRACK_TYPE_VIDEO && group.length > 0) {
+            for (i in 0 until group.length) {
+              val h = group.getTrackFormat(i).height
+              if (h in 100..2160) allHeights.add(h)
+            }
+          }
+        }
+        if (allHeights.isNotEmpty()) {
+          val notExceeding = allHeights.filter { it <= targetHeight + 45 }.maxOrNull()
+          val bestMatchHeight = notExceeding ?: allHeights.minOrNull() ?: targetHeight
+          chosenHeight = bestMatchHeight
+          for (group in currentTracks.groups) {
+            if (group.type == C.TRACK_TYPE_VIDEO && group.length > 0) {
+              val matchingIndices = mutableListOf<Int>()
+              for (i in 0 until group.length) {
+                val h = group.getTrackFormat(i).height
+                if (h in (bestMatchHeight - 30)..(bestMatchHeight + 30)) {
+                  matchingIndices.add(i)
+                }
+              }
+              if (matchingIndices.isNotEmpty()) {
+                paramsBuilder.setOverrideForType(
+                  TrackSelectionOverride(group.mediaTrackGroup, matchingIndices)
+                )
+                appliedExplicitOverride = true
+                break
+              }
+            }
+          }
+          paramsBuilder
+            .setForceLowestBitrate(false)
+            .setMaxVideoSize(Int.MAX_VALUE, bestMatchHeight + 25)
+            .setMinVideoSize(0, 0)
+        }
+        AppDiagnosticsLogger.log(
+          "ExoPlayerQuality",
+          "Applied saved quality ${targetHeight}p (matched=${if (chosenHeight > 0) "${chosenHeight}p" else "pre-cap"}, explicitOverride=$appliedExplicitOverride)"
+        )
+      }
     } else {
-      paramsBuilder.clearVideoSizeConstraints().setMaxVideoBitrate(Int.MAX_VALUE)
       AppDiagnosticsLogger.log("ExoPlayerQuality", "Applied Auto quality selection")
     }
+
     trackSelector.setParameters(paramsBuilder)
   }
 
   // Dynamically apply the user's selected quality whenever selectedQuality changes
   LaunchedEffect(selectedQuality) {
-    AppDiagnosticsLogger.selectedQualityId = selectedQuality
-    applyQualityToTrackSelector(selectedQuality)
+    val normalized = TvPreferencesRepository.normalizeQualityId(selectedQuality)
+    AppDiagnosticsLogger.selectedQualityId = normalized
+    lastTrackOverrideSignature = ""
+    applyQualityToTrackSelector(normalized)
   }
 
   // Listen to tracks, actual resolution, and playback errors
@@ -440,9 +562,16 @@ fun NativeTvExoPlayer(
         }
         if (heights.isNotEmpty()) {
           val sorted = heights.sortedDescending()
+          val lowestHeight = sorted.last()
           val options = mutableListOf(
             VideoQualityOption(
-              id = "auto",
+              id = TvPreferencesRepository.QUALITY_LOWEST,
+              label = "أقل جودة (توفير الباقة • ${lowestHeight}p)",
+              height = 0,
+              isAuto = false
+            ),
+            VideoQualityOption(
+              id = TvPreferencesRepository.QUALITY_AUTO,
               label = "تلقائي Auto (${sorted.first()}p)",
               height = 0,
               isAuto = true
@@ -462,8 +591,11 @@ fun NativeTvExoPlayer(
             "Detected real video tracks: ${sorted.joinToString { "${it}p" }}"
           )
           onQualitiesDetected(options)
-          if (latestSelectedQuality != "auto") {
-            applyQualityToTrackSelector(latestSelectedQuality)
+          val normalizedPref = TvPreferencesRepository.normalizeQualityId(latestSelectedQuality)
+          val sig = "$normalizedPref|${sorted.joinToString(",")}"
+          if (normalizedPref != TvPreferencesRepository.QUALITY_AUTO && lastTrackOverrideSignature != sig) {
+            lastTrackOverrideSignature = sig
+            applyQualityToTrackSelector(normalizedPref, tracks)
           }
         }
       }
@@ -782,6 +914,10 @@ fun NativeTvExoPlayer(
           }
         }
         val mediaItem = mediaItemBuilder.build()
+        // Enforce saved/Data-Saver TrackSelectionParameters BEFORE player.prepare()
+        // so ExoPlayer never downloads a single 1080p segment on startup!
+        lastTrackOverrideSignature = ""
+        applyQualityToTrackSelector(latestSelectedQuality, Tracks.EMPTY)
         player.setMediaItem(mediaItem, resumePositionMs)
         player.prepare()
         player.playWhenReady = !showResumePrompt && !latestExternalPause
@@ -809,13 +945,31 @@ fun NativeTvExoPlayer(
 
   val effectiveQualityList = remember(availableQualities, actualVideoResolution) {
     if (availableQualities.isNotEmpty()) {
-      availableQualities
+      val hasLowest = availableQualities.any { it.id == TvPreferencesRepository.QUALITY_LOWEST }
+      if (hasLowest) {
+        availableQualities
+      } else {
+        listOf(
+          VideoQualityOption(
+            id = TvPreferencesRepository.QUALITY_LOWEST,
+            label = "أقل جودة (توفير الباقة)",
+            height = 0,
+            isAuto = false
+          )
+        ) + availableQualities
+      }
     } else {
-      val autoSuffix = if (actualVideoResolution.isNotBlank()) " ($actualVideoResolution)" else ""
+      val resSuffix = if (actualVideoResolution.isNotBlank()) " ($actualVideoResolution)" else ""
       listOf(
         VideoQualityOption(
-          id = "auto",
-          label = "تلقائي Auto$autoSuffix",
+          id = TvPreferencesRepository.QUALITY_LOWEST,
+          label = "أقل جودة (توفير الباقة)$resSuffix",
+          height = 0,
+          isAuto = false
+        ),
+        VideoQualityOption(
+          id = TvPreferencesRepository.QUALITY_AUTO,
+          label = "تلقائي Auto$resSuffix",
           height = 0,
           isAuto = true
         )
@@ -824,10 +978,14 @@ fun NativeTvExoPlayer(
   }
 
   val activeQualityShortBadge = remember(selectedQuality, actualVideoResolution) {
-    if (selectedQuality == "auto") {
-      if (actualVideoResolution.isNotBlank()) "Auto ($actualVideoResolution)" else "Auto"
-    } else {
-      "${selectedQuality}p"
+    when (TvPreferencesRepository.normalizeQualityId(selectedQuality)) {
+      TvPreferencesRepository.QUALITY_LOWEST -> {
+        if (actualVideoResolution.isNotBlank()) "توفير ($actualVideoResolution)" else "أقل جودة"
+      }
+      TvPreferencesRepository.QUALITY_AUTO -> {
+        if (actualVideoResolution.isNotBlank()) "Auto ($actualVideoResolution)" else "Auto"
+      }
+      else -> "${selectedQuality.removeSuffix("p")}p"
     }
   }
 
@@ -857,16 +1015,21 @@ fun NativeTvExoPlayer(
           val effectiveFontSizeSp = style.fontSizeSp.coerceIn(12f, 60f)
           val bgArgb = Color(style.backgroundColorArgb).toArgb()
           val isTransparentBg = android.graphics.Color.alpha(bgArgb) == 0
+          val edgeType = when (style.edgeStyle) {
+            SubtitleEdgeStyle.OUTLINE -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+            SubtitleEdgeStyle.NONE -> CaptionStyleCompat.EDGE_TYPE_NONE
+            SubtitleEdgeStyle.DROP_SHADOW -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+          }
+          val bottomFraction = (style.bottomOffsetDp.coerceIn(8, 140) / 360f).coerceIn(0.04f, 0.36f)
           subView.setApplyEmbeddedStyles(false)
           subView.setApplyEmbeddedFontSizes(false)
-          // Generous bottom padding fraction prevents large 48sp-60sp Arabic text from clipping at screen bottom
-          subView.setBottomPaddingFraction(if (effectiveFontSizeSp >= 40f) 0.10f else 0.08f)
+          subView.setBottomPaddingFraction(bottomFraction)
           subView.setStyle(
             CaptionStyleCompat(
               Color(style.textColorArgb).toArgb(),
               if (isTransparentBg) android.graphics.Color.TRANSPARENT else bgArgb,
               android.graphics.Color.TRANSPARENT,
-              if (isTransparentBg) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+              edgeType,
               android.graphics.Color.BLACK,
               Typeface.DEFAULT_BOLD
             )
@@ -1480,22 +1643,34 @@ fun NativeTvExoPlayer(
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 effectiveQualityList.forEach { qOpt ->
-                  val isSelected = selectedQuality == qOpt.id ||
-                      (selectedQuality == "auto" && qOpt.isAuto)
+                  val normalizedSelected = TvPreferencesRepository.normalizeQualityId(selectedQuality)
+                  val isSelected = normalizedSelected == qOpt.id ||
+                      (normalizedSelected == TvPreferencesRepository.QUALITY_AUTO && qOpt.isAuto)
+                  val qInteraction = remember { MutableInteractionSource() }
+                  val isQFocused by qInteraction.collectIsFocusedAsState()
                   Surface(
                     onClick = {
                       applyQualityToTrackSelector(qOpt.id)
                       onSelectQualityOption(qOpt)
                       showGearSettingsMenu = false
                     },
-                    color = if (isSelected) ClipboxWhite else CinemaSurface,
+                    interactionSource = qInteraction,
+                    color = when {
+                      isQFocused -> CinemaFocusGlow
+                      isSelected -> ClipboxWhite
+                      else -> CinemaSurface
+                    },
                     shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(
-                      width = 1.dp,
-                      color = if (isSelected) ClipboxWhite else CinemaSuccess.copy(alpha = 0.55f)
+                      width = if (isQFocused) 2.5.dp else 1.dp,
+                      color = when {
+                        isQFocused -> Color.White
+                        isSelected -> ClipboxWhite
+                        else -> CinemaSuccess.copy(alpha = 0.55f)
+                      }
                     ),
                     modifier = Modifier
-                      .heightIn(min = 32.dp)
+                      .heightIn(min = 38.dp)
                       .testTag("exo_gear_quality_${qOpt.id}")
                   ) {
                     Row(
@@ -1513,9 +1688,9 @@ fun NativeTvExoPlayer(
                       }
                       Text(
                         text = qOpt.label,
-                        color = if (isSelected) Color.Black else Color.White,
+                        color = if (isSelected || isQFocused) Color.Black else Color.White,
                         fontSize = 11.sp,
-                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Bold,
+                        fontWeight = if (isSelected || isQFocused) FontWeight.ExtraBold else FontWeight.Bold,
                         maxLines = 1,
                         softWrap = false
                       )
@@ -2061,6 +2236,19 @@ fun ActiveSubtitleCueOverlay(
               vertical = if (safeFontSizeSp >= 36f) 8.dp else 6.dp
             )
         ) {
+          val cueShadow = when (subtitleStyle.edgeStyle) {
+            SubtitleEdgeStyle.DROP_SHADOW -> Shadow(
+              color = Color.Black,
+              offset = Offset(2.5f, 2.5f),
+              blurRadius = 8f
+            )
+            SubtitleEdgeStyle.OUTLINE -> Shadow(
+              color = Color.Black,
+              offset = Offset(0f, 0f),
+              blurRadius = 14f
+            )
+            SubtitleEdgeStyle.NONE -> Shadow.None
+          }
           Text(
             text = matchingCueText,
             color = Color(subtitleStyle.textColorArgb),
@@ -2068,13 +2256,7 @@ fun ActiveSubtitleCueOverlay(
             fontWeight = FontWeight.ExtraBold,
             textAlign = TextAlign.Center,
             lineHeight = (safeFontSizeSp * 1.32f).sp,
-            style = TextStyle(
-              shadow = Shadow(
-                color = Color.Black,
-                offset = Offset(2.5f, 2.5f),
-                blurRadius = 8f
-              )
-            )
+            style = TextStyle(shadow = cueShadow)
           )
         }
       }

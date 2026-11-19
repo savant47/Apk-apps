@@ -6,6 +6,7 @@ import com.example.model.Bookmark
 import com.example.model.ControlMode
 import com.example.model.HistoryEntry
 import com.example.model.StreamingPortal
+import com.example.model.SubtitleEdgeStyle
 import com.example.model.SubtitleStyleConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +45,9 @@ class TvPreferencesRepository(context: Context) {
   private val _subtitleStyleFlow = MutableStateFlow(SubtitleStyleConfig())
   val subtitleStyleFlow: StateFlow<SubtitleStyleConfig> = _subtitleStyleFlow.asStateFlow()
 
+  private val _preferredQualityFlow = MutableStateFlow(QUALITY_LOWEST)
+  val preferredQualityFlow: StateFlow<String> = _preferredQualityFlow.asStateFlow()
+
   private val _autoPlayNextEpisodeFlow = MutableStateFlow(true)
   val autoPlayNextEpisodeFlow: StateFlow<Boolean> = _autoPlayNextEpisodeFlow.asStateFlow()
 
@@ -52,8 +56,13 @@ class TvPreferencesRepository(context: Context) {
     loadHistory()
     loadDisplayMode()
     loadSubtitleStyle()
+    loadPreferredQuality()
     _autoPlayNextEpisodeFlow.value = prefs.getBoolean(KEY_AUTO_PLAY_NEXT_EPISODE, true)
     loadPortals()
+    AppDiagnosticsLogger.log(
+      "Prefs",
+      "Loaded prefs: quality=${_preferredQualityFlow.value}, subSize=${_subtitleStyleFlow.value.fontSizeSp.toInt()}sp, subEdge=${_subtitleStyleFlow.value.edgeStyle.id}, subBottom=${_subtitleStyleFlow.value.bottomOffsetDp}dp"
+    )
   }
 
   fun loadPortals() {
@@ -115,17 +124,36 @@ class TvPreferencesRepository(context: Context) {
     return prefs.getBoolean(KEY_HAS_SELECTED_MODE, false)
   }
 
+  private fun loadPreferredQuality() {
+    val raw = prefs.getString(KEY_PREFERRED_VIDEO_QUALITY, QUALITY_LOWEST)
+    _preferredQualityFlow.value = normalizeQualityId(raw)
+  }
+
+  fun getPreferredQuality(): String = _preferredQualityFlow.value
+
+  fun setPreferredQuality(qualityId: String) {
+    val normalized = normalizeQualityId(qualityId)
+    _preferredQualityFlow.value = normalized
+    // Use commit() so quality preference survives sudden 1GB RAM Android TV process kills
+    prefs.edit()
+      .putString(KEY_PREFERRED_VIDEO_QUALITY, normalized)
+      .commit()
+    AppDiagnosticsLogger.log("Prefs", "Saved preferred video quality: $normalized")
+  }
+
   private fun loadSubtitleStyle() {
     val textColor = prefs.getLong(KEY_SUB_TEXT_COLOR, 0xFFFFD700L)
     val bgColor = prefs.getLong(KEY_SUB_BG_COLOR, 0xBF000000L)
     val fontSize = prefs.getFloat(KEY_SUB_FONT_SIZE, 20f).coerceIn(12f, 60f)
-    val bottomOffset = prefs.getInt(KEY_SUB_BOTTOM_OFFSET, 28)
+    val bottomOffset = prefs.getInt(KEY_SUB_BOTTOM_OFFSET, 28).coerceIn(8, 140)
+    val edgeStyle = SubtitleEdgeStyle.fromId(prefs.getString(KEY_SUB_EDGE_STYLE, SubtitleEdgeStyle.DROP_SHADOW.id))
     val syncOffset = prefs.getLong(KEY_SUB_SYNC_OFFSET, 0L)
     _subtitleStyleFlow.value = SubtitleStyleConfig(
       textColorArgb = textColor,
       backgroundColorArgb = bgColor,
       fontSizeSp = fontSize,
       bottomOffsetDp = bottomOffset,
+      edgeStyle = edgeStyle,
       syncOffsetMs = syncOffset
     )
   }
@@ -133,15 +161,20 @@ class TvPreferencesRepository(context: Context) {
   fun getSubtitleStyle(): SubtitleStyleConfig = _subtitleStyleFlow.value
 
   fun setSubtitleStyle(style: SubtitleStyleConfig) {
-    val clampedStyle = style.copy(fontSizeSp = style.fontSizeSp.coerceIn(12f, 60f))
+    val clampedStyle = style.copy(
+      fontSizeSp = style.fontSizeSp.coerceIn(12f, 60f),
+      bottomOffsetDp = style.bottomOffsetDp.coerceIn(8, 140)
+    )
     _subtitleStyleFlow.value = clampedStyle
+    // Use commit() so subtitle styling is flushed immediately and persists across app restarts/SIGKILL
     prefs.edit()
       .putLong(KEY_SUB_TEXT_COLOR, clampedStyle.textColorArgb)
       .putLong(KEY_SUB_BG_COLOR, clampedStyle.backgroundColorArgb)
       .putFloat(KEY_SUB_FONT_SIZE, clampedStyle.fontSizeSp)
       .putInt(KEY_SUB_BOTTOM_OFFSET, clampedStyle.bottomOffsetDp)
+      .putString(KEY_SUB_EDGE_STYLE, clampedStyle.edgeStyle.id)
       .putLong(KEY_SUB_SYNC_OFFSET, clampedStyle.syncOffsetMs)
-      .apply()
+      .commit()
   }
 
   fun isAutoPlayNextEpisodeEnabled(): Boolean = _autoPlayNextEpisodeFlow.value
@@ -469,6 +502,14 @@ class TvPreferencesRepository(context: Context) {
     root.put("display_mode", prefs.getString(KEY_DISPLAY_MODE, AppDisplayMode.MOBILE.name))
     root.put("active_portal", prefs.getString(KEY_ACTIVE_PORTAL, StreamingPortal.TOP_CINEMA.id))
     root.put("github_repo", getGitHubRepo())
+    root.put("preferred_video_quality", getPreferredQuality())
+    val sub = getSubtitleStyle()
+    root.put("sub_text_color", sub.textColorArgb)
+    root.put("sub_bg_color", sub.backgroundColorArgb)
+    root.put("sub_font_size", sub.fontSizeSp.toDouble())
+    root.put("sub_bottom_offset", sub.bottomOffsetDp)
+    root.put("sub_edge_style", sub.edgeStyle.id)
+    root.put("sub_sync_offset", sub.syncOffsetMs)
     return root.toString(2)
   }
 
@@ -485,10 +526,19 @@ class TvPreferencesRepository(context: Context) {
       if (root.has("display_mode")) editor.putString(KEY_DISPLAY_MODE, root.getString("display_mode"))
       if (root.has("active_portal")) editor.putString(KEY_ACTIVE_PORTAL, root.getString("active_portal"))
       if (root.has("github_repo")) editor.putString(KEY_GITHUB_REPO, root.getString("github_repo"))
-      editor.apply()
+      if (root.has("preferred_video_quality")) editor.putString(KEY_PREFERRED_VIDEO_QUALITY, normalizeQualityId(root.getString("preferred_video_quality")))
+      if (root.has("sub_text_color")) editor.putLong(KEY_SUB_TEXT_COLOR, root.getLong("sub_text_color"))
+      if (root.has("sub_bg_color")) editor.putLong(KEY_SUB_BG_COLOR, root.getLong("sub_bg_color"))
+      if (root.has("sub_font_size")) editor.putFloat(KEY_SUB_FONT_SIZE, root.getDouble("sub_font_size").toFloat())
+      if (root.has("sub_bottom_offset")) editor.putInt(KEY_SUB_BOTTOM_OFFSET, root.getInt("sub_bottom_offset"))
+      if (root.has("sub_edge_style")) editor.putString(KEY_SUB_EDGE_STYLE, root.getString("sub_edge_style"))
+      if (root.has("sub_sync_offset")) editor.putLong(KEY_SUB_SYNC_OFFSET, root.getLong("sub_sync_offset"))
+      editor.commit()
       loadBookmarks()
       loadHistory()
       loadDisplayMode()
+      loadSubtitleStyle()
+      loadPreferredQuality()
       true
     } catch (_: Exception) {
       false
@@ -512,9 +562,31 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_SUB_BG_COLOR = "subtitle_bg_color_argb"
     private const val KEY_SUB_FONT_SIZE = "subtitle_font_size_sp"
     private const val KEY_SUB_BOTTOM_OFFSET = "subtitle_bottom_offset_dp"
+    private const val KEY_SUB_EDGE_STYLE = "subtitle_edge_style_v1"
     private const val KEY_SUB_SYNC_OFFSET = "subtitle_sync_offset_ms"
+    private const val KEY_PREFERRED_VIDEO_QUALITY = "preferred_video_quality_v1"
     private const val KEY_AUTO_PLAY_NEXT_EPISODE = "auto_play_next_episode_enabled"
+    const val QUALITY_LOWEST = "lowest"
+    const val QUALITY_AUTO = "auto"
     const val DEFAULT_GITHUB_REPO = "savant47/Apk-apps"
+
+    fun normalizeQualityId(raw: String?): String {
+      val cleaned = raw?.trim()?.lowercase()?.removeSuffix("p") ?: return QUALITY_LOWEST
+      return when {
+        cleaned.isBlank() || cleaned == "lowest" || cleaned == "data_saver" -> QUALITY_LOWEST
+        cleaned == "auto" -> QUALITY_AUTO
+        cleaned.toIntOrNull() != null -> cleaned
+        else -> QUALITY_LOWEST
+      }
+    }
+
+    fun qualityShortLabel(qualityId: String): String {
+      return when (normalizeQualityId(qualityId)) {
+        QUALITY_LOWEST -> "أقل جودة (توفير الباقة)"
+        QUALITY_AUTO -> "تلقائي Auto"
+        else -> "${qualityId.removeSuffix("p")}p"
+      }
+    }
 
     /**
      * Builds a portal-independent, server-independent normalized content key so playback

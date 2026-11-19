@@ -94,11 +94,24 @@ data class ParsedSubtitleCue(
   val text: String
 )
 
+enum class SubtitleEdgeStyle(val id: String, val labelAr: String) {
+  DROP_SHADOW("DROP_SHADOW", "ظل سينمائي"),
+  OUTLINE("OUTLINE", "إطار أسود واضح"),
+  NONE("NONE", "بدون ظل");
+
+  companion object {
+    fun fromId(raw: String?): SubtitleEdgeStyle {
+      return values().firstOrNull { it.id.equals(raw, ignoreCase = true) } ?: DROP_SHADOW
+    }
+  }
+}
+
 data class SubtitleStyleConfig(
   val textColorArgb: Long = 0xFFFFD700L,       // Default: Cinema Gold/Yellow (#FFD700)
   val backgroundColorArgb: Long = 0xBF000000L, // Default: 75% Black (#BF000000)
   val fontSizeSp: Float = 20f,                 // Default: Large readable 20sp
   val bottomOffsetDp: Int = 28,                // Distance from bottom of player
+  val edgeStyle: SubtitleEdgeStyle = SubtitleEdgeStyle.DROP_SHADOW,
   val syncOffsetMs: Long = 0L                  // Subtitle timing offset in milliseconds
 )
 

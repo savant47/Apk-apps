@@ -49,7 +49,7 @@ object AppDiagnosticsLogger {
   @Volatile var extractedStreamUrl: String = ""
   @Volatile var streamReferer: String = ""
   @Volatile var detectedQualitiesSummary: String = "لم يتم التقاط جودات بعد"
-  @Volatile var selectedQualityId: String = "auto"
+  @Volatile var selectedQualityId: String = "lowest"
   @Volatile var actualPlayingResolution: String = "غير محدد"
   @Volatile var lastPlayerError: String = "لا توجد أخطاء"
 
