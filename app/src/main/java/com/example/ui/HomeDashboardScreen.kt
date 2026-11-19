@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -35,6 +38,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -71,6 +76,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -85,19 +91,28 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import android.os.Build
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.CoroutineScope
+import kotlin.math.abs
 import coil.request.ImageRequest
 import com.example.data.AppDisplayMode
 import com.example.data.SearchAndSubtitlesService
@@ -248,11 +263,17 @@ fun HomeDashboardScreen(
     )
 
     // 2. Main Clipbox Content Area
+    val mainDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
     LazyColumn(
       state = listState,
       modifier = Modifier
         .weight(1f)
         .fillMaxHeight()
+        .mouseVerticalDragScroll(
+          listState = listState,
+          scope = scope,
+          dragSlopPx = mainDragSlopPx
+        )
         .padding(horizontal = if (displayMode == AppDisplayMode.MOBILE) 10.dp else 16.dp, vertical = 10.dp),
       verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
@@ -812,10 +833,22 @@ fun ClipboxTopSearchBar(
 
       Spacer(modifier = Modifier.height(8.dp))
 
-      // Quick Suggestions Row
+      // Quick Suggestions Row (supports mouse drag left/right + touch + D-Pad)
+      val suggestionsListState = rememberLazyListState()
+      val suggestionsScope = rememberCoroutineScope()
+      val suggestionsIsRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+      val suggestionsDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
       LazyRow(
+        state = suggestionsListState,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+          .fillMaxWidth()
+          .mouseHorizontalDragScroll(
+            listState = suggestionsListState,
+            scope = suggestionsScope,
+            isRtl = suggestionsIsRtl,
+            dragSlopPx = suggestionsDragSlopPx
+          )
       ) {
         items(quickSuggestions) { suggestion ->
           val selected = searchQuery.equals(suggestion.trim(), ignoreCase = true)
@@ -1047,34 +1080,314 @@ fun ClipboxCatalogRow(
   showRankBadge: Boolean,
   onItemClick: (CatalogMediaItem) -> Unit
 ) {
+  val rowListState = rememberLazyListState()
+  val rowScope = rememberCoroutineScope()
+  val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+  val dragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
+  val scrollStepPx = with(LocalDensity.current) { 420.dp.toPx() }
+
   Column(modifier = Modifier.fillMaxWidth()) {
-    Text(
-      text = title,
-      color = Color.White,
-      fontSize = 16.sp,
-      fontWeight = FontWeight.ExtraBold,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis
-    )
-    Text(
-      text = subtitle,
-      color = Color.Gray,
-      fontSize = 11.sp,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis
-    )
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = title,
+          color = Color.White,
+          fontSize = 16.sp,
+          fontWeight = FontWeight.ExtraBold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+        Text(
+          text = subtitle,
+          color = Color.Gray,
+          fontSize = 11.sp,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+      }
+
+      if (items.size > 2) {
+        Spacer(modifier = Modifier.width(8.dp))
+        CarouselMouseScrollArrows(
+          listState = rowListState,
+          scope = rowScope,
+          isRtl = isRtl,
+          scrollStepPx = scrollStepPx
+        )
+      }
+    }
 
     Spacer(modifier = Modifier.height(10.dp))
 
     LazyRow(
+      state = rowListState,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
-      modifier = Modifier.fillMaxWidth()
+      modifier = Modifier
+        .fillMaxWidth()
+        .mouseHorizontalDragScroll(
+          listState = rowListState,
+          scope = rowScope,
+          isRtl = isRtl,
+          dragSlopPx = dragSlopPx
+        )
     ) {
       itemsIndexed(items, key = { _, it -> it.id }) { index, media ->
         ClipboxPosterCard(
           item = media,
           rankNumber = if (showRankBadge) index + 1 else null,
           onClick = { onItemClick(media) }
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Enables smooth left/right click-and-drag scrolling AND horizontal scroll-wheel support for
+ * USB/Bluetooth/Air mice on LazyRow (Jetpack Compose's built-in scrollable ignores mouse drags
+ * due to `down.type != PointerType.Mouse`). Touch gestures are completely untouched.
+ */
+private fun Modifier.mouseHorizontalDragScroll(
+  listState: LazyListState,
+  scope: CoroutineScope,
+  isRtl: Boolean,
+  dragSlopPx: Float
+): Modifier = this
+  .pointerInput(listState, isRtl) {
+    awaitPointerEventScope {
+      while (true) {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        if (down.type == PointerType.Touch) {
+          continue
+        }
+        val pointerId = down.id
+        var prevX = down.position.x
+        var prevY = down.position.y
+        var totalDx = 0f
+        var totalDy = 0f
+        var isDraggingHorizontally = false
+        var abortedForVertical = false
+        var lastDeltaX = 0f
+
+        while (true) {
+          val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+          val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+          if (!change.pressed) {
+            if (isDraggingHorizontally) {
+              // Consume release so card clickable does NOT fire after dragging with mouse
+              change.consume()
+              val momentum = (if (isRtl) lastDeltaX else -lastDeltaX) * 4.5f
+              if (abs(momentum) > 12f) {
+                scope.launch {
+                  try {
+                    listState.animateScrollBy(momentum.coerceIn(-900f, 900f))
+                  } catch (_: Throwable) {}
+                }
+              }
+            }
+            break
+          }
+
+          if (change.isConsumed && !isDraggingHorizontally) {
+            abortedForVertical = true
+            break
+          }
+
+          val dx = change.position.x - prevX
+          val dy = change.position.y - prevY
+          prevX = change.position.x
+          prevY = change.position.y
+          totalDx += dx
+          totalDy += dy
+
+          if (!isDraggingHorizontally && !abortedForVertical) {
+            val absX = abs(totalDx)
+            val absY = abs(totalDy)
+            if (absX > dragSlopPx && absX >= absY * 1.1f) {
+              isDraggingHorizontally = true
+              val initialDelta = if (isRtl) totalDx else -totalDx
+              listState.dispatchRawDelta(initialDelta)
+              lastDeltaX = dx
+              change.consume()
+            } else if (absY > dragSlopPx && absY > absX * 1.15f) {
+              abortedForVertical = true
+              break
+            }
+          } else if (isDraggingHorizontally) {
+            if (dx != 0f) {
+              val scrollDelta = if (isRtl) dx else -dx
+              listState.dispatchRawDelta(scrollDelta)
+              lastDeltaX = dx
+            }
+            change.consume()
+          }
+        }
+      }
+    }
+  }
+  .pointerInput(listState, isRtl) {
+    awaitPointerEventScope {
+      while (true) {
+        val event = awaitPointerEvent(pass = PointerEventPass.Main)
+        if (event.type == PointerEventType.Scroll) {
+          val scrollX = event.changes.firstOrNull()?.scrollDelta?.x ?: 0f
+          if (scrollX != 0f) {
+            val stepPx = (if (isRtl) -scrollX else scrollX) * 90f
+            listState.dispatchRawDelta(stepPx)
+            event.changes.forEach { it.consume() }
+          }
+        }
+      }
+    }
+  }
+
+/**
+ * Enables smooth up/down mouse click-and-drag scrolling on LazyColumn without conflicting with
+ * horizontal carousel drags or touch scrolling.
+ */
+private fun Modifier.mouseVerticalDragScroll(
+  listState: LazyListState,
+  scope: CoroutineScope,
+  dragSlopPx: Float
+): Modifier = this.pointerInput(listState) {
+  awaitPointerEventScope {
+    while (true) {
+      val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+      if (down.type == PointerType.Touch) {
+        continue
+      }
+      val pointerId = down.id
+      var prevX = down.position.x
+      var prevY = down.position.y
+      var totalDx = 0f
+      var totalDy = 0f
+      var isDraggingVertically = false
+      var abortedForHorizontal = false
+      var lastDeltaY = 0f
+
+      while (true) {
+        val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+        if (!change.pressed) {
+          if (isDraggingVertically) {
+            change.consume()
+            val momentum = -lastDeltaY * 4.5f
+            if (abs(momentum) > 12f) {
+              scope.launch {
+                try {
+                  listState.animateScrollBy(momentum.coerceIn(-900f, 900f))
+                } catch (_: Throwable) {}
+              }
+            }
+          }
+          break
+        }
+
+        val dx = change.position.x - prevX
+        val dy = change.position.y - prevY
+        prevX = change.position.x
+        prevY = change.position.y
+        totalDx += dx
+        totalDy += dy
+
+        if (!isDraggingVertically && !abortedForHorizontal) {
+          val absX = abs(totalDx)
+          val absY = abs(totalDy)
+          if (absY > dragSlopPx && absY > absX * 1.25f) {
+            isDraggingVertically = true
+            listState.dispatchRawDelta(-totalDy)
+            lastDeltaY = dy
+            change.consume()
+          } else if (absX > dragSlopPx && absX >= absY) {
+            abortedForHorizontal = true
+            break
+          }
+        } else if (isDraggingVertically) {
+          if (dy != 0f) {
+            listState.dispatchRawDelta(-dy)
+            lastDeltaY = dy
+          }
+          change.consume()
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun CarouselMouseScrollArrows(
+  listState: LazyListState,
+  scope: CoroutineScope,
+  isRtl: Boolean,
+  scrollStepPx: Float
+) {
+  val canScrollBackward by remember(listState) {
+    derivedStateOf { listState.canScrollBackward }
+  }
+  val canScrollForward by remember(listState) {
+    derivedStateOf { listState.canScrollForward }
+  }
+
+  Row(
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    // Physical Start/Backward arrow
+    Surface(
+      onClick = {
+        scope.launch {
+          try {
+            listState.animateScrollBy(-scrollStepPx)
+          } catch (_: Throwable) {}
+        }
+      },
+      enabled = canScrollBackward,
+      color = if (canScrollBackward) CinemaSurfaceVariant else CinemaSurface.copy(alpha = 0.45f),
+      shape = CircleShape,
+      border = BorderStroke(
+        1.dp,
+        if (canScrollBackward) CinemaAccent.copy(alpha = 0.7f) else CinemaBorder.copy(alpha = 0.35f)
+      ),
+      modifier = Modifier.size(32.dp)
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(
+          imageVector = if (isRtl) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
+          contentDescription = "التمرير للخلف",
+          tint = if (canScrollBackward) Color.White else Color.Gray.copy(alpha = 0.5f),
+          modifier = Modifier.size(18.dp)
+        )
+      }
+    }
+
+    // Physical End/Forward arrow
+    Surface(
+      onClick = {
+        scope.launch {
+          try {
+            listState.animateScrollBy(scrollStepPx)
+          } catch (_: Throwable) {}
+        }
+      },
+      enabled = canScrollForward,
+      color = if (canScrollForward) CinemaSurfaceVariant else CinemaSurface.copy(alpha = 0.45f),
+      shape = CircleShape,
+      border = BorderStroke(
+        1.dp,
+        if (canScrollForward) CinemaAccent.copy(alpha = 0.7f) else CinemaBorder.copy(alpha = 0.35f)
+      ),
+      modifier = Modifier.size(32.dp)
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(
+          imageVector = if (isRtl) Icons.Default.ChevronLeft else Icons.Default.ChevronRight,
+          contentDescription = "التمرير للأمام",
+          tint = if (canScrollForward) Color.White else Color.Gray.copy(alpha = 0.5f),
+          modifier = Modifier.size(18.dp)
         )
       }
     }
@@ -1655,9 +1968,21 @@ fun PortalResultsSection(
         }
       }
     } else {
+      val portalRowState = rememberLazyListState()
+      val portalRowScope = rememberCoroutineScope()
+      val portalIsRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+      val portalDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
       LazyRow(
+        state = portalRowState,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+          .fillMaxWidth()
+          .mouseHorizontalDragScroll(
+            listState = portalRowState,
+            scope = portalRowScope,
+            isRtl = portalIsRtl,
+            dragSlopPx = portalDragSlopPx
+          )
       ) {
         items(results, key = { it.id }) { item ->
           SearchResultCard(
@@ -1939,9 +2264,21 @@ fun ContinueWatchingSection(
 
     Spacer(modifier = Modifier.height(10.dp))
 
+    val historyRowState = rememberLazyListState()
+    val historyRowScope = rememberCoroutineScope()
+    val historyIsRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val historyDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
     LazyRow(
+      state = historyRowState,
       horizontalArrangement = Arrangement.spacedBy(12.dp),
-      modifier = Modifier.fillMaxWidth()
+      modifier = Modifier
+        .fillMaxWidth()
+        .mouseHorizontalDragScroll(
+          listState = historyRowState,
+          scope = historyRowScope,
+          isRtl = historyIsRtl,
+          dragSlopPx = historyDragSlopPx
+        )
     ) {
       items(history.take(15), key = { it.id }) { entry ->
         ContinueWatchingCard(

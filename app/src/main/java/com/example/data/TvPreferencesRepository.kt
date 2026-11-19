@@ -51,17 +51,21 @@ class TvPreferencesRepository(context: Context) {
   private val _autoPlayNextEpisodeFlow = MutableStateFlow(true)
   val autoPlayNextEpisodeFlow: StateFlow<Boolean> = _autoPlayNextEpisodeFlow.asStateFlow()
 
+  private val _videoResizeModeFlow = MutableStateFlow(RESIZE_MODE_FILL)
+  val videoResizeModeFlow: StateFlow<String> = _videoResizeModeFlow.asStateFlow()
+
   init {
     loadBookmarks()
     loadHistory()
     loadDisplayMode()
     loadSubtitleStyle()
     loadPreferredQuality()
+    loadVideoResizeMode()
     _autoPlayNextEpisodeFlow.value = prefs.getBoolean(KEY_AUTO_PLAY_NEXT_EPISODE, true)
     loadPortals()
     AppDiagnosticsLogger.log(
       "Prefs",
-      "Loaded prefs: quality=${_preferredQualityFlow.value}, subSize=${_subtitleStyleFlow.value.fontSizeSp.toInt()}sp, subEdge=${_subtitleStyleFlow.value.edgeStyle.id}, subBottom=${_subtitleStyleFlow.value.bottomOffsetDp}dp"
+      "Loaded prefs: quality=${_preferredQualityFlow.value}, resize=${_videoResizeModeFlow.value}, subSize=${_subtitleStyleFlow.value.fontSizeSp.toInt()}sp, subEdge=${_subtitleStyleFlow.value.edgeStyle.id}, subBottom=${_subtitleStyleFlow.value.bottomOffsetDp}dp"
     )
   }
 
@@ -182,6 +186,22 @@ class TvPreferencesRepository(context: Context) {
   fun setAutoPlayNextEpisodeEnabled(enabled: Boolean) {
     _autoPlayNextEpisodeFlow.value = enabled
     prefs.edit().putBoolean(KEY_AUTO_PLAY_NEXT_EPISODE, enabled).apply()
+  }
+
+  private fun loadVideoResizeMode() {
+    val raw = prefs.getString(KEY_VIDEO_RESIZE_MODE, RESIZE_MODE_FILL)
+    _videoResizeModeFlow.value = normalizeVideoResizeMode(raw)
+  }
+
+  fun getVideoResizeMode(): String = _videoResizeModeFlow.value
+
+  fun setVideoResizeMode(mode: String) {
+    val normalized = normalizeVideoResizeMode(mode)
+    _videoResizeModeFlow.value = normalized
+    prefs.edit()
+      .putString(KEY_VIDEO_RESIZE_MODE, normalized)
+      .commit()
+    AppDiagnosticsLogger.log("Prefs", "Saved preferred video resize mode: $normalized")
   }
 
   // =========================================================================
@@ -503,6 +523,7 @@ class TvPreferencesRepository(context: Context) {
     root.put("active_portal", prefs.getString(KEY_ACTIVE_PORTAL, StreamingPortal.TOP_CINEMA.id))
     root.put("github_repo", getGitHubRepo())
     root.put("preferred_video_quality", getPreferredQuality())
+    root.put("video_resize_mode", getVideoResizeMode())
     val sub = getSubtitleStyle()
     root.put("sub_text_color", sub.textColorArgb)
     root.put("sub_bg_color", sub.backgroundColorArgb)
@@ -527,6 +548,7 @@ class TvPreferencesRepository(context: Context) {
       if (root.has("active_portal")) editor.putString(KEY_ACTIVE_PORTAL, root.getString("active_portal"))
       if (root.has("github_repo")) editor.putString(KEY_GITHUB_REPO, root.getString("github_repo"))
       if (root.has("preferred_video_quality")) editor.putString(KEY_PREFERRED_VIDEO_QUALITY, normalizeQualityId(root.getString("preferred_video_quality")))
+      if (root.has("video_resize_mode")) editor.putString(KEY_VIDEO_RESIZE_MODE, normalizeVideoResizeMode(root.getString("video_resize_mode")))
       if (root.has("sub_text_color")) editor.putLong(KEY_SUB_TEXT_COLOR, root.getLong("sub_text_color"))
       if (root.has("sub_bg_color")) editor.putLong(KEY_SUB_BG_COLOR, root.getLong("sub_bg_color"))
       if (root.has("sub_font_size")) editor.putFloat(KEY_SUB_FONT_SIZE, root.getDouble("sub_font_size").toFloat())
@@ -539,6 +561,7 @@ class TvPreferencesRepository(context: Context) {
       loadDisplayMode()
       loadSubtitleStyle()
       loadPreferredQuality()
+      loadVideoResizeMode()
       true
     } catch (_: Exception) {
       false
@@ -566,9 +589,22 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_SUB_SYNC_OFFSET = "subtitle_sync_offset_ms"
     private const val KEY_PREFERRED_VIDEO_QUALITY = "preferred_video_quality_v1"
     private const val KEY_AUTO_PLAY_NEXT_EPISODE = "auto_play_next_episode_enabled"
+    private const val KEY_VIDEO_RESIZE_MODE = "video_resize_mode_v1"
     const val QUALITY_LOWEST = "lowest"
     const val QUALITY_AUTO = "auto"
+    const val RESIZE_MODE_FILL = "fill"
+    const val RESIZE_MODE_STRETCH = "stretch"
+    const val RESIZE_MODE_FIT = "fit"
     const val DEFAULT_GITHUB_REPO = "savant47/Apk-apps"
+
+    fun normalizeVideoResizeMode(raw: String?): String {
+      return when (raw?.trim()?.lowercase()) {
+        RESIZE_MODE_STRETCH, "fill_stretch" -> RESIZE_MODE_STRETCH
+        RESIZE_MODE_FIT, "original" -> RESIZE_MODE_FIT
+        RESIZE_MODE_FILL, "zoom", "crop" -> RESIZE_MODE_FILL
+        else -> RESIZE_MODE_FILL
+      }
+    }
 
     fun normalizeQualityId(raw: String?): String {
       val cleaned = raw?.trim()?.lowercase()?.removeSuffix("p") ?: return QUALITY_LOWEST

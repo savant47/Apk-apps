@@ -2106,11 +2106,15 @@ class SearchAndSubtitlesService {
     if (urlPathMatch != null) {
       return urlPathMatch.groupValues[1].toIntOrNull()
     }
-    val sMatch = Regex("\\bS([0-9]{1,2})E[0-9]{1,3}\\b", RegexOption.IGNORE_CASE).find(text)
+    val sMatch = Regex("\\bS([0-9]{1,2})\\s*E[0-9]{1,3}\\b", RegexOption.IGNORE_CASE).find(text)
     if (sMatch != null) {
       return sMatch.groupValues[1].toIntOrNull()
     }
-    val digitMatch = Regex("(?:الموسم|موسم|\\bseason|\\bs)\\s*([0-9]{1,2})\\b", RegexOption.IGNORE_CASE).find(text)
+    val xMatch = Regex("\\b([0-9]{1,2})x[0-9]{1,3}\\b", RegexOption.IGNORE_CASE).find(text)
+    if (xMatch != null) {
+      return xMatch.groupValues[1].toIntOrNull()
+    }
+    val digitMatch = Regex("(?:الموسم|موسم|\\bseason|\\bs)\\s*[-:]?\\s*([0-9]{1,2})\\b", RegexOption.IGNORE_CASE).find(text)
     if (digitMatch != null) {
       return digitMatch.groupValues[1].toIntOrNull()
     }
@@ -2130,11 +2134,19 @@ class SearchAndSubtitlesService {
   }
 
   private fun extractEpisodeNumberFromText(text: String): Int? {
-    val seMatch = Regex("\\bS[0-9]{1,2}E([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
+    val urlPathMatch = Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/[0-9]{1,2}/([0-9]{1,3})").find(text)
+    if (urlPathMatch != null) {
+      return urlPathMatch.groupValues[1].toIntOrNull()
+    }
+    val seMatch = Regex("\\bS[0-9]{1,2}\\s*E([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
     if (seMatch != null) {
       return seMatch.groupValues[1].toIntOrNull()
     }
-    val epMatch = Regex("(?:الحلقة|الحلقه|حلقة|حلقه|\\bepisode|\\bep)\\s*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
+    val xMatch = Regex("\\b[0-9]{1,2}x([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
+    if (xMatch != null) {
+      return xMatch.groupValues[1].toIntOrNull()
+    }
+    val epMatch = Regex("(?:الحلقة|الحلقه|حلقة|حلقه|\\bepisode|\\bep)\\s*[-:]?\\s*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
     if (epMatch != null) {
       return epMatch.groupValues[1].toIntOrNull()
     }
@@ -2263,14 +2275,18 @@ class SearchAndSubtitlesService {
   suspend fun searchAllSubtitles(
     query: String,
     languageCode: String = "ar",
-    sourceFilter: SubtitleSourceFilter = SubtitleSourceFilter.ALL
+    sourceFilter: SubtitleSourceFilter = SubtitleSourceFilter.ALL,
+    explicitSeason: Int? = null,
+    explicitEpisode: Int? = null
   ): List<SubtitleItem> = coroutineScope {
     val cleanQuery = query.trim()
     if (cleanQuery.isBlank()) return@coroutineScope cachedEmbedSubtitles
 
     val startMs = System.currentTimeMillis()
-    val seasonNum = extractSeasonNumberFromText(cleanQuery)
-    val episodeNum = extractEpisodeNumberFromText(cleanQuery)
+    val parsedSeasonFromQuery = extractSeasonNumberFromText(cleanQuery)
+    val parsedEpisodeFromQuery = extractEpisodeNumberFromText(cleanQuery)
+    val seasonNum = parsedSeasonFromQuery ?: explicitSeason?.takeIf { it > 0 }
+    val episodeNum = parsedEpisodeFromQuery ?: explicitEpisode?.takeIf { it > 0 }
     val isLikelySeries = seasonNum != null || episodeNum != null || cleanQuery.contains("مسلسل")
 
     // Strict 4.5s budget for TMDB/IMDb ID lookup so a slow TMDB response never stalls the dialog
@@ -2312,12 +2328,61 @@ class SearchAndSubtitlesService {
     combined.addAll(openSubsDeferred.await())
 
     val deduped = combined.distinctBy { it.downloadUrl.ifBlank { it.id } }
+    val ranked = filterAndRankSubtitlesForEpisode(deduped, seasonNum, episodeNum)
+
     val elapsedMs = System.currentTimeMillis() - startMs
+    val epLog = if (seasonNum != null && episodeNum != null) {
+      " S%02dE%02d".format(seasonNum, episodeNum)
+    } else ""
     AppDiagnosticsLogger.log(
       "SubtitlesSearch",
-      "Finished '${cleanQuery}' ($languageCode, ${sourceFilter.name}) -> ${deduped.size} items in ${elapsedMs}ms"
+      "Finished '${cleanQuery}'$epLog ($languageCode, ${sourceFilter.name}) -> ${ranked.size}/${deduped.size} items in ${elapsedMs}ms"
     )
-    deduped
+    ranked
+  }
+
+  /**
+   * Filters and ranks subtitle results against the requested Season/Episode (`SxxExx`):
+   * - Tier 0: Embedded server subtitle tracks
+   * - Tier 1: Exact season+episode matches (`S01E01`, `1x01`, `S1E1`)
+   * - Tier 2: Results without any explicit conflicting `SyyEzz` tag
+   * - Tier 3: Mismatched episodes (e.g., `S03E04` or `S02E01` when watching `S01E01`) are
+   *           filtered out whenever valid Tier 0/1/2 matches exist (or pushed to bottom otherwise).
+   */
+  private fun filterAndRankSubtitlesForEpisode(
+    items: List<SubtitleItem>,
+    targetSeason: Int?,
+    targetEpisode: Int?
+  ): List<SubtitleItem> {
+    if (targetSeason == null || targetEpisode == null || items.isEmpty()) return items
+
+    val seTagRegex = Regex("\\bS0*([0-9]{1,2})\\s*E0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
+    val xTagRegex = Regex("\\b0*([0-9]{1,2})x0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
+
+    fun classifyTier(item: SubtitleItem): Int {
+      if (item.sourceSite.contains("مدمج", ignoreCase = true)) return 0
+      val name = item.releaseName
+      val seMatches = seTagRegex.findAll(name).toList()
+      val xMatches = xTagRegex.findAll(name).toList()
+      val parsedPairs = (seMatches + xMatches).mapNotNull { m ->
+        val s = m.groupValues[1].toIntOrNull()
+        val e = m.groupValues[2].toIntOrNull()
+        if (s != null && e != null) s to e else null
+      }
+      if (parsedPairs.isNotEmpty()) {
+        return if (parsedPairs.any { (s, e) -> s == targetSeason && e == targetEpisode }) 1 else 3
+      }
+      return 2
+    }
+
+    val exactAndValid = items.filter { classifyTier(it) <= 2 }
+      .sortedWith(compareBy<SubtitleItem> { classifyTier(it) }.thenByDescending { it.rating })
+
+    return if (exactAndValid.isNotEmpty()) {
+      exactAndValid
+    } else {
+      items.sortedWith(compareBy<SubtitleItem> { classifyTier(it) }.thenByDescending { it.rating })
+    }
   }
 
   private fun searchWyzieSubtitles(
@@ -2420,22 +2485,35 @@ class SearchAndSubtitlesService {
     // 1) Try OpenSubtitles REST API v1 (returns direct .gz SRT download links)
     try {
       val cleanLookupTitle = tmdbLookup?.title ?: cleanMediaTitleForLookup(cleanQuery)
+      val isSeriesSearch = (tmdbLookup?.isSeries == true) || (seasonNum != null && episodeNum != null)
+      // OpenSubtitles REST API v1 requires URL parameters in strict alphabetical order:
+      // episode -> imdbid/query -> season -> sublanguageid
       val restUrl = if (tmdbLookup != null && tmdbLookup.imdbId.startsWith("tt")) {
         val numericImdb = tmdbLookup.imdbId.removePrefix("tt")
         buildString {
           append("https://rest.opensubtitles.org/search")
-          if (tmdbLookup.isSeries && episodeNum != null) {
+          if (isSeriesSearch && episodeNum != null) {
             append("/episode-").append(episodeNum)
           }
           append("/imdbid-").append(numericImdb)
-          if (tmdbLookup.isSeries && seasonNum != null) {
+          if (isSeriesSearch && seasonNum != null) {
             append("/season-").append(seasonNum)
           }
           append("/sublanguageid-").append(iso3Lang)
         }
       } else {
         val enc = URLEncoder.encode(cleanLookupTitle.lowercase(), "UTF-8")
-        "https://rest.opensubtitles.org/search/query-$enc/sublanguageid-$iso3Lang"
+        buildString {
+          append("https://rest.opensubtitles.org/search")
+          if (isSeriesSearch && episodeNum != null) {
+            append("/episode-").append(episodeNum)
+          }
+          append("/query-").append(enc)
+          if (isSeriesSearch && seasonNum != null) {
+            append("/season-").append(seasonNum)
+          }
+          append("/sublanguageid-").append(iso3Lang)
+        }
       }
 
       val req = Request.Builder()
@@ -2450,13 +2528,20 @@ class SearchAndSubtitlesService {
           val body = resp.body?.string() ?: ""
           if (body.trim().startsWith("[")) {
             val arr = JSONArray(body)
-            for (i in 0 until minOf(arr.length(), 10)) {
+            for (i in 0 until minOf(arr.length(), 15)) {
               val item = arr.optJSONObject(i) ?: continue
               val gzLink = item.optString("SubDownloadLink", "").trim()
               if (!gzLink.startsWith("http")) continue
+              // Verify SeriesSeason/SeriesEpisode metadata from OpenSubtitles when searching a specific episode
+              if (seasonNum != null && episodeNum != null) {
+                val itemSeason = item.optString("SeriesSeason", "").toIntOrNull()
+                val itemEpisode = item.optString("SeriesEpisode", "").toIntOrNull()
+                if (itemSeason != null && itemSeason > 0 && itemSeason != seasonNum) continue
+                if (itemEpisode != null && itemEpisode > 0 && itemEpisode != episodeNum) continue
+              }
               val release = item.optString("MovieReleaseName").ifBlank {
                 item.optString("SubFileName", "$cleanLookupTitle ($langLabel)")
-              }
+              }.trim()
               val subFormat = item.optString("SubFormat", "srt").lowercase()
               list.add(
                 SubtitleItem(
@@ -2715,6 +2800,16 @@ class SearchAndSubtitlesService {
       .trim()
   }
 
+  data class StandardizedMediaTitleInfo(
+    val cleanTitle: String,
+    val year: String,
+    val isSeries: Boolean,
+    val seasonNumber: Int?,
+    val episodeNumber: Int?,
+    val displayTitle: String,
+    val subtitleQuery: String
+  )
+
   companion object {
     @Volatile
     private var sslInstalled = false
@@ -2723,6 +2818,151 @@ class SearchAndSubtitlesService {
       override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
       override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
       override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+
+    /**
+     * Produces standardized display titles and subtitle auto-search queries:
+     * - Series episodes: `Silo S01E01`, `Lost S04E15` (strips year parentheses & Arabic filler words)
+     * - Movies: `Interstellar (2014)` for display, `Interstellar` for subtitle lookup
+     */
+    fun formatStandardizedEpisodeInfo(
+      seriesTitle: String,
+      pageTitle: String,
+      lastSearchQuery: String,
+      watchPageUrl: String,
+      embedUrl: String,
+      serverName: String,
+      isSeriesHint: Boolean,
+      selectedSeasonHint: Int,
+      currentEpisodeHint: Int
+    ): StandardizedMediaTitleInfo {
+      val combinedContext = listOf(embedUrl, watchPageUrl, serverName, pageTitle, lastSearchQuery)
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+
+      // 1. Extract exact season & episode from highest-confidence sources first (embed path -> SxxExx -> Arabic/URL -> structure)
+      val embedPathMatch = Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/([0-9]{1,3})").find(embedUrl)
+        ?: Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/([0-9]{1,3})").find(watchPageUrl)
+      val seMatch = Regex("\\bS0*([0-9]{1,2})\\s*E0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(combinedContext)
+      val xMatch = Regex("\\b0*([0-9]{1,2})x0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(combinedContext)
+
+      val parsedSeason = embedPathMatch?.groupValues?.get(1)?.toIntOrNull()
+        ?: seMatch?.groupValues?.get(1)?.toIntOrNull()
+        ?: xMatch?.groupValues?.get(1)?.toIntOrNull()
+        ?: Regex("(?:الموسم|موسم|\\bseason)\\s*[-:]?\\s*([0-9]{1,2})\\b", RegexOption.IGNORE_CASE)
+          .find(combinedContext)?.groupValues?.get(1)?.toIntOrNull()
+        ?: when {
+          combinedContext.contains("الموسم الاول") || combinedContext.contains("الموسم الأول") -> 1
+          combinedContext.contains("الموسم الثاني") || combinedContext.contains("الموسم الثانى") -> 2
+          combinedContext.contains("الموسم الثالث") -> 3
+          combinedContext.contains("الموسم الرابع") -> 4
+          combinedContext.contains("الموسم الخامس") -> 5
+          combinedContext.contains("الموسم السادس") -> 6
+          combinedContext.contains("الموسم السابع") -> 7
+          combinedContext.contains("الموسم الثامن") -> 8
+          combinedContext.contains("الموسم التاسع") -> 9
+          combinedContext.contains("الموسم العاشر") -> 10
+          else -> null
+        }
+
+      val parsedEpisode = embedPathMatch?.groupValues?.get(2)?.toIntOrNull()
+        ?: seMatch?.groupValues?.get(2)?.toIntOrNull()
+        ?: xMatch?.groupValues?.get(2)?.toIntOrNull()
+        ?: Regex("(?:الحلقة|الحلقه|حلقة|حلقه|\\bepisode|\\bep)\\s*[-:]?\\s*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
+          .find(combinedContext)?.groupValues?.get(1)?.toIntOrNull()
+
+      val lowerUrls = "$watchPageUrl $embedUrl".lowercase()
+      val isSeries = isSeriesHint ||
+        parsedSeason != null ||
+        parsedEpisode != null ||
+        lowerUrls.contains("/tv/") ||
+        lowerUrls.contains("/series/") ||
+        combinedContext.contains("مسلسل")
+
+      val finalSeason = if (isSeries) {
+        (parsedSeason ?: selectedSeasonHint.takeIf { it > 0 } ?: 1).coerceAtLeast(1)
+      } else null
+
+      val finalEpisode = if (isSeries) {
+        (parsedEpisode ?: currentEpisodeHint.takeIf { it > 0 } ?: 1).coerceAtLeast(1)
+      } else null
+
+      // 2. Pick best raw title candidate & capture optional release year
+      val urlSlugFallback = Regex("/(?:tv|movie|series)/([a-z0-9\\-]+)(?:/|$)", RegexOption.IGNORE_CASE)
+        .find(watchPageUrl)?.groupValues?.get(1)
+        ?.replace("-", " ")
+        ?.split(" ")
+        ?.filter { it.isNotBlank() }
+        ?.joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
+        ?: ""
+
+      val rawCandidates = listOf(seriesTitle, pageTitle, lastSearchQuery, urlSlugFallback)
+        .map { it.trim() }
+        .filter { it.isNotBlank() && !it.startsWith("http", ignoreCase = true) }
+
+      val year = rawCandidates.firstNotNullOfOrNull { cand ->
+        Regex("\\(?((?:19|20)\\d{2})\\)?").find(cand)?.groupValues?.get(1)
+      } ?: ""
+
+      fun sanitizeTitleCandidate(raw: String): String {
+        val withoutTags = raw
+          .replace(Regex("\\bS0*[0-9]{1,2}\\s*E0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE), " ")
+          .replace(Regex("\\b0*[0-9]{1,2}x0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE), " ")
+          .replace(Regex("\\((?:19|20)\\d{2}\\)"), " ")
+          .replace(Regex("\\[(?:19|20)\\d{2}\\]"), " ")
+          .replace(Regex("\\b(?:19|20)\\d{2}\\b"), " ")
+          .replace(Regex("\\b(?:season|episode|ep)\\s*[-:]?\\s*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE), " ")
+          .replace(Regex("(?:الموسم|موسم)\\s*(?:الاول|الأول|الثاني|الثانى|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|[0-9]{1,2})"), " ")
+          .replace(Regex("(?:الحلقة|الحلقه|حلقة|حلقه)\\s*[0-9]{1,3}"), " ")
+          .replace(
+            Regex("(?:مشاهدة|مشاهده|تحميل|فيلم|مسلسل|مترجم|مترجمة|مترجمه|مدبلج|مدبلجة|مدبلجه|كامل|كاملة|كامله|اون لاين|أونلاين|اونلاين|والاخيرة|والأخيرة|الأخيرة|الاخيرة|بجودة|عالية|توب سينما|ووتش سيريز|لاروزا|ايجي ديد)"),
+            " "
+          )
+          .replace(Regex("\\b(?:HD|FHD|UHD|4K|1080p|720p|480p|360p|WEB-DL|WEBRip|BluRay|HDRip|TopCinema|WatchSeries|EgyDead|LaRoza)\\b", RegexOption.IGNORE_CASE), " ")
+          .replace(Regex("[()\\[\\]]"), " ")
+
+        // Prefer clean English/Latin show title when available (e.g., "Silo", "Lost", "Mr. Robot")
+        val latinMatch = Regex("[A-Za-z][A-Za-z0-9'&.:\\- ]{1,60}")
+          .findAll(withoutTags)
+          .map { it.value.trim(' ', '-', ':', '|', '•', '.') }
+          .firstOrNull { it.length >= 2 }
+
+        if (!latinMatch.isNullOrBlank()) {
+          return latinMatch.replace(Regex("\\s+"), " ").trim()
+        }
+
+        return withoutTags
+          .replace(Regex("[|•]+"), " ")
+          .replace(Regex("\\s+"), " ")
+          .trim(' ', '-', ':', '|', '•')
+      }
+
+      val cleanTitle = rawCandidates
+        .map { sanitizeTitleCandidate(it) }
+        .firstOrNull { it.length >= 2 }
+        ?: rawCandidates.firstOrNull()
+        ?: "Asser TV"
+
+      val displayTitle: String
+      val subtitleQuery: String
+      if (isSeries && finalSeason != null && finalEpisode != null) {
+        val tag = "S${finalSeason.toString().padStart(2, '0')}E${finalEpisode.toString().padStart(2, '0')}"
+        displayTitle = "$cleanTitle $tag"
+        subtitleQuery = "$cleanTitle $tag"
+      } else {
+        displayTitle = if (year.isNotBlank()) "$cleanTitle ($year)" else cleanTitle
+        subtitleQuery = cleanTitle
+      }
+
+      return StandardizedMediaTitleInfo(
+        cleanTitle = cleanTitle,
+        year = year,
+        isSeries = isSeries,
+        seasonNumber = finalSeason,
+        episodeNumber = finalEpisode,
+        displayTitle = displayTitle,
+        subtitleQuery = subtitleQuery
+      )
     }
 
     /**

@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.SurfaceView
@@ -158,6 +159,8 @@ fun NativeTvExoPlayer(
   capturedHeaders: Map<String, String> = emptyMap(),
   userAgent: String = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
   selectedQuality: String = TvPreferencesRepository.QUALITY_LOWEST,
+  selectedResizeMode: String = TvPreferencesRepository.RESIZE_MODE_FILL,
+  onSelectResizeMode: (String) -> Unit = {},
   availableQualities: List<VideoQualityOption> = emptyList(),
   onSelectQualityOption: (VideoQualityOption) -> Unit = {},
   activeSubtitle: SubtitleItem? = null,
@@ -195,7 +198,14 @@ fun NativeTvExoPlayer(
 
   var retryAttempt by remember(videoUrl) { mutableIntStateOf(0) }
   var isControllerVisible by remember { mutableStateOf(true) }
-  var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+  var isPlayerPaused by remember(videoUrl) { mutableStateOf(false) }
+  var activeResizeMode by remember {
+    mutableStateOf(TvPreferencesRepository.normalizeVideoResizeMode(selectedResizeMode))
+  }
+  val latestActiveResizeMode by rememberUpdatedState(activeResizeMode)
+  val latestIsFullscreen by rememberUpdatedState(isFullscreen)
+  var resizeHudMessage by remember { mutableStateOf<String?>(null) }
+  var resizeHudNonce by remember { mutableIntStateOf(0) }
   var actualVideoResolution by remember(videoUrl) { mutableStateOf("") }
   var showGearSettingsMenu by remember { mutableStateOf(false) }
   var currentPlaybackSpeed by remember { mutableFloatStateOf(1.0f) }
@@ -205,6 +215,17 @@ fun NativeTvExoPlayer(
   var isPlayerReleased by remember { mutableStateOf(false) }
   var wasPlayingBeforeExternalPause by remember { mutableStateOf(false) }
   val latestExternalPause by rememberUpdatedState(externalPause)
+
+  LaunchedEffect(selectedResizeMode) {
+    activeResizeMode = TvPreferencesRepository.normalizeVideoResizeMode(selectedResizeMode)
+  }
+
+  LaunchedEffect(resizeHudNonce) {
+    if (resizeHudNonce > 0) {
+      delay(1800L)
+      resizeHudMessage = null
+    }
+  }
 
   // Cross-Source Resume Playback State
   var showResumePrompt by remember(contentKey, savedResumePositionMs) {
@@ -343,7 +364,162 @@ fun NativeTvExoPlayer(
       .setLoadControl(balancedLowRamLoadControl)
       .build().apply {
         playWhenReady = true
+        videoScalingMode = if (activeResizeMode == TvPreferencesRepository.RESIZE_MODE_FILL) {
+          C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+        } else {
+          C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+        }
       }
+  }
+
+  fun resizeModeShortLabel(mode: String): String = when (TvPreferencesRepository.normalizeVideoResizeMode(mode)) {
+    TvPreferencesRepository.RESIZE_MODE_STRETCH -> "تمديد"
+    TvPreferencesRepository.RESIZE_MODE_FIT -> "أصلي"
+    else -> "ملء"
+  }
+
+  fun resizeModeHudLabel(mode: String): String = when (TvPreferencesRepository.normalizeVideoResizeMode(mode)) {
+    TvPreferencesRepository.RESIZE_MODE_STRETCH -> "تمديد للحدود (Stretch)"
+    TvPreferencesRepository.RESIZE_MODE_FIT -> "الأبعاد الأصلية (Fit)"
+    else -> "ملء الشاشة تلقائياً (Fill)"
+  }
+
+  /**
+   * Forces ExoPlayer + PlayerView + AspectRatioFrameLayout + SurfaceView to actually re-measure
+   * and re-layout inside Jetpack Compose AndroidView (fixes Compose AndroidViewHolder skipping
+   * child requestLayout() when fillMaxSize() bounds don't change).
+   */
+  fun applyResizeModeToPlayerView(
+    view: PlayerView?,
+    mode: String,
+    fullscreen: Boolean,
+    logChange: Boolean = false
+  ) {
+    if (isPlayerReleased) return
+    val normalized = TvPreferencesRepository.normalizeVideoResizeMode(mode)
+    val targetVideoScalingMode = when (normalized) {
+      TvPreferencesRepository.RESIZE_MODE_FILL -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+      else -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+    }
+    // On Android 7 (SDK 25) non-fullscreen, SurfaceView ignores parent clipChildren,
+    // so keep SurfaceView inside PlayerView bounds while letting MediaCodec crop-to-fill;
+    // in fullscreen or on Android 8+ (SDK 26+), use true AspectRatioFrameLayout.RESIZE_MODE_ZOOM.
+    val targetPvResizeMode = when (normalized) {
+      TvPreferencesRepository.RESIZE_MODE_STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+      TvPreferencesRepository.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+      else -> {
+        if (fullscreen || Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        } else {
+          AspectRatioFrameLayout.RESIZE_MODE_FILL
+        }
+      }
+    }
+
+    try {
+      player.videoScalingMode = targetVideoScalingMode
+    } catch (_: Throwable) {}
+
+    if (view == null) return
+
+    try {
+      view.clipChildren = true
+      view.clipToPadding = true
+      view.resizeMode = targetPvResizeMode
+
+      val contentFrame = view.findViewById<AspectRatioFrameLayout>(
+        androidx.media3.ui.R.id.exo_content_frame
+      )
+      contentFrame?.setResizeMode(targetPvResizeMode)
+
+      val surface = view.videoSurfaceView
+      if (targetPvResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) {
+        contentFrame?.setAspectRatio(0f)
+        surface?.layoutParams = FrameLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.MATCH_PARENT
+        )
+      } else {
+        val vs = try { player.videoSize } catch (_: Throwable) { VideoSize.UNKNOWN }
+        if (vs.width > 0 && vs.height > 0) {
+          val dar = (vs.width.toFloat() * vs.pixelWidthHeightRatio) / vs.height.toFloat()
+          if (dar > 0f && dar.isFinite()) {
+            contentFrame?.setAspectRatio(dar)
+          }
+        }
+      }
+
+      val performRelayout = Runnable {
+        try {
+          val w = view.width
+          val h = view.height
+          if (w > 0 && h > 0) {
+            contentFrame?.forceLayout()
+            surface?.forceLayout()
+            view.forceLayout()
+            view.measure(
+              View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+              View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
+            )
+            view.layout(view.left, view.top, view.right, view.bottom)
+            surface?.requestLayout()
+            view.invalidate()
+          } else {
+            contentFrame?.requestLayout()
+            view.requestLayout()
+          }
+        } catch (_: Throwable) {}
+      }
+
+      performRelayout.run()
+      view.post {
+        performRelayout.run()
+        if (logChange) {
+          val cfW = contentFrame?.width ?: 0
+          val cfH = contentFrame?.height ?: 0
+          val sfW = surface?.width ?: 0
+          val sfH = surface?.height ?: 0
+          AppDiagnosticsLogger.log(
+            "AspectRatio",
+            "Applied resize=$normalized (pvMode=$targetPvResizeMode, scaling=$targetVideoScalingMode, fullscreen=$fullscreen) -> View=${view.width}x${view.height}, Frame=${cfW}x${cfH}, Surface=${sfW}x${sfH}"
+          )
+        }
+      }
+    } catch (_: Throwable) {}
+  }
+
+  fun selectResizeModeAndPersist(newMode: String, showHud: Boolean = true) {
+    val normalized = TvPreferencesRepository.normalizeVideoResizeMode(newMode)
+    activeResizeMode = normalized
+    onSelectResizeMode(normalized)
+    applyResizeModeToPlayerView(
+      view = playerViewRef,
+      mode = normalized,
+      fullscreen = latestIsFullscreen,
+      logChange = true
+    )
+    if (showHud) {
+      resizeHudMessage = resizeModeHudLabel(normalized)
+      resizeHudNonce += 1
+    }
+  }
+
+  fun cycleResizeMode() {
+    val nextMode = when (activeResizeMode) {
+      TvPreferencesRepository.RESIZE_MODE_FILL -> TvPreferencesRepository.RESIZE_MODE_STRETCH
+      TvPreferencesRepository.RESIZE_MODE_STRETCH -> TvPreferencesRepository.RESIZE_MODE_FIT
+      else -> TvPreferencesRepository.RESIZE_MODE_FILL
+    }
+    selectResizeModeAndPersist(nextMode, showHud = true)
+  }
+
+  LaunchedEffect(activeResizeMode, isFullscreen, playerViewRef) {
+    applyResizeModeToPlayerView(
+      view = playerViewRef,
+      mode = activeResizeMode,
+      fullscreen = isFullscreen,
+      logChange = false
+    )
   }
 
   fun persistPlaybackProgressNow() {
@@ -609,6 +785,15 @@ fun NativeTvExoPlayer(
             "ExoPlayerVideo",
             "Playing resolution: ${videoSize.width}x${videoSize.height}"
           )
+          // Automatically re-apply edge-to-edge resize mode right after video dimensions arrive
+          playerViewRef?.post {
+            applyResizeModeToPlayerView(
+              view = playerViewRef,
+              mode = latestActiveResizeMode,
+              fullscreen = latestIsFullscreen,
+              logChange = true
+            )
+          }
         }
       }
 
@@ -617,6 +802,14 @@ fun NativeTvExoPlayer(
           AppDiagnosticsLogger.activePlayerMode = "Native ExoPlayer (يعمل بنجاح ✅)"
           AppDiagnosticsLogger.log("ExoPlayer", "Playback STATE_READY for $videoUrl")
           AppDiagnosticsLogger.recordBreadcrumb(context, "EXOPLAYER_READY", title.ifBlank { videoUrl })
+          playerViewRef?.post {
+            applyResizeModeToPlayerView(
+              view = playerViewRef,
+              mode = latestActiveResizeMode,
+              fullscreen = latestIsFullscreen,
+              logChange = false
+            )
+          }
           if (pendingResumeSeekMs > 0L) {
             val targetMs = pendingResumeSeekMs
             pendingResumeSeekMs = 0L
@@ -641,6 +834,7 @@ fun NativeTvExoPlayer(
       }
 
       override fun onIsPlayingChanged(isPlaying: Boolean) {
+        isPlayerPaused = !isPlaying && player.playbackState == Player.STATE_READY
         if (!isPlaying && !showResumePrompt) {
           persistPlaybackProgressNow()
         }
@@ -1055,7 +1249,14 @@ fun NativeTvExoPlayer(
         when (keyEvent.key) {
           Key.DirectionCenter, Key.Enter -> {
             if (keyEvent.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
-              if (player.isPlaying) player.pause() else player.play()
+              if (player.isPlaying) {
+                player.pause()
+                isPlayerPaused = true
+              } else {
+                player.play()
+                isPlayerPaused = false
+              }
+              playerViewRef?.showController()
               true
             } else false
           }
@@ -1099,13 +1300,30 @@ fun NativeTvExoPlayer(
           inflated.apply {
             this.player = if (!isPlayerReleased) player else null
             useController = true
-            this.resizeMode = resizeMode
+            clipChildren = true
+            clipToPadding = true
             controllerAutoShow = true
             controllerShowTimeoutMs = 3500
             layoutParams = FrameLayout.LayoutParams(
               ViewGroup.LayoutParams.MATCH_PARENT,
               ViewGroup.LayoutParams.MATCH_PARENT
             )
+            addOnLayoutChangeListener { v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+              val newW = right - left
+              val newH = bottom - top
+              val oldW = oldRight - oldLeft
+              val oldH = oldBottom - oldTop
+              if (newW > 0 && newH > 0 && (newW != oldW || newH != oldH)) {
+                (v as? PlayerView)?.post {
+                  applyResizeModeToPlayerView(
+                    view = v,
+                    mode = latestActiveResizeMode,
+                    fullscreen = latestIsFullscreen,
+                    logChange = false
+                  )
+                }
+              }
+            }
             setFullscreenButtonClickListener { _ ->
               onToggleFullscreen()
             }
@@ -1118,6 +1336,12 @@ fun NativeTvExoPlayer(
               }
             )
             applyCaptionStyleToPlayerView(this, subtitleStyle)
+            applyResizeModeToPlayerView(
+              view = this,
+              mode = latestActiveResizeMode,
+              fullscreen = latestIsFullscreen,
+              logChange = false
+            )
             post { hookPlayerViewGearButton(this) }
           }
         },
@@ -1127,9 +1351,12 @@ fun NativeTvExoPlayer(
             if (view.player != player) {
               view.player = player
             }
-            if (view.resizeMode != resizeMode) {
-              view.resizeMode = resizeMode
-            }
+            applyResizeModeToPlayerView(
+              view = view,
+              mode = activeResizeMode,
+              fullscreen = isFullscreen,
+              logChange = false
+            )
             applyCaptionStyleToPlayerView(view, subtitleStyle)
             hookPlayerViewGearButton(view)
           }
@@ -1329,49 +1556,63 @@ fun NativeTvExoPlayer(
       }
     }
 
-    // Clean, Well-Proportioned Top Overlay inside Player (auto-hides with PlayerView controller)
+    // Clean, Well-Proportioned Top Overlay inside Player (shows on pause, D-Pad click, or tap)
     AnimatedVisibility(
-      visible = (isControllerVisible || videoUrl.isBlank()) && !showGearSettingsMenu,
+      visible = (isControllerVisible || isPlayerPaused || videoUrl.isBlank()) && !showGearSettingsMenu,
       enter = fadeIn(),
       exit = fadeOut(),
       modifier = Modifier.align(Alignment.TopCenter)
     ) {
-      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+      // Physical LTR layout so the standardized episode title (`Silo S01E01`) is ALWAYS in the top-left corner
+      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Row(
           modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 6.dp)
-            .background(Color(0xCC070A0E), RoundedCornerShape(10.dp))
-            .border(1.dp, CinemaBorder.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 8.dp, vertical = 5.dp),
+            .background(Color(0xD9070A0E), RoundedCornerShape(10.dp))
+            .border(1.dp, CinemaBorder.copy(alpha = 0.75f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          // Right side: Live green dot + Current Quality Badge
+          // Top-Left Corner: Prominent Standardized Episode Title (e.g., "Silo S01E01") + live quality tag
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+              .weight(1f)
+              .testTag("exo_top_left_episode_title_container")
           ) {
             Box(
               modifier = Modifier
-                .size(7.dp)
+                .size(8.dp)
                 .clip(CircleShape)
-                .background(CinemaSuccess)
+                .background(if (isPlayerPaused) CinemaAccent else CinemaSuccess)
             )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-              text = "المشغل الأساسي • $activeQualityShortBadge",
-              color = CinemaAccent,
-              fontSize = 10.5.sp,
-              fontWeight = FontWeight.ExtraBold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis
-            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = title.ifBlank { "Asser TV" },
+                color = Color.White,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("exo_top_left_episode_title")
+              )
+              Text(
+                text = activeQualityShortBadge,
+                color = CinemaAccent,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+            }
           }
 
-          Spacer(modifier = Modifier.width(6.dp))
+          Spacer(modifier = Modifier.width(8.dp))
 
-          // Left side: Clean, non-overlapping compact pills (Gear Quality, Subtitles, Aspect Ratio, Web Fallback, Fullscreen)
+          // Top-Right Corner: Compact action buttons (Gear Quality, Next Episode, Subtitles, Diagnostics, WebView, Fullscreen)
           Row(
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1472,20 +1713,57 @@ fun NativeTvExoPlayer(
               testTag = "exo_subtitles_button"
             )
 
-            // 3. Aspect Ratio Toggle
-            PlayerCompactSquareBtn(
-              icon = Icons.Default.AspectRatio,
-              tint = Color.White,
-              contentDescription = "أبعاد الفيديو",
-              onClick = {
-                resizeMode = when (resizeMode) {
-                  AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                  AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                  else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                }
+            // 3. Real Aspect Ratio Toggle Pill (Fill / Stretch / Fit with live active mode badge)
+            val aspectInteraction = remember { MutableInteractionSource() }
+            val isAspectFocused by aspectInteraction.collectIsFocusedAsState()
+            val isEdgeFillActive = activeResizeMode != TvPreferencesRepository.RESIZE_MODE_FIT
+            Surface(
+              onClick = { cycleResizeMode() },
+              interactionSource = aspectInteraction,
+              color = when {
+                isAspectFocused -> CinemaFocusGlow
+                isEdgeFillActive -> CinemaAccent.copy(alpha = 0.22f)
+                else -> CinemaSurface
               },
-              testTag = "exo_aspect_ratio_button"
-            )
+              shape = RoundedCornerShape(8.dp),
+              border = BorderStroke(
+                width = if (isAspectFocused) 2.dp else 1.dp,
+                color = when {
+                  isAspectFocused -> Color.White
+                  isEdgeFillActive -> CinemaAccent
+                  else -> CinemaBorder
+                }
+              ),
+              modifier = Modifier
+                .heightIn(min = 32.dp)
+                .focusable(interactionSource = aspectInteraction)
+                .testTag("exo_aspect_ratio_button")
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Icon(
+                  imageVector = Icons.Default.AspectRatio,
+                  contentDescription = "أبعاد الفيديو: ${resizeModeHudLabel(activeResizeMode)}",
+                  tint = when {
+                    isAspectFocused -> Color.Black
+                    isEdgeFillActive -> CinemaAccent
+                    else -> Color.White
+                  },
+                  modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(3.dp))
+                Text(
+                  text = resizeModeShortLabel(activeResizeMode),
+                  color = if (isAspectFocused) Color.Black else Color.White,
+                  fontSize = 9.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
+            }
 
             // 4. Web Player Fallback Button
             PlayerCompactSquareBtn(
@@ -1539,6 +1817,41 @@ fun NativeTvExoPlayer(
               }
             }
           }
+        }
+      }
+    }
+
+    // Center temporary HUD pill showing exact active Fill / Stretch / Fit mode when switched
+    AnimatedVisibility(
+      visible = !resizeHudMessage.isNullOrBlank() && !showGearSettingsMenu,
+      enter = fadeIn(),
+      exit = fadeOut(),
+      modifier = Modifier.align(Alignment.Center)
+    ) {
+      Surface(
+        color = Color(0xE6070A0E),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.5.dp, CinemaAccent),
+        shadowElevation = 16.dp,
+        modifier = Modifier.testTag("exo_resize_mode_hud_pill")
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Icon(
+            imageVector = Icons.Default.AspectRatio,
+            contentDescription = null,
+            tint = CinemaAccent,
+            modifier = Modifier.size(20.dp)
+          )
+          Text(
+            text = resizeHudMessage ?: "",
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.ExtraBold
+          )
         }
       }
     }
@@ -1912,79 +2225,122 @@ fun NativeTvExoPlayer(
                 }
               }
 
-              // 4. Quick Subtitles Dialog & Aspect Ratio Row
+              // 4. Aspect Ratio & Screen Edges Mode Selector (Fill / Stretch / Fit)
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.AspectRatio,
+                  contentDescription = null,
+                  tint = CinemaAccent,
+                  modifier = Modifier.size(15.dp)
+                )
+                Text(
+                  text = "أبعاد الشاشة وتمديد الأطراف:",
+                  color = CinemaAccent,
+                  fontSize = 10.5.sp,
+                  fontWeight = FontWeight.ExtraBold
+                )
+              }
+
               Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
-                Surface(
-                  onClick = {
-                    showGearSettingsMenu = false
-                    onOpenSubtitles()
-                  },
-                  color = CinemaSurfaceVariant,
-                  shape = RoundedCornerShape(8.dp),
-                  border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.6f)),
-                  modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 32.dp)
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
+                val resizeOptions = listOf(
+                  Triple(TvPreferencesRepository.RESIZE_MODE_FILL, "ملء الشاشة", "Fill"),
+                  Triple(TvPreferencesRepository.RESIZE_MODE_STRETCH, "تمديد للحدود", "Stretch"),
+                  Triple(TvPreferencesRepository.RESIZE_MODE_FIT, "أصلي", "Fit")
+                )
+                resizeOptions.forEach { (modeId, arLabel, enLabel) ->
+                  val isSelected = activeResizeMode == modeId
+                  val rInteraction = remember { MutableInteractionSource() }
+                  val isRFocused by rInteraction.collectIsFocusedAsState()
+                  Surface(
+                    onClick = {
+                      selectResizeModeAndPersist(modeId, showHud = true)
+                    },
+                    interactionSource = rInteraction,
+                    color = when {
+                      isRFocused -> CinemaFocusGlow
+                      isSelected -> ClipboxWhite
+                      else -> CinemaSurfaceVariant
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(
+                      width = if (isRFocused) 2.5.dp else 1.dp,
+                      color = when {
+                        isRFocused -> Color.White
+                        isSelected -> ClipboxWhite
+                        else -> CinemaBorder
+                      }
+                    ),
+                    modifier = Modifier
+                      .weight(1f)
+                      .heightIn(min = 38.dp)
+                      .focusable(interactionSource = rInteraction)
+                      .testTag("exo_gear_resize_$modeId")
                   ) {
-                    Icon(
-                      imageVector = Icons.Default.Subtitles,
-                      contentDescription = null,
-                      tint = CinemaAccent,
-                      modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                      text = "بحث وإعدادات الترجمة (CC)",
-                      color = Color.White,
-                      fontSize = 10.5.sp,
-                      fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                      modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
+                      horizontalArrangement = Arrangement.Center,
+                      verticalAlignment = Alignment.CenterVertically
+                    ) {
+                      if (isSelected) {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = null,
+                          tint = Color.Black,
+                          modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                      }
+                      Text(
+                        text = "$arLabel ($enLabel)",
+                        color = if (isSelected || isRFocused) Color.Black else Color.White,
+                        fontSize = 9.5.sp,
+                        fontWeight = if (isSelected || isRFocused) FontWeight.ExtraBold else FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                      )
+                    }
                   }
                 }
+              }
 
-                Surface(
-                  onClick = {
-                    resizeMode = when (resizeMode) {
-                      AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                      AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                      else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
-                    showGearSettingsMenu = false
-                  },
-                  color = CinemaSurfaceVariant,
-                  shape = RoundedCornerShape(8.dp),
-                  border = BorderStroke(1.dp, CinemaBorder),
-                  modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = 32.dp)
+              // 5. Quick Subtitles Dialog Button
+              Surface(
+                onClick = {
+                  showGearSettingsMenu = false
+                  onOpenSubtitles()
+                },
+                color = CinemaSurfaceVariant,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.6f)),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .heightIn(min = 36.dp)
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                  horizontalArrangement = Arrangement.Center,
+                  verticalAlignment = Alignment.CenterVertically
                 ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.AspectRatio,
-                      contentDescription = null,
-                      tint = Color.White,
-                      modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                      text = "تغيير أبعاد الشاشة",
-                      color = Color.White,
-                      fontSize = 10.5.sp,
-                      fontWeight = FontWeight.Bold
-                    )
-                  }
+                  Icon(
+                    imageVector = Icons.Default.Subtitles,
+                    contentDescription = null,
+                    tint = CinemaAccent,
+                    modifier = Modifier.size(15.dp)
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = "بحث وإعدادات الترجمة (CC)",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                  )
                 }
               }
             }

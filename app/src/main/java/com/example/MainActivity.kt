@@ -94,6 +94,11 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
 
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      window.attributes = window.attributes.apply {
+        layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+      }
+    }
     window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 

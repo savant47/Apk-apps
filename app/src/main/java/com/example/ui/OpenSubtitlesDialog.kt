@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -119,6 +120,8 @@ fun OpenSubtitlesDialog(
   onDismiss: () -> Unit,
   onApplySubtitle: (SubtitleItem) -> Unit,
   service: SearchAndSubtitlesService,
+  seasonNumber: Int? = null,
+  episodeNumber: Int? = null,
   embedUrlHint: String = "",
   refererUrlHint: String = "",
   subtitleStyle: SubtitleStyleConfig = SubtitleStyleConfig(),
@@ -130,7 +133,7 @@ fun OpenSubtitlesDialog(
   val scope = rememberCoroutineScope()
   val keyboardController = LocalSoftwareKeyboardController.current
 
-  var searchQuery by remember { mutableStateOf(initialQuery) }
+  var searchQuery by remember(initialQuery) { mutableStateOf(initialQuery) }
   var selectedLang by remember { mutableStateOf("ar") }
   var selectedSource by remember { mutableStateOf(SubtitleSourceFilter.ALL) }
   var subtitles by remember { mutableStateOf<List<SubtitleItem>>(emptyList()) }
@@ -172,10 +175,15 @@ fun OpenSubtitlesDialog(
       isLoading = true
       hasSearchedOnce = true
       try {
+        // Only apply explicit season/episode fallback when searching the active episode's query
+        // (if user manually types another show or SxxExx tag, searchAllSubtitles parses it from q)
+        val useExplicitEpisode = q.equals(initialQuery.trim(), ignoreCase = true)
         subtitles = service.searchAllSubtitles(
           query = q,
           languageCode = selectedLang,
-          sourceFilter = selectedSource
+          sourceFilter = selectedSource,
+          explicitSeason = if (useExplicitEpisode) seasonNumber else null,
+          explicitEpisode = if (useExplicitEpisode) episodeNumber else null
         )
       } catch (ce: CancellationException) {
         throw ce
@@ -590,27 +598,30 @@ fun OpenSubtitlesDialog(
                   color = if (isSearchBtnFocused) Color.White else CinemaPrimary
                 ),
                 modifier = Modifier
-                  .heightIn(min = 52.dp)
+                  .height(54.dp)
+                  .widthIn(min = 86.dp)
                   .focusRequester(searchBtnFocusRequester)
                   .scale(if (isSearchBtnFocused) 1.05f else 1f)
                   .testTag("subtitles_search_btn")
               ) {
                 Row(
-                  modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                  horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
+                  verticalAlignment = Alignment.CenterVertically
                 ) {
                   Icon(
                     imageVector = Icons.Default.Search,
                     contentDescription = "بحث عن الترجمة",
                     tint = if (isSearchBtnFocused) Color.Black else Color.White,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(16.dp)
                   )
                   Text(
                     text = "بحث",
                     color = if (isSearchBtnFocused) Color.Black else Color.White,
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    softWrap = false
                   )
                 }
               }

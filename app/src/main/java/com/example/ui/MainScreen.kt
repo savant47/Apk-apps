@@ -155,10 +155,11 @@ fun MainScreen(
   var showDiagnosticsDialog by remember { mutableStateOf(false) }
 
   val currentVideoQuality by repository.preferredQualityFlow.collectAsState()
+  val currentVideoResizeMode by repository.videoResizeModeFlow.collectAsState()
   var detectedVideoQualities by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
   var isHomeActive by remember { mutableStateOf(true) }
-  var selectedMainTab by remember { mutableStateOf(AppMainTab.BROWSER) }
-  var isGeneralBrowserSession by remember { mutableStateOf(true) }
+  var selectedMainTab by remember { mutableStateOf(AppMainTab.ASSER_TV) }
+  var isGeneralBrowserSession by remember { mutableStateOf(false) }
 
   // Watch Side Panel & Scraped Series State
   var isWatchSidePanelOpen by remember { mutableStateOf(true) }
@@ -223,6 +224,32 @@ fun MainScreen(
   val autoPlayNextEpisode by repository.autoPlayNextEpisodeFlow.collectAsState()
   var webVideoCurrentTimeMs by remember { mutableStateOf(0L) }
   val failedNativeStreamUrls = remember { mutableSetOf<String>() }
+
+  // Standardized Episode Display Title (`Silo S01E01` / `Lost S04E15` / `Movie (2024)`)
+  val standardizedMediaInfo = remember(
+    seriesStructure.seriesTitle,
+    seriesStructure.isSeries,
+    seriesStructure.selectedSeasonNumber,
+    seriesStructure.currentEpisodeNumber,
+    pageTitle,
+    lastSearchQuery,
+    activeWatchPageUrl,
+    activeEmbedRefererUrl,
+    currentUrl,
+    activeServerName
+  ) {
+    SearchAndSubtitlesService.formatStandardizedEpisodeInfo(
+      seriesTitle = seriesStructure.seriesTitle,
+      pageTitle = pageTitle,
+      lastSearchQuery = lastSearchQuery,
+      watchPageUrl = activeWatchPageUrl.ifBlank { currentUrl },
+      embedUrl = activeEmbedRefererUrl.ifBlank { currentUrl },
+      serverName = activeServerName,
+      isSeriesHint = seriesStructure.isSeries,
+      selectedSeasonHint = seriesStructure.selectedSeasonNumber,
+      currentEpisodeHint = seriesStructure.currentEpisodeNumber
+    )
+  }
 
   // Ensure permissive SSL is installed early for all streaming CDNs
   LaunchedEffect(Unit) {
@@ -1760,11 +1787,15 @@ fun MainScreen(
 
         NativeTvExoPlayer(
           videoUrl = playNativeVideoUrl ?: "",
-          title = pageTitle.ifBlank { lastSearchQuery },
+          title = standardizedMediaInfo.displayTitle,
           refererUrl = activeEmbedRefererUrl.ifBlank { currentUrl.ifBlank { activeWatchPageUrl } },
           capturedHeaders = detectedVideoHeaders,
           userAgent = desktopChromeUa,
           selectedQuality = currentVideoQuality,
+          selectedResizeMode = currentVideoResizeMode,
+          onSelectResizeMode = { mode ->
+            repository.setVideoResizeMode(mode)
+          },
           availableQualities = detectedVideoQualities,
           onSelectQualityOption = { option ->
             applyVideoQualityInPlayer(option.id, option.label, option.streamUrl)
@@ -1996,7 +2027,9 @@ fun MainScreen(
                   horizontalAlignment = Alignment.Start
                 ) {
                   Text(
-                    text = pageTitle.ifBlank { lastSearchQuery.ifBlank { "مشغل Asser TV المباشر" } },
+                    text = standardizedMediaInfo.displayTitle.ifBlank {
+                      pageTitle.ifBlank { lastSearchQuery.ifBlank { "مشغل Asser TV المباشر" } }
+                    },
                     color = Color.White,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.ExtraBold,
@@ -2455,7 +2488,7 @@ fun MainScreen(
         Box(
           modifier = Modifier
             .fillMaxSize()
-            .padding(innerPadding)
+            .then(if (isFullscreenVideo) Modifier else Modifier.padding(innerPadding))
         ) {
           movablePlayerBox()
         }
@@ -2466,7 +2499,11 @@ fun MainScreen(
   // Dialogs
   if (showSubtitlesDialog) {
     OpenSubtitlesDialog(
-      initialQuery = lastSearchQuery.ifBlank { pageTitle.ifBlank { "VisionQuest" } },
+      initialQuery = standardizedMediaInfo.subtitleQuery.ifBlank {
+        pageTitle.ifBlank { lastSearchQuery.ifBlank { "VisionQuest" } }
+      },
+      seasonNumber = standardizedMediaInfo.seasonNumber,
+      episodeNumber = standardizedMediaInfo.episodeNumber,
       embedUrlHint = activeEmbedRefererUrl.ifBlank { currentUrl },
       refererUrlHint = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
       activeSubtitle = activeSubtitleItem,

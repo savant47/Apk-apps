@@ -58,7 +58,7 @@ import com.example.ui.theme.CinemaSurfaceVariant
 fun TvNavBar(
   activePortal: StreamingPortal,
   isHomeActive: Boolean = false,
-  selectedMainTab: AppMainTab = AppMainTab.BROWSER,
+  selectedMainTab: AppMainTab = AppMainTab.ASSER_TV,
   controlMode: ControlMode,
   currentDisplayMode: AppDisplayMode,
   onGoToBrowserHome: () -> Unit,
