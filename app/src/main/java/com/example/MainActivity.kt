@@ -3,12 +3,18 @@ package com.example
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
+import android.view.SurfaceView
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.media3.ui.PlayerView
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
@@ -48,6 +54,9 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
 
   private var keyEventCallback: ActivityKeyEventCallback? = null
   private lateinit var repository: TvPreferencesRepository
+  private val exitHandler = Handler(Looper.getMainLooper())
+  private var isCleaningUpForExit = false
+  private var hasCompletedCleanExit = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     // Disable hardware acceleration at the Window level on emulators to prevent libhwui from initializing EGL/Mesa drivers, 
@@ -189,5 +198,116 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
       return true
     }
     return super.dispatchKeyEvent(event)
+  }
+
+  override fun finish() {
+    if (hasCompletedCleanExit) {
+      super.finish()
+      return
+    }
+    performCleanExitWithFlush()
+  }
+
+  override fun finishAndRemoveTask() {
+    if (hasCompletedCleanExit) {
+      super.finishAndRemoveTask()
+      return
+    }
+    performCleanExitWithFlush()
+  }
+
+  private fun performCleanExitWithFlush() {
+    if (isCleaningUpForExit) return
+    isCleaningUpForExit = true
+
+    try {
+      window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      releaseAllActiveGraphicsAndWebViews(window?.decorView)
+      System.gc()
+    } catch (_: Throwable) {}
+
+    // Yield 150ms on the main looper so Android WindowManager / SurfaceFlinger
+    // cleanly flushes detached SurfaceView hardware overlays before returning to the TV launcher.
+    exitHandler.postDelayed({
+      hasCompletedCleanExit = true
+      try {
+        super.finishAndRemoveTask()
+      } catch (_: Throwable) {
+        try {
+          super.finish()
+        } catch (_: Throwable) {}
+      }
+    }, 150L)
+  }
+
+  private fun releaseAllActiveGraphicsAndWebViews(root: View?) {
+    if (root == null) return
+    val webViews = mutableListOf<WebView>()
+    val playerViews = mutableListOf<PlayerView>()
+    val surfaceViews = mutableListOf<SurfaceView>()
+
+    fun collect(view: View) {
+      when (view) {
+        is WebView -> webViews.add(view)
+        is PlayerView -> playerViews.add(view)
+        is SurfaceView -> surfaceViews.add(view)
+      }
+      if (view is ViewGroup) {
+        for (i in 0 until view.childCount) {
+          val child = view.getChildAt(i)
+          if (child != null) collect(child)
+        }
+      }
+    }
+
+    try {
+      collect(root)
+    } catch (_: Throwable) {}
+
+    for (pv in playerViews) {
+      try {
+        pv.videoSurfaceView?.visibility = View.GONE
+        pv.visibility = View.GONE
+        val attachedPlayer = pv.player
+        pv.player = null
+        attachedPlayer?.let { p ->
+          try { p.playWhenReady = false } catch (_: Throwable) {}
+          try { p.stop() } catch (_: Throwable) {}
+          try { p.clearVideoSurface() } catch (_: Throwable) {}
+          try { p.release() } catch (_: Throwable) {}
+        }
+      } catch (_: Throwable) {}
+    }
+
+    for (sv in surfaceViews) {
+      try {
+        sv.visibility = View.GONE
+      } catch (_: Throwable) {}
+    }
+
+    for (wv in webViews) {
+      try {
+        wv.stopLoading()
+        wv.onPause()
+        wv.pauseTimers()
+        wv.clearHistory()
+        wv.clearCache(true)
+        wv.loadUrl("about:blank")
+        wv.visibility = View.GONE
+        (wv.parent as? ViewGroup)?.removeView(wv)
+        wv.removeAllViews()
+        wv.destroy()
+      } catch (_: Throwable) {}
+    }
+  }
+
+  override fun onDestroy() {
+    exitHandler.removeCallbacksAndMessages(null)
+    keyEventCallback = null
+    try {
+      releaseAllActiveGraphicsAndWebViews(window?.decorView)
+      System.gc()
+    } catch (_: Throwable) {}
+    super.onDestroy()
   }
 }

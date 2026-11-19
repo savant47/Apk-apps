@@ -63,6 +63,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -541,24 +542,37 @@ fun AppUpdateDialog(
                   modifier = Modifier
                     .fillMaxWidth()
                     .padding(14.dp),
-                  verticalArrangement = Arrangement.spacedBy(8.dp)
+                  verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                   Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                   ) {
                     Text(
                       text = "جاري تنزيل ملف التحديث من GitHub Releases...",
                       color = Color.White,
-                      fontSize = 13.sp,
-                      fontWeight = FontWeight.Bold
+                      fontSize = 12.5.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 2,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.weight(1f)
                     )
-                    Text(
-                      text = "${(downloadProgress * 100).toInt()}%",
-                      color = CinemaAccent,
-                      fontSize = 13.5.sp,
-                      fontWeight = FontWeight.Bold
-                    )
+                    Surface(
+                      color = CinemaAccent.copy(alpha = 0.16f),
+                      shape = RoundedCornerShape(8.dp),
+                      border = androidx.compose.foundation.BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.5f))
+                    ) {
+                      Text(
+                        text = "${(downloadProgress * 100).toInt()}%",
+                        color = CinemaAccent,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                      )
+                    }
                   }
 
                   LinearProgressIndicator(
@@ -571,11 +585,29 @@ fun AppUpdateDialog(
                     trackColor = CinemaSurfaceVariant
                   )
 
-                  Text(
-                    text = "تم تنزيل: $downloadedSizeText من $totalSizeText MB",
-                    color = Color.LightGray,
-                    fontSize = 11.sp
-                  )
+                  val cleanDownloaded = downloadedSizeText.replace("MB", "", ignoreCase = true).trim()
+                  val cleanTotal = totalSizeText.replace("MB", "", ignoreCase = true).trim()
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Text(
+                      text = "تم تنزيل: $cleanDownloaded من $cleanTotal MB",
+                      color = Color.LightGray,
+                      fontSize = 11.5.sp,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                      text = "APK",
+                      color = CinemaSuccess,
+                      fontSize = 10.5.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
                 }
               }
             }

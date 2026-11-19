@@ -19,6 +19,14 @@ enum class AppDisplayMode(val arabicTitle: String, val subtitle: String) {
   TV("📺 منظور الشاشة أو التابلت", "واجهة أفقية عريضة للشاشات والرسيفرات والتابلت مع دعم الريموت والماوس")
 }
 
+data class PlaybackProgressRecord(
+  val contentKey: String,
+  val displayTitle: String,
+  val positionMs: Long,
+  val durationMs: Long,
+  val updatedAtMs: Long = System.currentTimeMillis()
+)
+
 class TvPreferencesRepository(context: Context) {
 
   private val prefs: SharedPreferences =
@@ -110,7 +118,7 @@ class TvPreferencesRepository(context: Context) {
   private fun loadSubtitleStyle() {
     val textColor = prefs.getLong(KEY_SUB_TEXT_COLOR, 0xFFFFD700L)
     val bgColor = prefs.getLong(KEY_SUB_BG_COLOR, 0xBF000000L)
-    val fontSize = prefs.getFloat(KEY_SUB_FONT_SIZE, 20f)
+    val fontSize = prefs.getFloat(KEY_SUB_FONT_SIZE, 20f).coerceIn(12f, 60f)
     val bottomOffset = prefs.getInt(KEY_SUB_BOTTOM_OFFSET, 28)
     val syncOffset = prefs.getLong(KEY_SUB_SYNC_OFFSET, 0L)
     _subtitleStyleFlow.value = SubtitleStyleConfig(
@@ -125,13 +133,14 @@ class TvPreferencesRepository(context: Context) {
   fun getSubtitleStyle(): SubtitleStyleConfig = _subtitleStyleFlow.value
 
   fun setSubtitleStyle(style: SubtitleStyleConfig) {
-    _subtitleStyleFlow.value = style
+    val clampedStyle = style.copy(fontSizeSp = style.fontSizeSp.coerceIn(12f, 60f))
+    _subtitleStyleFlow.value = clampedStyle
     prefs.edit()
-      .putLong(KEY_SUB_TEXT_COLOR, style.textColorArgb)
-      .putLong(KEY_SUB_BG_COLOR, style.backgroundColorArgb)
-      .putFloat(KEY_SUB_FONT_SIZE, style.fontSizeSp)
-      .putInt(KEY_SUB_BOTTOM_OFFSET, style.bottomOffsetDp)
-      .putLong(KEY_SUB_SYNC_OFFSET, style.syncOffsetMs)
+      .putLong(KEY_SUB_TEXT_COLOR, clampedStyle.textColorArgb)
+      .putLong(KEY_SUB_BG_COLOR, clampedStyle.backgroundColorArgb)
+      .putFloat(KEY_SUB_FONT_SIZE, clampedStyle.fontSizeSp)
+      .putInt(KEY_SUB_BOTTOM_OFFSET, clampedStyle.bottomOffsetDp)
+      .putLong(KEY_SUB_SYNC_OFFSET, clampedStyle.syncOffsetMs)
       .apply()
   }
 
@@ -140,6 +149,100 @@ class TvPreferencesRepository(context: Context) {
   fun setAutoPlayNextEpisodeEnabled(enabled: Boolean) {
     _autoPlayNextEpisodeFlow.value = enabled
     prefs.edit().putBoolean(KEY_AUTO_PLAY_NEXT_EPISODE, enabled).apply()
+  }
+
+  // =========================================================================
+  // CROSS-SOURCE RESUME PLAYBACK PROGRESS (Independent of Portal / Server URL)
+  // =========================================================================
+
+  private fun loadAllPlaybackProgressLocked(): MutableMap<String, PlaybackProgressRecord> {
+    val map = LinkedHashMap<String, PlaybackProgressRecord>()
+    val raw = prefs.getString(KEY_PLAYBACK_PROGRESS_JSON, null) ?: return map
+    try {
+      val arr = JSONArray(raw)
+      for (i in 0 until arr.length()) {
+        val obj = arr.getJSONObject(i)
+        val key = obj.optString("contentKey", "")
+        if (key.isNotBlank()) {
+          map[key] = PlaybackProgressRecord(
+            contentKey = key,
+            displayTitle = obj.optString("displayTitle", ""),
+            positionMs = obj.optLong("positionMs", 0L),
+            durationMs = obj.optLong("durationMs", 0L),
+            updatedAtMs = obj.optLong("updatedAtMs", 0L)
+          )
+        }
+      }
+    } catch (_: Exception) {}
+    return map
+  }
+
+  private fun persistPlaybackProgressLocked(map: Map<String, PlaybackProgressRecord>) {
+    val sorted = map.values
+      .sortedByDescending { it.updatedAtMs }
+      .take(120)
+    val arr = JSONArray()
+    for (rec in sorted) {
+      arr.put(
+        JSONObject().apply {
+          put("contentKey", rec.contentKey)
+          put("displayTitle", rec.displayTitle)
+          put("positionMs", rec.positionMs)
+          put("durationMs", rec.durationMs)
+          put("updatedAtMs", rec.updatedAtMs)
+        }
+      )
+    }
+    prefs.edit().putString(KEY_PLAYBACK_PROGRESS_JSON, arr.toString()).apply()
+  }
+
+  @Synchronized
+  fun savePlaybackProgress(
+    contentKey: String,
+    displayTitle: String,
+    positionMs: Long,
+    durationMs: Long
+  ) {
+    if (contentKey.isBlank()) return
+    val map = loadAllPlaybackProgressLocked()
+
+    // If >= 95% watched, mark as completed and clear the saved resume position
+    if (durationMs > 0L && positionMs >= (durationMs * 0.95).toLong()) {
+      if (map.remove(contentKey) != null) {
+        persistPlaybackProgressLocked(map)
+      }
+      return
+    }
+
+    // Only persist meaningful resume positions (> 15 seconds)
+    if (positionMs <= 15_000L) return
+
+    map[contentKey] = PlaybackProgressRecord(
+      contentKey = contentKey,
+      displayTitle = displayTitle,
+      positionMs = positionMs,
+      durationMs = durationMs.coerceAtLeast(0L),
+      updatedAtMs = System.currentTimeMillis()
+    )
+    persistPlaybackProgressLocked(map)
+  }
+
+  @Synchronized
+  fun getPlaybackProgress(contentKey: String): PlaybackProgressRecord? {
+    if (contentKey.isBlank()) return null
+    val record = loadAllPlaybackProgressLocked()[contentKey] ?: return null
+    if (record.positionMs <= 15_000L) return null
+    if (record.durationMs > 0L && record.positionMs >= (record.durationMs * 0.95).toLong()) return null
+    return record
+  }
+
+  @Synchronized
+  fun clearPlaybackProgress(contentKey: String) {
+    if (contentKey.isBlank()) return
+    val map = loadAllPlaybackProgressLocked()
+    if (map.remove(contentKey) != null) {
+      persistPlaybackProgressLocked(map)
+    }
   }
 
   fun getActivePortal(): StreamingPortal {
@@ -355,6 +458,7 @@ class TvPreferencesRepository(context: Context) {
     root.put("timestamp", System.currentTimeMillis())
     root.put("bookmarks", prefs.getString(KEY_BOOKMARKS_JSON, "[]"))
     root.put("history", prefs.getString(KEY_HISTORY_JSON, "[]"))
+    root.put("playback_progress", prefs.getString(KEY_PLAYBACK_PROGRESS_JSON, "[]"))
     root.put("display_mode", prefs.getString(KEY_DISPLAY_MODE, AppDisplayMode.MOBILE.name))
     root.put("active_portal", prefs.getString(KEY_ACTIVE_PORTAL, StreamingPortal.TOP_CINEMA.id))
     root.put("github_repo", getGitHubRepo())
@@ -370,6 +474,7 @@ class TvPreferencesRepository(context: Context) {
       val editor = prefs.edit()
       if (root.has("bookmarks")) editor.putString(KEY_BOOKMARKS_JSON, root.getString("bookmarks"))
       if (root.has("history")) editor.putString(KEY_HISTORY_JSON, root.getString("history"))
+      if (root.has("playback_progress")) editor.putString(KEY_PLAYBACK_PROGRESS_JSON, root.getString("playback_progress"))
       if (root.has("display_mode")) editor.putString(KEY_DISPLAY_MODE, root.getString("display_mode"))
       if (root.has("active_portal")) editor.putString(KEY_ACTIVE_PORTAL, root.getString("active_portal"))
       if (root.has("github_repo")) editor.putString(KEY_GITHUB_REPO, root.getString("github_repo"))
@@ -386,6 +491,7 @@ class TvPreferencesRepository(context: Context) {
   companion object {
     private const val KEY_BOOKMARKS_JSON = "bookmarks_json"
     private const val KEY_HISTORY_JSON = "history_json"
+    private const val KEY_PLAYBACK_PROGRESS_JSON = "playback_progress_json_v1"
     private const val KEY_DISPLAY_MODE = "display_mode"
     private const val KEY_HAS_SELECTED_MODE = "has_selected_asser_browser_mode_v2"
     private const val KEY_CONTROL_MODE = "control_mode"
@@ -402,5 +508,60 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_SUB_SYNC_OFFSET = "subtitle_sync_offset_ms"
     private const val KEY_AUTO_PLAY_NEXT_EPISODE = "auto_play_next_episode_enabled"
     const val DEFAULT_GITHUB_REPO = "savant47/Apk-apps"
+
+    /**
+     * Builds a portal-independent, server-independent normalized content key so playback
+     * progress seamlessly carries across TopCinema, WatchSeries, LaRoza, EgyDead, and all servers.
+     * Examples:
+     *   - "مسلسل VisionQuest الموسم الأول الحلقة 1 مترجم" -> "series:visionquest:s1:e1"
+     *   - "VisionQuest - S1E1" -> "series:visionquest:s1:e1"
+     *   - "فيلم A Talent for Murder 2026 مترجم اون لاين" -> "movie:a talent for murder"
+     */
+    fun buildNormalizedContentKey(
+      rawTitle: String,
+      seasonNumber: Int?,
+      episodeNumber: Int?,
+      isSeries: Boolean
+    ): String {
+      if (rawTitle.isBlank()) return ""
+      var cleaned = rawTitle.lowercase()
+        // Remove Arabic diacritics
+        .replace(Regex("[\u064B-\u065F\u0670]"), "")
+        // Normalize Arabic letter variants
+        .replace('أ', 'ا')
+        .replace('إ', 'ا')
+        .replace('آ', 'ا')
+        .replace('ة', 'ه')
+        .replace('ى', 'ي')
+        // Strip season/episode markers from title so S1E1 & "الموسم 1 الحلقة 1" yield identical base title
+        .replace(Regex("\\bs\\d{1,2}\\s*e\\d{1,4}\\b"), " ")
+        .replace(Regex("\\b(?:season|episode|ep|halka)\\s*\\d{1,4}\\b"), " ")
+        .replace(Regex("(?:الموسم|موسم)\\s*(?:الاول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|\\d{1,2})"), " ")
+        .replace(Regex("(?:الحلقه|حلقه)\\s*\\d{1,4}"), " ")
+        // Strip years like 2024, (2026)
+        .replace(Regex("\\b(?:19|20)\\d{2}\\b"), " ")
+        // Strip Arabic/English boilerplate streaming words
+        .replace(
+          Regex("(?:^|\\s)(?:مشاهده|تحميل|فيلم|مسلسل|مترجم|مترجمه|مدبلج|مدبلجه|اون|لاين|اونلاين|كامل|كامله|والاخيره|الاخيره|بجوده|عاليه|توب|سينما|لاروزا|ايجي|ديد|watch|online|free|hd|fhd|uhd|4k|1080p|720p|480p|web-dl|webrip|bluray|topcinema|watchseries|laroza|egydead)(?=\\s|$)"),
+          " "
+        )
+        // Keep only letters (Latin & Arabic), digits, and spaces
+        .replace(Regex("[^a-z0-9\\u0621-\\u064A]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+      if (cleaned.isBlank()) {
+        cleaned = rawTitle.lowercase().replace(Regex("[^a-z0-9\\u0621-\\u064A]+"), "").take(48)
+      }
+      if (cleaned.isBlank()) return ""
+
+      return if (isSeries || (episodeNumber != null && episodeNumber > 0)) {
+        val s = (seasonNumber ?: 1).coerceAtLeast(1)
+        val e = (episodeNumber ?: 1).coerceAtLeast(1)
+        "series:$cleaned:s$s:e$e"
+      } else {
+        "movie:$cleaned"
+      }
+    }
   }
 }

@@ -1405,6 +1405,35 @@ fun MainScreen(
       }
 
       if (showPrimaryNativePlayer) {
+        val currentWatchUrlForKey = activeWatchPageUrl.ifBlank { currentUrl }
+        val activeEpNumForKey = extractEpisodeNumberFromText(currentWatchUrlForKey)
+          ?: extractEpisodeNumberFromText(pageTitle)
+          ?: if (seriesStructure.isSeries && seriesStructure.currentEpisodeNumber > 0) {
+            seriesStructure.currentEpisodeNumber
+          } else {
+            null
+          }
+        val activeSeasonForKey = seriesStructure.selectedSeasonNumber.coerceAtLeast(1)
+        val rawTitleForKey = seriesStructure.seriesTitle.ifBlank {
+          pageTitle.ifBlank { lastSearchQuery }
+        }
+        val activeContentKey = remember(
+          rawTitleForKey,
+          activeSeasonForKey,
+          activeEpNumForKey,
+          seriesStructure.isSeries
+        ) {
+          TvPreferencesRepository.buildNormalizedContentKey(
+            rawTitle = rawTitleForKey,
+            seasonNumber = activeSeasonForKey,
+            episodeNumber = activeEpNumForKey,
+            isSeries = seriesStructure.isSeries || activeEpNumForKey != null
+          )
+        }
+        val savedResumePosMs = remember(activeContentKey, currentWatchUrlForKey) {
+          repository.getPlaybackProgress(activeContentKey)?.positionMs ?: 0L
+        }
+
         NativeTvExoPlayer(
           videoUrl = playNativeVideoUrl ?: "",
           title = pageTitle.ifBlank { lastSearchQuery },
@@ -1435,6 +1464,23 @@ fun MainScreen(
           },
           onPlayNextEpisode = {
             nextEpisodeItem?.let { playNextEpisodeAutomatically(it) }
+          },
+          contentKey = activeContentKey,
+          savedResumePositionMs = savedResumePosMs,
+          onSavePlaybackProgress = { posMs, durMs ->
+            if (activeContentKey.isNotBlank()) {
+              repository.savePlaybackProgress(
+                contentKey = activeContentKey,
+                displayTitle = pageTitle.ifBlank { rawTitleForKey },
+                positionMs = posMs,
+                durationMs = durMs
+              )
+            }
+          },
+          onClearPlaybackProgress = {
+            if (activeContentKey.isNotBlank()) {
+              repository.clearPlaybackProgress(activeContentKey)
+            }
           },
           isFullscreen = isFullscreenVideo,
           onToggleFullscreen = {

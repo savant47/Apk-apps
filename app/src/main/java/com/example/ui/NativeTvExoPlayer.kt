@@ -4,12 +4,16 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.util.TypedValue
 import android.view.LayoutInflater
+import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,6 +37,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,7 +51,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
@@ -73,6 +82,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.toArgb
@@ -92,6 +104,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
@@ -150,6 +163,10 @@ fun NativeTvExoPlayer(
   isAutoPlayNextEnabled: Boolean = true,
   onToggleAutoPlayNext: (Boolean) -> Unit = {},
   onPlayNextEpisode: () -> Unit = {},
+  contentKey: String = "",
+  savedResumePositionMs: Long = 0L,
+  onSavePlaybackProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
+  onClearPlaybackProgress: () -> Unit = {},
   isFullscreen: Boolean = false,
   onToggleFullscreen: () -> Unit = {},
   onOpenSubtitles: () -> Unit = {},
@@ -168,6 +185,8 @@ fun NativeTvExoPlayer(
   val latestNextEpisodeTitle by rememberUpdatedState(nextEpisodeTitle)
   val latestIsAutoPlayNextEnabled by rememberUpdatedState(isAutoPlayNextEnabled)
   val latestOnPlayNextEpisode by rememberUpdatedState(onPlayNextEpisode)
+  val latestOnSavePlaybackProgress by rememberUpdatedState(onSavePlaybackProgress)
+  val latestOnClearPlaybackProgress by rememberUpdatedState(onClearPlaybackProgress)
 
   var retryAttempt by remember(videoUrl) { mutableIntStateOf(0) }
   var isControllerVisible by remember { mutableStateOf(true) }
@@ -177,6 +196,16 @@ fun NativeTvExoPlayer(
   var currentPlaybackSpeed by remember { mutableFloatStateOf(1.0f) }
   var currentPlaybackPosMs by remember(videoUrl) { mutableLongStateOf(0L) }
   var lastKnownGoodPositionMs by remember(videoUrl) { mutableLongStateOf(0L) }
+  var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+  var isPlayerReleased by remember { mutableStateOf(false) }
+
+  // Cross-Source Resume Playback State
+  var showResumePrompt by remember(contentKey, savedResumePositionMs) {
+    mutableStateOf(contentKey.isNotBlank() && savedResumePositionMs > 15_000L)
+  }
+  var pendingResumeSeekMs by remember(contentKey) { mutableLongStateOf(0L) }
+  var lastProgressSaveWallMs by remember(contentKey) { mutableLongStateOf(0L) }
+  val resumeButtonFocusRequester = remember { FocusRequester() }
 
   // Auto-Play Next Episode Countdown State
   var showNextEpisodeCountdown by remember(videoUrl) { mutableStateOf(false) }
@@ -255,16 +284,35 @@ fun NativeTvExoPlayer(
       }
   }
 
-  // Poll playback position every 200ms for subtitle sync, resume position tracking, and near-end Auto-Next check
-  LaunchedEffect(player, videoUrl) {
+  fun persistPlaybackProgressNow() {
+    if (isPlayerReleased || showResumePrompt) return
+    try {
+      val pos = maxOf(lastKnownGoodPositionMs, player.currentPosition.coerceAtLeast(0L))
+      val dur = player.duration.coerceAtLeast(0L)
+      if (pos > 15_000L || (dur > 0L && pos >= (dur * 0.95).toLong())) {
+        latestOnSavePlaybackProgress(pos, dur)
+      }
+    } catch (_: Throwable) {}
+  }
+
+  // Poll playback position every 200ms for subtitle sync, 10s progress persistence, and near-end Auto-Next check
+  LaunchedEffect(player, videoUrl, contentKey) {
     while (true) {
       try {
         val pos = player.currentPosition.coerceAtLeast(0L)
-        val dur = player.duration
+        val dur = player.duration.coerceAtLeast(0L)
         currentPlaybackPosMs = pos
-        if (pos > 1500L) {
+        if (pos > 1500L && !showResumePrompt) {
           lastKnownGoodPositionMs = pos
         }
+
+        // Persist cross-source playback progress every 10 seconds during playback
+        val nowWall = System.currentTimeMillis()
+        if (!showResumePrompt && player.isPlaying && pos > 15_000L && (nowWall - lastProgressSaveWallMs >= 10_000L)) {
+          lastProgressSaveWallMs = nowWall
+          latestOnSavePlaybackProgress(pos, dur)
+        }
+
         if (latestNextEpisodeTitle != null &&
             latestIsAutoPlayNextEnabled &&
             !userCancelledNextEpisode &&
@@ -414,11 +462,32 @@ fun NativeTvExoPlayer(
         if (playbackState == Player.STATE_READY) {
           AppDiagnosticsLogger.activePlayerMode = "Native ExoPlayer (يعمل بنجاح ✅)"
           AppDiagnosticsLogger.log("ExoPlayer", "Playback STATE_READY for $videoUrl")
+          if (pendingResumeSeekMs > 0L) {
+            val targetMs = pendingResumeSeekMs
+            pendingResumeSeekMs = 0L
+            try {
+              player.seekTo(targetMs)
+              lastKnownGoodPositionMs = targetMs
+              player.playWhenReady = true
+              AppDiagnosticsLogger.log("Resume", "Seeked to saved resume position ${targetMs}ms on STATE_READY")
+            } catch (_: Throwable) {}
+          }
         } else if (playbackState == Player.STATE_ENDED) {
+          // Mark episode/movie as completed (clears saved resume position)
+          try {
+            val dur = player.duration.coerceAtLeast(1L)
+            latestOnSavePlaybackProgress(dur, dur)
+          } catch (_: Throwable) {}
           if (latestNextEpisodeTitle != null && latestIsAutoPlayNextEnabled && !userCancelledNextEpisode && !hasTriggeredAutoNext) {
             nextEpisodeCountdownSec = 4
             showNextEpisodeCountdown = true
           }
+        }
+      }
+
+      override fun onIsPlayingChanged(isPlaying: Boolean) {
+        if (!isPlaying && !showResumePrompt) {
+          persistPlaybackProgressNow()
         }
       }
 
@@ -463,12 +532,91 @@ fun NativeTvExoPlayer(
     }
   }
 
-  DisposableEffect(Unit) {
-    onDispose {
+  fun hideSurfaceViewsRecursively(view: View?) {
+    if (view == null) return
+    if (view is SurfaceView) {
+      view.visibility = View.GONE
+    }
+    if (view is ViewGroup) {
+      for (i in 0 until view.childCount) {
+        hideSurfaceViewsRecursively(view.getChildAt(i))
+      }
+    }
+  }
+
+  fun teardownPlayerAndSurface() {
+    persistPlaybackProgressNow()
+    val pv = playerViewRef
+    if (pv != null) {
+      try {
+        pv.videoSurfaceView?.visibility = View.GONE
+        hideSurfaceViewsRecursively(pv)
+        pv.visibility = View.GONE
+        pv.player = null
+      } catch (_: Throwable) {}
+      playerViewRef = null
+    }
+    if (!isPlayerReleased) {
+      isPlayerReleased = true
+      try {
+        player.playWhenReady = false
+        player.stop()
+      } catch (_: Throwable) {}
+      try {
+        player.clearVideoSurface()
+      } catch (_: Throwable) {}
+      try {
+        player.release()
+      } catch (_: Throwable) {}
       try {
         streamingOkHttpClient.connectionPool.evictAll()
-      } catch (_: Exception) {}
-      player.release()
+      } catch (_: Throwable) {}
+    }
+  }
+
+  // Also release hardware SurfaceView overlay immediately when Activity stops/destroys (e.g. Home/Back on TV Box)
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner, player) {
+    val observer = LifecycleEventObserver { _, event ->
+      when (event) {
+        Lifecycle.Event.ON_STOP -> {
+          if (!isPlayerReleased) {
+            persistPlaybackProgressNow()
+            try {
+              player.pause()
+              player.clearVideoSurface()
+            } catch (_: Throwable) {}
+            try {
+              playerViewRef?.videoSurfaceView?.visibility = View.GONE
+              hideSurfaceViewsRecursively(playerViewRef)
+            } catch (_: Throwable) {}
+          }
+        }
+        Lifecycle.Event.ON_START -> {
+          if (!isPlayerReleased) {
+            try {
+              playerViewRef?.visibility = View.VISIBLE
+              playerViewRef?.videoSurfaceView?.visibility = View.VISIBLE
+              playerViewRef?.player = null
+              playerViewRef?.player = player
+            } catch (_: Throwable) {}
+          }
+        }
+        Lifecycle.Event.ON_DESTROY -> {
+          teardownPlayerAndSurface()
+        }
+        else -> Unit
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+    }
+  }
+
+  DisposableEffect(Unit) {
+    onDispose {
+      teardownPlayerAndSurface()
     }
   }
 
@@ -594,10 +742,33 @@ fun NativeTvExoPlayer(
         "Loading stream via OkHttp (attempt $retryAttempt, resume=${resumePositionMs}ms): $videoUrl | Referer=$effectiveReferer | Origin=${headersMap["Origin"] ?: "none"}"
       )
 
-      val mediaItem = MediaItem.Builder().setUri(videoUrl).build()
-      player.setMediaItem(mediaItem, resumePositionMs)
-      player.prepare()
-      player.playWhenReady = true
+      try {
+        val lowerUrl = videoUrl.lowercase()
+        val mediaItemBuilder = MediaItem.Builder().setUri(videoUrl)
+        when {
+          lowerUrl.contains(".mpd") || lowerUrl.contains("/dash/") -> {
+            mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_MPD)
+          }
+          lowerUrl.contains(".m3u8") -> {
+            mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+          }
+          lowerUrl.contains(".ism/manifest") || lowerUrl.contains(".isml/manifest") -> {
+            mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_SS)
+          }
+        }
+        val mediaItem = mediaItemBuilder.build()
+        player.setMediaItem(mediaItem, resumePositionMs)
+        player.prepare()
+        player.playWhenReady = !showResumePrompt
+      } catch (t: Throwable) {
+        val errMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unsupported stream format"}"
+        AppDiagnosticsLogger.log(
+          "ExoPlayerInit",
+          "Failed to initialize MediaItem ($errMsg) for $videoUrl - falling back to WebView player",
+          isError = true
+        )
+        onFallbackToWebPlayer()
+      }
     }
   }
 
@@ -658,17 +829,24 @@ fun NativeTvExoPlayer(
           subView.visibility = View.GONE
         } else {
           subView.visibility = View.VISIBLE
+          val effectiveFontSizeSp = style.fontSizeSp.coerceIn(12f, 60f)
+          val bgArgb = Color(style.backgroundColorArgb).toArgb()
+          val isTransparentBg = android.graphics.Color.alpha(bgArgb) == 0
+          subView.setApplyEmbeddedStyles(false)
+          subView.setApplyEmbeddedFontSizes(false)
+          // Generous bottom padding fraction prevents large 48sp-60sp Arabic text from clipping at screen bottom
+          subView.setBottomPaddingFraction(if (effectiveFontSizeSp >= 40f) 0.10f else 0.08f)
           subView.setStyle(
             CaptionStyleCompat(
               Color(style.textColorArgb).toArgb(),
-              Color(style.backgroundColorArgb).toArgb(),
+              if (isTransparentBg) android.graphics.Color.TRANSPARENT else bgArgb,
               android.graphics.Color.TRANSPARENT,
-              CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
+              if (isTransparentBg) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW,
               android.graphics.Color.BLACK,
               Typeface.DEFAULT_BOLD
             )
           )
-          subView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSizeSp)
+          subView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, effectiveFontSizeSp)
         }
       }
     } catch (_: Exception) {
@@ -680,6 +858,10 @@ fun NativeTvExoPlayer(
       .fillMaxSize()
       .background(Color.Black)
       .onPreviewKeyEvent { keyEvent ->
+        // Let the D-pad navigate freely inside the Resume Playback or Gear Settings overlays
+        if (showResumePrompt || showGearSettingsMenu) {
+          return@onPreviewKeyEvent false
+        }
         when (keyEvent.key) {
           Key.DirectionCenter, Key.Enter -> {
             if (keyEvent.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
@@ -723,8 +905,9 @@ fun NativeTvExoPlayer(
           // for zero-drop hardware video decoding on Xiaomi TV Stick & low-RAM Android TV devices.
           val inflated = LayoutInflater.from(ctx)
             .inflate(R.layout.exo_player_surface_view, null, false) as PlayerView
+          playerViewRef = inflated
           inflated.apply {
-            this.player = player
+            this.player = if (!isPlayerReleased) player else null
             useController = true
             this.resizeMode = resizeMode
             controllerAutoShow = true
@@ -749,14 +932,28 @@ fun NativeTvExoPlayer(
           }
         },
         update = { view ->
-          if (view.player != player) {
-            view.player = player
+          if (!isPlayerReleased) {
+            playerViewRef = view
+            if (view.player != player) {
+              view.player = player
+            }
+            if (view.resizeMode != resizeMode) {
+              view.resizeMode = resizeMode
+            }
+            applyCaptionStyleToPlayerView(view, subtitleStyle)
+            hookPlayerViewGearButton(view)
           }
-          if (view.resizeMode != resizeMode) {
-            view.resizeMode = resizeMode
+        },
+        onRelease = { view ->
+          try {
+            view.videoSurfaceView?.visibility = View.GONE
+            hideSurfaceViewsRecursively(view)
+            view.visibility = View.GONE
+            view.player = null
+          } catch (_: Throwable) {}
+          if (playerViewRef === view) {
+            playerViewRef = null
           }
-          applyCaptionStyleToPlayerView(view, subtitleStyle)
-          hookPlayerViewGearButton(view)
         },
         modifier = Modifier.fillMaxSize()
       )
@@ -1333,18 +1530,26 @@ fun NativeTvExoPlayer(
                   }
                 }
 
-                val quickSizes = listOf(16f to "صغير", 20f to "كبير", 25f to "ضخم")
+                val quickSizes = listOf(
+                  20f to "20sp",
+                  28f to "28sp",
+                  36f to "36sp",
+                  48f to "48sp",
+                  60f to "60sp"
+                )
                 quickSizes.forEach { (sz, lbl) ->
-                  val isSelected = subtitleStyle.fontSizeSp == sz
+                  val isSelected = subtitleStyle.fontSizeSp.toInt() == sz.toInt()
                   Surface(
                     onClick = { onUpdateSubtitleStyle(subtitleStyle.copy(fontSizeSp = sz)) },
                     color = if (isSelected) ClipboxWhite else CinemaSurfaceVariant,
                     shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.dp, if (isSelected) ClipboxWhite else CinemaBorder),
-                    modifier = Modifier.heightIn(min = 28.dp)
+                    modifier = Modifier
+                      .heightIn(min = 28.dp)
+                      .testTag("exo_gear_sub_size_${sz.toInt()}")
                   ) {
                     Text(
-                      text = "خط $lbl",
+                      text = lbl,
                       color = if (isSelected) Color.Black else Color.White,
                       fontSize = 10.sp,
                       fontWeight = FontWeight.Bold,
@@ -1556,13 +1761,205 @@ fun NativeTvExoPlayer(
         }
       }
     }
+    // =========================================================================
+    // CROSS-SOURCE RESUME PLAYBACK OVERLAY (D-Pad / TV Remote Friendly)
+    // =========================================================================
+    if (showResumePrompt && savedResumePositionMs > 15_000L) {
+      LaunchedEffect(showResumePrompt) {
+        delay(120L)
+        try {
+          resumeButtonFocusRequester.requestFocus()
+        } catch (_: Throwable) {}
+      }
+
+      val formattedTime = remember(savedResumePositionMs) {
+        val totalSec = (savedResumePositionMs / 1000L).coerceAtLeast(0L)
+        val hours = totalSec / 3600L
+        val mins = (totalSec % 3600L) / 60L
+        val secs = totalSec % 60L
+        if (hours > 0L) {
+          String.format("%02d:%02d:%02d", hours, mins, secs)
+        } else {
+          String.format("%02d:%02d", mins, secs)
+        }
+      }
+
+      val resumeInteraction = remember { MutableInteractionSource() }
+      val isResumeFocused by resumeInteraction.collectIsFocusedAsState()
+      val startOverInteraction = remember { MutableInteractionSource() }
+      val isStartOverFocused by startOverInteraction.collectIsFocusedAsState()
+
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(Color.Black.copy(alpha = 0.82f)),
+        contentAlignment = Alignment.Center
+      ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+          Surface(
+            color = CinemaDarkBackground.copy(alpha = 0.98f),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.5.dp, CinemaAccent),
+            shadowElevation = 22.dp,
+            modifier = Modifier
+              .fillMaxWidth(0.90f)
+              .widthIn(max = 460.dp)
+              .padding(12.dp)
+              .testTag("resume_playback_prompt_card")
+          ) {
+            Column(
+              modifier = Modifier.padding(18.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.History,
+                  contentDescription = null,
+                  tint = CinemaAccent,
+                  modifier = Modifier.size(22.dp)
+                )
+                Text(
+                  text = "استكمال المشاهدة",
+                  color = CinemaAccent,
+                  fontSize = 15.sp,
+                  fontWeight = FontWeight.ExtraBold
+                )
+              }
+
+              Text(
+                text = "تم التوقف عند الدقيقة [$formattedTime] — هل تريد الاستكمال من حيث توقفت أم البدء من البداية؟",
+                color = Color.White,
+                fontSize = 13.5.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center
+              )
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                // Auto-focused primary Resume button
+                Surface(
+                  onClick = {
+                    showResumePrompt = false
+                    pendingResumeSeekMs = savedResumePositionMs
+                    lastKnownGoodPositionMs = savedResumePositionMs
+                    try {
+                      if (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING) {
+                        player.seekTo(savedResumePositionMs)
+                        if (player.playbackState == Player.STATE_READY) {
+                          pendingResumeSeekMs = 0L
+                        }
+                      }
+                      player.playWhenReady = true
+                      player.play()
+                    } catch (_: Throwable) {}
+                    AppDiagnosticsLogger.log("Resume", "User resumed playback at $formattedTime ($contentKey)")
+                  },
+                  interactionSource = resumeInteraction,
+                  color = if (isResumeFocused) CinemaAccent else CinemaSuccess,
+                  shape = RoundedCornerShape(10.dp),
+                  border = BorderStroke(
+                    width = if (isResumeFocused) 2.5.dp else 1.dp,
+                    color = if (isResumeFocused) Color.White else CinemaSuccess
+                  ),
+                  modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .focusRequester(resumeButtonFocusRequester)
+                    .focusable(interactionSource = resumeInteraction)
+                    .testTag("btn_resume_playback")
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.PlayArrow,
+                      contentDescription = "استكمال المشاهدة",
+                      tint = Color.Black,
+                      modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                      text = "استكمال المشاهدة",
+                      color = Color.Black,
+                      fontSize = 12.5.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+
+                // Secondary Start Over button
+                Surface(
+                  onClick = {
+                    showResumePrompt = false
+                    pendingResumeSeekMs = 0L
+                    lastKnownGoodPositionMs = 0L
+                    latestOnClearPlaybackProgress()
+                    try {
+                      player.seekTo(0L)
+                      player.playWhenReady = true
+                      player.play()
+                    } catch (_: Throwable) {}
+                    AppDiagnosticsLogger.log("Resume", "User chose Start Over ($contentKey)")
+                  },
+                  interactionSource = startOverInteraction,
+                  color = if (isStartOverFocused) ClipboxWhite else CinemaSurfaceVariant,
+                  shape = RoundedCornerShape(10.dp),
+                  border = BorderStroke(
+                    width = if (isStartOverFocused) 2.5.dp else 1.dp,
+                    color = if (isStartOverFocused) CinemaAccent else CinemaBorder
+                  ),
+                  modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .focusable(interactionSource = startOverInteraction)
+                    .testTag("btn_start_over_playback")
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Replay,
+                      contentDescription = "البدء من البداية",
+                      tint = if (isStartOverFocused) Color.Black else Color.White,
+                      modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                      text = "البدء من البداية",
+                      color = if (isStartOverFocused) Color.Black else Color.White,
+                      fontSize = 12.5.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
 
 /**
  * Live Synchronized Subtitle Cue Overlay that renders active `ParsedSubtitleCue` items
  * on top of either `NativeTvExoPlayer` or `WebViewPlayerBox` using the user's chosen
- * Text Color, Background Color/Opacity, Font Size, and Timing Sync Offset.
+ * Text Color, Background Color/Opacity, Font Size (up to 60sp for TV), and Timing Sync Offset.
  */
 @Composable
 fun ActiveSubtitleCueOverlay(
@@ -1582,16 +1979,18 @@ fun ActiveSubtitleCueOverlay(
   }
 
   if (matchingCueText.isNotBlank()) {
+    val safeFontSizeSp = subtitleStyle.fontSizeSp.coerceIn(12f, 60f)
+    val extraBottomSafeMargin = if (safeFontSizeSp >= 40f) 14 else 6
     val bottomPad = if (isControllerVisible) {
-      (subtitleStyle.bottomOffsetDp + 44).dp
+      (subtitleStyle.bottomOffsetDp + 48 + extraBottomSafeMargin).dp
     } else {
-      subtitleStyle.bottomOffsetDp.dp
+      (subtitleStyle.bottomOffsetDp + extraBottomSafeMargin).dp
     }
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
       Box(
         modifier = modifier
           .fillMaxWidth()
-          .padding(horizontal = 18.dp)
+          .padding(horizontal = 20.dp)
           .padding(bottom = bottomPad),
         contentAlignment = Alignment.BottomCenter
       ) {
@@ -1599,21 +1998,25 @@ fun ActiveSubtitleCueOverlay(
           modifier = Modifier
             .background(
               color = Color(subtitleStyle.backgroundColorArgb),
-              shape = RoundedCornerShape(8.dp)
+              shape = RoundedCornerShape(10.dp)
             )
-            .padding(horizontal = 14.dp, vertical = 5.dp)
+            .padding(
+              horizontal = if (safeFontSizeSp >= 36f) 18.dp else 14.dp,
+              vertical = if (safeFontSizeSp >= 36f) 8.dp else 6.dp
+            )
         ) {
           Text(
             text = matchingCueText,
             color = Color(subtitleStyle.textColorArgb),
-            fontSize = subtitleStyle.fontSizeSp.sp,
+            fontSize = safeFontSizeSp.sp,
             fontWeight = FontWeight.ExtraBold,
             textAlign = TextAlign.Center,
-            lineHeight = (subtitleStyle.fontSizeSp * 1.25f).sp,
+            lineHeight = (safeFontSizeSp * 1.32f).sp,
             style = TextStyle(
               shadow = Shadow(
                 color = Color.Black,
-                blurRadius = 6f
+                offset = Offset(2.5f, 2.5f),
+                blurRadius = 8f
               )
             )
           )

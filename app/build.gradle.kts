@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.assertv"
     minSdk = 24
     targetSdk = 36
-    versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 31
-    versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.31"
+    versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 35
+    versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.35"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -103,6 +103,8 @@ dependencies {
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.media3.exoplayer.hls)
+  implementation(libs.androidx.media3.exoplayer.dash)
+  implementation(libs.androidx.media3.exoplayer.smoothstreaming)
   implementation(libs.androidx.media3.datasource.okhttp)
   implementation(libs.coil.compose)
   // implementation(libs.converter.moshi)

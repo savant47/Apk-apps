@@ -48,6 +48,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,6 +64,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.LocalContext
@@ -684,11 +687,15 @@ fun SubtitleAppearanceSettingsContent(
   )
 
   val fontSizes = listOf(
-    14f to "صغير (14)",
-    17f to "متوسط (17)",
-    20f to "كبير (20)",
-    24f to "كبير جداً (24)",
-    28f to "ضخم للتلفزيون (28)"
+    20f to "20sp",
+    24f to "24sp",
+    28f to "28sp",
+    32f to "32sp",
+    36f to "36sp",
+    42f to "42sp",
+    48f to "48sp",
+    54f to "54sp",
+    60f to "60sp (تلفاز ضخم)"
   )
 
   Column(
@@ -707,15 +714,15 @@ fun SubtitleAppearanceSettingsContent(
       Box(
         modifier = Modifier
           .fillMaxWidth()
-          .heightIn(min = 90.dp)
+          .heightIn(min = 100.dp)
           .padding(14.dp),
         contentAlignment = Alignment.Center
       ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
           Text(
-            text = "معاينة حية لمظهر الترجمة داخل المشغل",
+            text = "معاينة حية لمظهر الترجمة داخل المشغل (${style.fontSizeSp.toInt()}sp)",
             color = Color.LightGray,
-            fontSize = 10.sp,
+            fontSize = 10.5.sp,
             fontWeight = FontWeight.Medium
           )
           Spacer(modifier = Modifier.height(8.dp))
@@ -725,18 +732,20 @@ fun SubtitleAppearanceSettingsContent(
                 color = Color(style.backgroundColorArgb),
                 shape = RoundedCornerShape(8.dp)
               )
-              .padding(horizontal = 14.dp, vertical = 6.dp)
+              .padding(horizontal = 16.dp, vertical = 8.dp)
           ) {
             Text(
-              text = "ترجمة Asser TV الاحترافية • وضوح كامل بجميع الجودات",
+              text = "ترجمة Asser TV الاحترافية • وضوح كامل لشاشات التلفاز",
               color = Color(style.textColorArgb),
-              fontSize = style.fontSizeSp.sp,
+              fontSize = style.fontSizeSp.coerceIn(14f, 60f).sp,
+              lineHeight = (style.fontSizeSp.coerceIn(14f, 60f) * 1.32f).sp,
               fontWeight = FontWeight.ExtraBold,
               textAlign = TextAlign.Center,
               style = TextStyle(
                 shadow = Shadow(
                   color = Color.Black,
-                  blurRadius = 6f
+                  offset = Offset(2f, 2f),
+                  blurRadius = 8f
                 )
               )
             )
@@ -852,24 +861,61 @@ fun SubtitleAppearanceSettingsContent(
       }
     }
 
-    // 4. Font Size Selection (حجم خط الترجمة)
+    // 4. Font Size Selection (حجم خط الترجمة - حتى 60sp للشاشات الكبيرة)
     Row(
+      modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp)
+      horizontalArrangement = Arrangement.SpaceBetween
     ) {
-      Icon(
-        imageVector = Icons.Default.FormatSize,
-        contentDescription = null,
-        tint = CinemaAccent,
-        modifier = Modifier.size(16.dp)
-      )
-      Text(
-        text = "حجم خط الترجمة (Font Size):",
-        color = CinemaAccent,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.ExtraBold
-      )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.FormatSize,
+          contentDescription = null,
+          tint = CinemaAccent,
+          modifier = Modifier.size(16.dp)
+        )
+        Text(
+          text = "حجم خط الترجمة (20sp حتى 60sp للتلفاز):",
+          color = CinemaAccent,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.ExtraBold
+        )
+      }
+      Surface(
+        color = CinemaPrimary,
+        shape = RoundedCornerShape(8.dp)
+      ) {
+        Text(
+          text = "${style.fontSizeSp.toInt()}sp",
+          color = Color.White,
+          fontSize = 11.5.sp,
+          fontWeight = FontWeight.ExtraBold,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
+      }
     }
+
+    Slider(
+      value = style.fontSizeSp.coerceIn(16f, 60f),
+      onValueChange = { raw ->
+        val stepped = (Math.round(raw / 2f) * 2f).coerceIn(16f, 60f)
+        onStyleChange(style.copy(fontSizeSp = stepped))
+      },
+      valueRange = 16f..60f,
+      steps = 21,
+      colors = SliderDefaults.colors(
+        thumbColor = CinemaAccent,
+        activeTrackColor = CinemaPrimary,
+        inactiveTrackColor = CinemaBorder
+      ),
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("sub_font_size_slider")
+    )
+
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -878,7 +924,7 @@ fun SubtitleAppearanceSettingsContent(
       verticalAlignment = Alignment.CenterVertically
     ) {
       fontSizes.forEach { (sizeSp, label) ->
-        val isSelected = style.fontSizeSp == sizeSp
+        val isSelected = style.fontSizeSp.toInt() == sizeSp.toInt()
         Surface(
           onClick = { onStyleChange(style.copy(fontSizeSp = sizeSp)) },
           color = if (isSelected) CinemaPrimary else CinemaDarkBackground,
