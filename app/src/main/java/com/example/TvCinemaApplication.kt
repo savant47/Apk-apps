@@ -25,6 +25,23 @@ class TvCinemaApplication : Application() {
 
   override fun onCreate() {
     super.onCreate()
+
+    // Install global persistent crash handler BEFORE anything else so fatal crashes
+    // on low-RAM Android TV devices (e.g. Xiaomi TV Stick) are saved to last_crash_log.txt.
+    val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+      try {
+        com.example.data.AppDiagnosticsLogger.saveCrashLog(
+          context = applicationContext,
+          threadName = thread.name,
+          throwable = throwable
+        )
+      } catch (_: Throwable) {
+      } finally {
+        previousHandler?.uncaughtException(thread, throwable)
+      }
+    }
+
     // Clean up potentially corrupted index and pre-create WebView Code Cache directories to prevent opendir and index reconstruction errors
     try {
       val httpCacheDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache")

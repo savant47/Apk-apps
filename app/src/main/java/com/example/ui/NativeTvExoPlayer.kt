@@ -3,6 +3,7 @@ package com.example.ui
 import android.graphics.Typeface
 import android.net.Uri
 import android.util.TypedValue
+import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -38,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
@@ -45,6 +47,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Web
@@ -52,6 +55,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -94,14 +98,18 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import com.example.R
 import com.example.data.AppDiagnosticsLogger
 import com.example.data.SearchAndSubtitlesService
 import com.example.model.SubtitleItem
@@ -111,11 +119,16 @@ import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
 import com.example.ui.theme.CinemaPrimary
+import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.CinemaSurfaceVariant
 import com.example.ui.theme.ClipboxWhite
 import kotlinx.coroutines.delay
+import okhttp3.ConnectionPool
+import okhttp3.Protocol
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -133,6 +146,10 @@ fun NativeTvExoPlayer(
   activeSubtitle: SubtitleItem? = null,
   subtitleStyle: SubtitleStyleConfig = SubtitleStyleConfig(),
   onUpdateSubtitleStyle: (SubtitleStyleConfig) -> Unit = {},
+  nextEpisodeTitle: String? = null,
+  isAutoPlayNextEnabled: Boolean = true,
+  onToggleAutoPlayNext: (Boolean) -> Unit = {},
+  onPlayNextEpisode: () -> Unit = {},
   isFullscreen: Boolean = false,
   onToggleFullscreen: () -> Unit = {},
   onOpenSubtitles: () -> Unit = {},
@@ -148,19 +165,78 @@ fun NativeTvExoPlayer(
   }
 
   val latestSelectedQuality by rememberUpdatedState(selectedQuality)
+  val latestNextEpisodeTitle by rememberUpdatedState(nextEpisodeTitle)
+  val latestIsAutoPlayNextEnabled by rememberUpdatedState(isAutoPlayNextEnabled)
+  val latestOnPlayNextEpisode by rememberUpdatedState(onPlayNextEpisode)
+
   var retryAttempt by remember(videoUrl) { mutableIntStateOf(0) }
   var isControllerVisible by remember { mutableStateOf(true) }
   var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
   var actualVideoResolution by remember(videoUrl) { mutableStateOf("") }
   var showGearSettingsMenu by remember { mutableStateOf(false) }
   var currentPlaybackSpeed by remember { mutableFloatStateOf(1.0f) }
-  var currentPlaybackPosMs by remember { mutableLongStateOf(0L) }
+  var currentPlaybackPosMs by remember(videoUrl) { mutableLongStateOf(0L) }
+  var lastKnownGoodPositionMs by remember(videoUrl) { mutableLongStateOf(0L) }
 
-  val httpDataSourceFactory = remember {
-    DefaultHttpDataSource.Factory()
-      .setAllowCrossProtocolRedirects(true)
-      .setConnectTimeoutMs(15_000)
-      .setReadTimeoutMs(18_000)
+  // Auto-Play Next Episode Countdown State
+  var showNextEpisodeCountdown by remember(videoUrl) { mutableStateOf(false) }
+  var nextEpisodeCountdownSec by remember(videoUrl) { mutableIntStateOf(5) }
+  var userCancelledNextEpisode by remember(videoUrl) { mutableStateOf(false) }
+  var hasTriggeredAutoNext by remember(videoUrl) { mutableStateOf(false) }
+
+  // Dedicated OkHttpClient tuned for Xiaomi TV Stick & TopCinema CDNs:
+  // - retryOnConnectionFailure(true)
+  // - HTTP/1.1 protocol avoids abrupt HTTP/2 unexpected-end-of-stream EOF on CDN edge servers
+  // - Clean short-lived connection pool prevents stale keep-alive sockets
+  val streamingOkHttpClient = remember {
+    SearchAndSubtitlesService.buildSslTolerantHttpClient()
+      .newBuilder()
+      .retryOnConnectionFailure(true)
+      .protocols(listOf(Protocol.HTTP_1_1))
+      .connectionPool(ConnectionPool(2, 15, TimeUnit.SECONDS))
+      .connectTimeout(15, TimeUnit.SECONDS)
+      .readTimeout(20, TimeUnit.SECONDS)
+      .writeTimeout(15, TimeUnit.SECONDS)
+      .build()
+  }
+
+  val httpDataSourceFactory = remember(streamingOkHttpClient) {
+    OkHttpDataSource.Factory(streamingOkHttpClient)
+  }
+
+  // Automatic retry policy for IOException / unexpected end of stream so video doesn't freeze
+  val resilientLoadErrorPolicy = remember {
+    object : DefaultLoadErrorHandlingPolicy(6) {
+      override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+        val ex = loadErrorInfo.exception
+        val msg = (ex.message ?: ex.cause?.message ?: "").lowercase()
+        val isTransientStreamDrop = ex is IOException && (
+          msg.contains("unexpected end of stream") ||
+          msg.contains("eof") ||
+          msg.contains("reset") ||
+          msg.contains("closed") ||
+          msg.contains("timeout")
+        )
+        if (isTransientStreamDrop && loadErrorInfo.errorCount <= 6) {
+          return (loadErrorInfo.errorCount * 800L).coerceAtMost(3500L)
+        }
+        return super.getRetryDelayMsFor(loadErrorInfo)
+      }
+    }
+  }
+
+  // Balanced Low-RAM LoadControl (15-35s buffer + 24MB memory cap for Xiaomi TV Stick)
+  val balancedLowRamLoadControl = remember {
+    DefaultLoadControl.Builder()
+      .setBufferDurationsMs(
+        15_000, // minBufferMs (15s smooth cushion)
+        35_000, // maxBufferMs (35s max prevents OOM on low-RAM TV Stick)
+        2_500,  // bufferForPlaybackMs (fast start)
+        5_000   // bufferForPlaybackAfterRebufferMs (prevents freeze/skip loops)
+      )
+      .setTargetBufferBytes(24 * 1024 * 1024)
+      .setPrioritizeTimeOverSizeThresholds(false)
+      .build()
   }
 
   val trackSelector = remember {
@@ -168,22 +244,62 @@ fun NativeTvExoPlayer(
   }
 
   val player = remember {
+    val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
+      .setLoadErrorHandlingPolicy(resilientLoadErrorPolicy)
     ExoPlayer.Builder(context)
-      .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
+      .setMediaSourceFactory(mediaSourceFactory)
       .setTrackSelector(trackSelector)
+      .setLoadControl(balancedLowRamLoadControl)
       .build().apply {
         playWhenReady = true
       }
   }
 
-  // Poll current playback position every 180ms for real-time synchronized subtitle cue rendering
-  LaunchedEffect(player, activeSubtitle) {
+  // Poll playback position every 200ms for subtitle sync, resume position tracking, and near-end Auto-Next check
+  LaunchedEffect(player, videoUrl) {
     while (true) {
       try {
-        currentPlaybackPosMs = player.currentPosition.coerceAtLeast(0L)
+        val pos = player.currentPosition.coerceAtLeast(0L)
+        val dur = player.duration
+        currentPlaybackPosMs = pos
+        if (pos > 1500L) {
+          lastKnownGoodPositionMs = pos
+        }
+        if (latestNextEpisodeTitle != null &&
+            latestIsAutoPlayNextEnabled &&
+            !userCancelledNextEpisode &&
+            !showNextEpisodeCountdown &&
+            !hasTriggeredAutoNext &&
+            dur > 60_000L &&
+            pos > 30_000L
+        ) {
+          val remainingMs = dur - pos
+          if (remainingMs in 1L..10_000L) {
+            nextEpisodeCountdownSec = 5
+            showNextEpisodeCountdown = true
+          }
+        }
       } catch (_: Exception) {
       }
-      delay(180L)
+      delay(200L)
+    }
+  }
+
+  // Run 5-second Auto-Play Next Episode countdown when banner is visible
+  LaunchedEffect(showNextEpisodeCountdown, videoUrl) {
+    if (showNextEpisodeCountdown && !hasTriggeredAutoNext && !userCancelledNextEpisode) {
+      var remaining = nextEpisodeCountdownSec
+      while (remaining > 0 && showNextEpisodeCountdown && !userCancelledNextEpisode) {
+        delay(1000L)
+        remaining -= 1
+        nextEpisodeCountdownSec = remaining
+      }
+      if (remaining <= 0 && showNextEpisodeCountdown && !userCancelledNextEpisode && !hasTriggeredAutoNext) {
+        hasTriggeredAutoNext = true
+        showNextEpisodeCountdown = false
+        AppDiagnosticsLogger.log("AutoNext", "تشغيل الحلقة التالية تلقائياً: ${latestNextEpisodeTitle ?: ""}")
+        latestOnPlayNextEpisode()
+      }
     }
   }
 
@@ -298,22 +414,42 @@ fun NativeTvExoPlayer(
         if (playbackState == Player.STATE_READY) {
           AppDiagnosticsLogger.activePlayerMode = "Native ExoPlayer (يعمل بنجاح ✅)"
           AppDiagnosticsLogger.log("ExoPlayer", "Playback STATE_READY for $videoUrl")
+        } else if (playbackState == Player.STATE_ENDED) {
+          if (latestNextEpisodeTitle != null && latestIsAutoPlayNextEnabled && !userCancelledNextEpisode && !hasTriggeredAutoNext) {
+            nextEpisodeCountdownSec = 4
+            showNextEpisodeCountdown = true
+          }
         }
       }
 
       override fun onPlayerError(error: PlaybackException) {
         val cause = error.cause
+        val causeMsg = (cause?.message ?: error.message ?: "").lowercase()
+        val isUnexpectedEof = causeMsg.contains("unexpected end of stream") ||
+            causeMsg.contains("eof") ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+
         val httpCode = if (cause is HttpDataSource.InvalidResponseCodeException) {
           "HTTP ${cause.responseCode}"
         } else {
           error.errorCodeName
         }
+
+        val currentPosSnapshot = try {
+          player.currentPosition.coerceAtLeast(0L)
+        } catch (_: Exception) { 0L }
+        if (currentPosSnapshot > 1500L) {
+          lastKnownGoodPositionMs = currentPosSnapshot
+        }
+
         AppDiagnosticsLogger.log(
           "ExoPlayerError",
-          "Attempt $retryAttempt failed ($httpCode): ${cause?.message ?: error.message} | URL=$videoUrl",
+          "Attempt $retryAttempt failed ($httpCode, eof=$isUnexpectedEof, pos=${lastKnownGoodPositionMs}ms): ${cause?.message ?: error.message} | URL=$videoUrl",
           isError = true
         )
-        if (retryAttempt < 2) {
+        val maxRetries = if (isUnexpectedEof) 4 else 2
+        if (retryAttempt < maxRetries) {
           retryAttempt += 1
         } else {
           AppDiagnosticsLogger.activePlayerMode = "WebView Fallback (بسبب $httpCode)"
@@ -329,6 +465,9 @@ fun NativeTvExoPlayer(
 
   DisposableEffect(Unit) {
     onDispose {
+      try {
+        streamingOkHttpClient.connectionPool.evictAll()
+      } catch (_: Exception) {}
       player.release()
     }
   }
@@ -420,10 +559,12 @@ fun NativeTvExoPlayer(
       headersMap["Referer"] = effectiveReferer
       headersMap["Accept"] = "*/*"
       headersMap["Accept-Language"] = "ar,en-US;q=0.9,en;q=0.8"
+      // Force clean socket termination on TopCinema / CDN streams to prevent OkHttp "unexpected end of stream" EOF freezes
+      headersMap["Connection"] = "close"
 
       if (retryAttempt <= 1 && effectiveOrigin.isNotBlank()) {
         headersMap["Origin"] = effectiveOrigin
-      } else if (retryAttempt == 2) {
+      } else if (retryAttempt >= 2) {
         headersMap.remove("Origin")
         headersMap.remove("origin")
       }
@@ -432,17 +573,29 @@ fun NativeTvExoPlayer(
         headersMap["Cookie"] = combinedCookie
       }
 
+      if (retryAttempt > 0) {
+        try {
+          streamingOkHttpClient.connectionPool.evictAll()
+        } catch (_: Exception) {}
+        delay(650L)
+      }
+
       httpDataSourceFactory.setUserAgent(effectiveUa)
       httpDataSourceFactory.setDefaultRequestProperties(headersMap)
 
-      AppDiagnosticsLogger.log(
-        "ExoPlayerInit",
-        "Loading stream (attempt $retryAttempt): $videoUrl | Referer=$effectiveReferer | Origin=${headersMap["Origin"] ?: "none"}"
+      // Resume from last known playback position across reconnect retries so video never jumps back to 0:00!
+      val resumePositionMs = maxOf(
+        lastKnownGoodPositionMs,
+        try { player.currentPosition.coerceAtLeast(0L) } catch (_: Exception) { 0L }
       )
 
-      val currentPos = if (retryAttempt == 0) player.currentPosition.coerceAtLeast(0L) else 0L
+      AppDiagnosticsLogger.log(
+        "ExoPlayerInit",
+        "Loading stream via OkHttp (attempt $retryAttempt, resume=${resumePositionMs}ms): $videoUrl | Referer=$effectiveReferer | Origin=${headersMap["Origin"] ?: "none"}"
+      )
+
       val mediaItem = MediaItem.Builder().setUri(videoUrl).build()
-      player.setMediaItem(mediaItem, currentPos)
+      player.setMediaItem(mediaItem, resumePositionMs)
       player.prepare()
       player.playWhenReady = true
     }
@@ -566,7 +719,11 @@ fun NativeTvExoPlayer(
     if (videoUrl.isNotBlank()) {
       AndroidView(
         factory = { ctx ->
-          PlayerView(ctx).apply {
+          // Inflate explicit app:surface_type="surface_view" layout (NEVER texture_view)
+          // for zero-drop hardware video decoding on Xiaomi TV Stick & low-RAM Android TV devices.
+          val inflated = LayoutInflater.from(ctx)
+            .inflate(R.layout.exo_player_surface_view, null, false) as PlayerView
+          inflated.apply {
             this.player = player
             useController = true
             this.resizeMode = resizeMode
@@ -612,6 +769,123 @@ fun NativeTvExoPlayer(
         isControllerVisible = isControllerVisible,
         modifier = Modifier.align(Alignment.BottomCenter)
       )
+
+      // =========================================================================
+      // AUTO-PLAY NEXT EPISODE COUNTDOWN BANNER (Bottom-End, D-Pad & Touch Ready)
+      // =========================================================================
+      AnimatedVisibility(
+        visible = showNextEpisodeCountdown && !nextEpisodeTitle.isNullOrBlank() && !showGearSettingsMenu,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(horizontal = 14.dp, vertical = if (isControllerVisible) 66.dp else 20.dp)
+      ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+          Surface(
+            color = CinemaDarkBackground.copy(alpha = 0.96f),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.5.dp, CinemaAccent),
+            shadowElevation = 18.dp,
+            modifier = Modifier
+              .widthIn(min = 240.dp, max = 330.dp)
+              .testTag("exo_next_episode_countdown_card")
+          ) {
+            Column(
+              modifier = Modifier.padding(12.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.SkipNext,
+                  contentDescription = null,
+                  tint = CinemaAccent,
+                  modifier = Modifier.size(18.dp)
+                )
+                Text(
+                  text = "الحلقة التالية تلقائياً خلال ${nextEpisodeCountdownSec}ث",
+                  color = CinemaAccent,
+                  fontSize = 11.5.sp,
+                  fontWeight = FontWeight.ExtraBold
+                )
+              }
+
+              Text(
+                text = nextEpisodeTitle ?: "الحلقة التالية",
+                color = Color.White,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+              )
+
+              LinearProgressIndicator(
+                progress = { ((5 - nextEpisodeCountdownSec).coerceIn(0, 5)) / 5f },
+                color = CinemaPrimary,
+                trackColor = CinemaSurfaceVariant,
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(4.dp)
+                  .clip(RoundedCornerShape(4.dp))
+              )
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Button(
+                  onClick = {
+                    hasTriggeredAutoNext = true
+                    showNextEpisodeCountdown = false
+                    onPlayNextEpisode()
+                  },
+                  colors = ButtonDefaults.buttonColors(
+                    containerColor = CinemaPrimary,
+                    contentColor = Color.White
+                  ),
+                  shape = RoundedCornerShape(8.dp),
+                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                  modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 38.dp)
+                    .testTag("btn_play_next_episode_now")
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.SkipNext,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                  )
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("تشغيل الآن", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+                }
+
+                Surface(
+                  onClick = {
+                    userCancelledNextEpisode = true
+                    showNextEpisodeCountdown = false
+                  },
+                  color = CinemaSurface,
+                  shape = RoundedCornerShape(8.dp),
+                  border = BorderStroke(1.dp, CinemaBorder),
+                  modifier = Modifier
+                    .heightIn(min = 38.dp)
+                    .testTag("btn_cancel_next_episode_countdown")
+                ) {
+                  Box(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                  ) {
+                    Text("إلغاء", color = Color.LightGray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     } else {
       // Primary Player Extraction State
       Column(
@@ -744,6 +1018,44 @@ fun NativeTvExoPlayer(
                   maxLines = 1,
                   softWrap = false
                 )
+              }
+            }
+
+            // 1.5 Quick Next Episode Button (shown for series when a next episode is available)
+            if (!nextEpisodeTitle.isNullOrBlank()) {
+              Surface(
+                onClick = {
+                  hasTriggeredAutoNext = true
+                  showNextEpisodeCountdown = false
+                  onPlayNextEpisode()
+                },
+                color = CinemaSuccess.copy(alpha = 0.22f),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, CinemaSuccess),
+                modifier = Modifier
+                  .heightIn(min = 28.dp)
+                  .testTag("exo_top_next_episode_button")
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.SkipNext,
+                    contentDescription = "تشغيل الحلقة التالية",
+                    tint = CinemaSuccess,
+                    modifier = Modifier.size(14.dp)
+                  )
+                  Spacer(modifier = Modifier.width(2.dp))
+                  Text(
+                    text = "التالية",
+                    color = Color.White,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                }
               }
             }
 
@@ -1037,6 +1349,72 @@ fun NativeTvExoPlayer(
                       fontSize = 10.sp,
                       fontWeight = FontWeight.Bold,
                       modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                  }
+                }
+              }
+
+              // 2.5 Auto-Play Next Episode Toggle (inside Gear Settings)
+              Surface(
+                onClick = { onToggleAutoPlayNext(!isAutoPlayNextEnabled) },
+                color = if (isAutoPlayNextEnabled) CinemaSuccess.copy(alpha = 0.16f) else CinemaSurface,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(
+                  1.dp,
+                  if (isAutoPlayNextEnabled) CinemaSuccess else CinemaBorder
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("exo_gear_toggle_auto_next")
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.Autorenew,
+                      contentDescription = null,
+                      tint = if (isAutoPlayNextEnabled) CinemaSuccess else Color.Gray,
+                      modifier = Modifier.size(16.dp)
+                    )
+                    Column {
+                      Text(
+                        text = "تشغيل الحلقة التالية تلقائياً (مسلسلات)",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold
+                      )
+                      Text(
+                        text = if (!nextEpisodeTitle.isNullOrBlank()) {
+                          "الحلقة القادمة: $nextEpisodeTitle"
+                        } else {
+                          "يسحب روابط الحلقة التالية ويشغلها أوتوماتيكياً عند النهاية"
+                        },
+                        color = if (isAutoPlayNextEnabled) CinemaSuccess else Color.Gray,
+                        fontSize = 9.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                      )
+                    }
+                  }
+                  Surface(
+                    color = if (isAutoPlayNextEnabled) CinemaSuccess else CinemaSurfaceVariant,
+                    shape = RoundedCornerShape(50)
+                  ) {
+                    Text(
+                      text = if (isAutoPlayNextEnabled) "مُفعّل" else "متوقف",
+                      color = if (isAutoPlayNextEnabled) Color.Black else Color.LightGray,
+                      fontSize = 10.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                   }
                 }

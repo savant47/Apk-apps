@@ -1,15 +1,27 @@
 package com.example.data
 
+import android.content.Context
 import android.os.Build
 import com.example.BuildConfig
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.BufferedReader
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 data class DiagnosticLogEntry(
   val timestamp: String,
@@ -19,6 +31,8 @@ data class DiagnosticLogEntry(
 )
 
 object AppDiagnosticsLogger {
+  const val CRASH_LOG_FILE_NAME = "last_crash_log.txt"
+
   private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
   private val _logsFlow = MutableStateFlow<List<DiagnosticLogEntry>>(emptyList())
@@ -58,9 +72,149 @@ object AppDiagnosticsLogger {
     lastPlayerError = "لا توجد أخطاء"
   }
 
-  fun buildFullCopyableReport(): String {
+  /**
+   * Persists fatal uncaught crash details synchronously to `filesDir/last_crash_log.txt`
+   * before the Android process terminates so low-RAM TV Stick crashes are never lost.
+   */
+  fun saveCrashLog(context: Context, threadName: String, throwable: Throwable) {
+    try {
+      val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+      val sw = StringWriter()
+      val pw = PrintWriter(sw)
+      throwable.printStackTrace(pw)
+      pw.flush()
+      val stackTrace = sw.toString()
+
+      val sb = StringBuilder()
+      sb.appendLine("=== FATAL CRASH REPORT (Asser TV) ===")
+      sb.appendLine("Crash Time: $dateStr")
+      sb.appendLine("App Version: v${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})")
+      sb.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, SDK ${Build.VERSION.SDK_INT})")
+      sb.appendLine("Thread: $threadName")
+      sb.appendLine("Last Active Portal: ${activePortalName.ifBlank { "N/A" }}")
+      sb.appendLine("Last Watch URL: ${activeWatchUrl.ifBlank { "N/A" }}")
+      sb.appendLine("Last WebView URL: ${currentWebViewUrl.ifBlank { "N/A" }}")
+      sb.appendLine("Last Server: ${activeServerName.ifBlank { "Default" }}")
+      sb.appendLine("Active Player Mode: $activePlayerMode")
+      sb.appendLine("Last Direct Stream: ${extractedStreamUrl.ifBlank { "NONE" }}")
+      sb.appendLine("-----------------------------------------")
+      sb.appendLine("Exception: ${throwable.javaClass.name}: ${throwable.message}")
+      sb.appendLine(stackTrace)
+      val recentEvents = _logsFlow.value.takeLast(15)
+      if (recentEvents.isNotEmpty()) {
+        sb.appendLine("-----------------------------------------")
+        sb.appendLine("Recent Events Before Crash:")
+        for (entry in recentEvents) {
+          val prefix = if (entry.isError) "[ERR]" else "[LOG]"
+          sb.appendLine("${entry.timestamp} $prefix [${entry.tag}] ${entry.message}")
+        }
+      }
+
+      val crashFile = File(context.filesDir, CRASH_LOG_FILE_NAME)
+      FileOutputStream(crashFile, false).use { fos ->
+        fos.write(sb.toString().toByteArray(Charsets.UTF_8))
+        fos.flush()
+        try {
+          fos.fd.sync()
+        } catch (_: Throwable) {}
+      }
+    } catch (_: Throwable) {
+      // Never throw inside UncaughtExceptionHandler
+    }
+  }
+
+  fun loadLastCrashLog(context: Context): String? {
+    return try {
+      val crashFile = File(context.filesDir, CRASH_LOG_FILE_NAME)
+      if (crashFile.exists() && crashFile.length() > 0L) {
+        crashFile.readText(Charsets.UTF_8).trim().ifBlank { null }
+      } else {
+        null
+      }
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  fun clearLastCrashLog(context: Context): Boolean {
+    return try {
+      val crashFile = File(context.filesDir, CRASH_LOG_FILE_NAME)
+      if (crashFile.exists()) crashFile.delete() else true
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  /**
+   * Exports the full diagnostics + saved crash report to `cacheDir/logs/asser_tv_log.txt`
+   * for sharing via FileProvider (e.g. Send Files to TV).
+   */
+  fun exportReportToCacheFile(context: Context): File {
+    val logsDir = File(context.cacheDir, "logs")
+    if (!logsDir.exists()) {
+      logsDir.mkdirs()
+    }
+    val logFile = File(logsDir, "asser_tv_log.txt")
+    val reportContent = buildFullCopyableReport(context)
+    logFile.writeText(reportContent, Charsets.UTF_8)
+    return logFile
+  }
+
+  /**
+   * Performs a lightweight HTTP POST request to https://paste.rs/ with raw log text in the body
+   * and returns the short paste URL so Android TV users can scan a QR code on their phone.
+   */
+  suspend fun uploadReportToPasteRs(reportText: String): Result<String> = withContext(Dispatchers.IO) {
+    try {
+      val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+
+      val payload = reportText.take(250_000)
+      val body = payload.toRequestBody("text/plain; charset=utf-8".toMediaType())
+      val request = Request.Builder()
+        .url("https://paste.rs/")
+        .post(body)
+        .header("User-Agent", "AsserTV-Diagnostics/1.0")
+        .build()
+
+      client.newCall(request).execute().use { response ->
+        val responseText = response.body?.string()?.trim().orEmpty()
+        if ((response.isSuccessful || response.code == 201 || response.code == 206) &&
+            responseText.startsWith("http")
+        ) {
+          val cleanUrl = responseText.lineSequence().firstOrNull { it.startsWith("http") }?.trim()
+            ?: responseText
+          log("LogExport", "Uploaded log to paste.rs: $cleanUrl")
+          Result.success(cleanUrl)
+        } else {
+          val msg = "فشل الرفع إلى paste.rs (HTTP ${response.code}): ${responseText.take(120)}"
+          log("LogExport", msg, isError = true)
+          Result.failure(Exception(msg))
+        }
+      }
+    } catch (e: Exception) {
+      val msg = "تعذر الاتصال بـ paste.rs: ${e.localizedMessage ?: e.javaClass.simpleName}"
+      log("LogExport", msg, isError = true)
+      Result.failure(Exception(msg))
+    }
+  }
+
+  fun buildFullCopyableReport(context: Context? = null): String {
     val sb = StringBuilder()
     val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+
+    val savedCrash = context?.let { loadLastCrashLog(it) }
+    if (!savedCrash.isNullOrBlank()) {
+      sb.appendLine(savedCrash)
+      sb.appendLine()
+      sb.appendLine("=========================================")
+      sb.appendLine()
+    }
+
     sb.appendLine("=== Asser TV Diagnostics & Log Report ===")
     sb.appendLine("Time: $dateStr")
     sb.appendLine("App Version: v${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})")

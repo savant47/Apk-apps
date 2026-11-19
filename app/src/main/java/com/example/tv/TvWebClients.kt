@@ -165,7 +165,7 @@ class TvWebViewClient(
   private val isGeneralBrowserMode: () -> Boolean = { false }
 ) : WebViewClient() {
 
-  // Known malicious ad / popunder / redirect domains
+  // Known malicious ad / popunder / redirect / heavy tracker domains (reduces RAM & OOM crashes on watchseries.bar)
   private val adHostKeywords = listOf(
     "luugy", "popads", "propellerads", "adsterra", "exoclick",
     "bet365", "1xbet", "trafficjunky", "ad-delivery",
@@ -173,7 +173,13 @@ class TvWebViewClient(
     "hilltopads", "richpush", "clickadu", "realsrv", "ero-advertising",
     "yllix", "directrev", "poppush", "pushnoti", "popunder", "popcash",
     "adkeeper", "adcash", "adcolony", "cpalead", "trafficstars",
-    "onclickads", "adexchangeclear", "doubleclick.net"
+    "onclickads", "adexchangeclear", "doubleclick.net",
+    "acscdn", "dtscout", "amung.us", "taboola", "outbrain", "mgid",
+    "adskeeper", "googlesyndication", "adservice.google", "pushwoosh",
+    "onesignal", "mc.yandex", "clarity.ms", "hotjar", "sharethis",
+    "disqus", "pubfuture", "bidgear", "galaksion", "vidazoo",
+    "adnxs", "criteo", "rubiconproject", "pubmatic", "openx.net",
+    "scorecardresearch", "quantserve", "facebook.net", "connect.facebook"
   )
 
   override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -355,18 +361,50 @@ class TvWebViewClient(
   }
 
   override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+    val didCrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      try {
+        detail?.didCrash() ?: false
+      } catch (_: Throwable) {
+        false
+      }
+    } else {
+      false
+    }
+    val priority = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      try {
+        detail?.rendererPriorityAtExit() ?: -1
+      } catch (_: Throwable) {
+        -1
+      }
+    } else {
+      -1
+    }
+    val crashedUrl = try { view?.url ?: "" } catch (_: Throwable) { "" }
+    AppDiagnosticsLogger.log(
+      "WebViewOOM",
+      "WebView renderer gone (didCrash=$didCrash, priority=$priority, url=$crashedUrl) - safely destroying & recreating WebView",
+      isError = true
+    )
+
     view?.let { webView ->
       try {
+        webView.stopLoading()
+        webView.clearCache(false)
         val parent = webView.parent as? ViewGroup
         parent?.removeView(webView)
-        webView.post {
-          try {
-            webView.destroy()
-          } catch (_: Exception) {}
-        }
-      } catch (_: Exception) {}
+        webView.destroy()
+      } catch (_: Throwable) {
+        try {
+          webView.post {
+            try {
+              webView.destroy()
+            } catch (_: Throwable) {}
+          }
+        } catch (_: Throwable) {}
+      }
     }
     onRenderProcessGoneCallback?.invoke()
+    // Return true so Android does NOT kill the entire app process on WebView OOM/renderer crash
     return true
   }
 

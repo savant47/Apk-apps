@@ -36,11 +36,15 @@ class TvPreferencesRepository(context: Context) {
   private val _subtitleStyleFlow = MutableStateFlow(SubtitleStyleConfig())
   val subtitleStyleFlow: StateFlow<SubtitleStyleConfig> = _subtitleStyleFlow.asStateFlow()
 
+  private val _autoPlayNextEpisodeFlow = MutableStateFlow(true)
+  val autoPlayNextEpisodeFlow: StateFlow<Boolean> = _autoPlayNextEpisodeFlow.asStateFlow()
+
   init {
     loadBookmarks()
     loadHistory()
     loadDisplayMode()
     loadSubtitleStyle()
+    _autoPlayNextEpisodeFlow.value = prefs.getBoolean(KEY_AUTO_PLAY_NEXT_EPISODE, true)
     loadPortals()
   }
 
@@ -129,6 +133,13 @@ class TvPreferencesRepository(context: Context) {
       .putInt(KEY_SUB_BOTTOM_OFFSET, style.bottomOffsetDp)
       .putLong(KEY_SUB_SYNC_OFFSET, style.syncOffsetMs)
       .apply()
+  }
+
+  fun isAutoPlayNextEpisodeEnabled(): Boolean = _autoPlayNextEpisodeFlow.value
+
+  fun setAutoPlayNextEpisodeEnabled(enabled: Boolean) {
+    _autoPlayNextEpisodeFlow.value = enabled
+    prefs.edit().putBoolean(KEY_AUTO_PLAY_NEXT_EPISODE, enabled).apply()
   }
 
   fun getActivePortal(): StreamingPortal {
@@ -389,6 +400,7 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_SUB_FONT_SIZE = "subtitle_font_size_sp"
     private const val KEY_SUB_BOTTOM_OFFSET = "subtitle_bottom_offset_dp"
     private const val KEY_SUB_SYNC_OFFSET = "subtitle_sync_offset_ms"
+    private const val KEY_AUTO_PLAY_NEXT_EPISODE = "auto_play_next_episode_enabled"
     const val DEFAULT_GITHUB_REPO = "savant47/Apk-apps"
   }
 }
