@@ -132,6 +132,97 @@ enum class StreamingPortal(
         else -> TOP_CINEMA
       }
     }
+
+    private val embedHostKeywords = listOf(
+      "vidlink.", "vidsrc.", "2embed.", "multiembed.", "autoembed.", "superembed.",
+      "vidtube.", "streamwish.", "filemoon.", "filelions.", "mixdrop.", "lulustream.",
+      "luluvdo.", "dood.", "d000d.", "ds2play.", "streamtape.", "mp4upload.",
+      "uqload.", "upstream.", "voe.", "earnvids.", "vidshare.", "vidfast.",
+      "videasy.", "vidrock.", "vidup.", "vidcore.", "vidzee.", "rabbitstream.",
+      "sbplay.", "embedsito.", "embedwish.", "streamhg.", "streamhide.",
+      "megamax.", "firestream.", "updown.", "byse.", "cdn-video.", "hakunaymatata.",
+      "flooderrr.", "smashystream.", "apiplayer.", "yapgrid.", "peachify.", "xpass."
+    )
+
+    /**
+     * Returns true if the URL is a third-party embed iframe, lazy AJAX token, or direct stream
+     * that must NEVER be saved into Watch History as a portal watch page or have `/watch/` appended.
+     */
+    fun isEmbedIframeUrl(url: String): Boolean {
+      val trimmed = url.trim()
+      if (trimmed.isBlank()) return false
+      val lower = trimmed.lowercase()
+      if (lower.startsWith("topcinema-ajax://")) return true
+      if (lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".mpd")) return true
+      val host = try {
+        java.net.URI(trimmed).host?.lowercase() ?: ""
+      } catch (_: Exception) {
+        lower.substringAfter("://").substringBefore("/")
+      }
+      if (embedHostKeywords.any { host.contains(it) }) return true
+      val isKnownPortalHost = values().any { portal -> belongsToPortalDomain(trimmed, portal) }
+      if (!isKnownPortalHost && (lower.contains("/embed-") || lower.contains("/embed/") || lower.contains("/v2/embed/"))) {
+        return true
+      }
+      return false
+    }
+
+    /**
+     * Checks whether the URL host actually belongs to the specified streaming portal.
+     */
+    fun belongsToPortalDomain(url: String, portal: StreamingPortal): Boolean {
+      val trimmed = url.trim()
+      if (!trimmed.startsWith("http", ignoreCase = true)) return false
+      val host = try {
+        java.net.URI(trimmed).host?.lowercase() ?: ""
+      } catch (_: Exception) {
+        trimmed.lowercase().substringAfter("://").substringBefore("/")
+      }
+      if (host.isBlank()) return false
+      return when (portal) {
+        TOP_CINEMA -> host.contains("topcinema")
+        WATCH_SERIES -> host.contains("watchseries")
+        LAROZA -> host.contains("laroza") || host.contains("llaroza") || host.contains("larooza")
+        EGY_DEAD -> host.contains("egydead") || host.contains("egy-dead")
+        FLIXER -> host.contains("flixer")
+        PORTAL_5 -> {
+          val customHost = portal.homeUrl.substringAfter("://").substringBefore("/").lowercase()
+          portal.isEnabled && customHost.isNotBlank() && host.contains(customHost)
+        }
+      }
+    }
+
+    /**
+     * Safely normalizes a watch URL without EVER appending `/watch/` to embed iframes
+     * or non-TopCinema domains. Also repairs legacy corrupted embed URLs ending with `/watch/`.
+     */
+    fun sanitizePortalWatchUrl(rawUrl: String, portal: StreamingPortal): String {
+      var clean = rawUrl.trim()
+        .replace("topcinema.site", "topcinema.io")
+        .replace("video.php?vid=", "play.php?vid=")
+
+      if (isEmbedIframeUrl(clean)) {
+        // Strip accidental trailing /watch or /watch/ appended by older app versions to embed URLs
+        if (clean.endsWith("/watch/", ignoreCase = true)) {
+          clean = clean.dropLast("/watch/".length)
+        } else if (clean.endsWith("/watch", ignoreCase = true)) {
+          clean = clean.dropLast("/watch".length)
+        }
+        return clean
+      }
+
+      if (portal == TOP_CINEMA &&
+        belongsToPortalDomain(clean, TOP_CINEMA) &&
+        !clean.contains("/watch") &&
+        !clean.contains("/search") &&
+        !clean.contains("/series/") &&
+        !clean.contains("/home") &&
+        !clean.contains("/category/")
+      ) {
+        clean = "${clean.trimEnd('/')}/watch/"
+      }
+      return clean
+    }
   }
 }
 

@@ -1,12 +1,16 @@
 package com.example.data
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.PackageInfoCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -16,6 +20,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 data class UpdateReleaseInfo(
@@ -28,6 +33,25 @@ data class UpdateReleaseInfo(
   val fileSizeBytes: Long,
   val publishedAt: String,
   val isNewer: Boolean
+)
+
+enum class ApkInstallCheckStatus {
+  OK,
+  CORRUPT_APK,
+  PACKAGE_MISMATCH,
+  VERSION_DOWNGRADE,
+  SIGNATURE_MISMATCH
+}
+
+data class ApkInstallCheckResult(
+  val status: ApkInstallCheckStatus,
+  val installedVersionCode: Long,
+  val apkVersionCode: Long,
+  val installedSha256: String,
+  val apkSha256: String,
+  val installedPackageName: String,
+  val apkPackageName: String,
+  val warningMessageArabic: String = ""
 )
 
 sealed class UpdateDownloadState {
@@ -272,13 +296,177 @@ class AppUpdateManager(private val context: Context) {
     }
   }
 
+  @Suppress("DEPRECATION")
+  private fun extractPrimarySigningSha256(pkgInfo: PackageInfo?): String {
+    if (pkgInfo == null) return ""
+    return try {
+      val certBytes: ByteArray? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        val signingInfo = pkgInfo.signingInfo
+        val signers = if (signingInfo != null) {
+          if (signingInfo.hasMultipleSigners()) signingInfo.apkContentsSigners else signingInfo.signingCertificateHistory
+        } else null
+        signers?.firstOrNull()?.toByteArray()
+      } else {
+        pkgInfo.signatures?.firstOrNull()?.toByteArray()
+      }
+      if (certBytes == null || certBytes.isEmpty()) return ""
+      val digest = MessageDigest.getInstance("SHA-256").digest(certBytes)
+      digest.joinToString(":") { "%02X".format(it) }
+    } catch (_: Exception) {
+      ""
+    }
+  }
+
+  @Suppress("DEPRECATION")
+  private fun getInstalledPackageInfoWithSigning(): PackageInfo? {
+    return try {
+      val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        PackageManager.GET_SIGNING_CERTIFICATES
+      } else {
+        PackageManager.GET_SIGNATURES
+      }
+      context.packageManager.getPackageInfo(context.packageName, flags)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  fun getInstalledSigningSha256(): String {
+    return extractPrimarySigningSha256(getInstalledPackageInfoWithSigning())
+  }
+
+  fun getShortFingerprint(fullSha256: String): String {
+    if (fullSha256.isBlank()) return "غير متاح"
+    val parts = fullSha256.split(":")
+    return if (parts.size >= 8) {
+      "${parts.take(4).joinToString(":")}…${parts.takeLast(4).joinToString(":")}"
+    } else {
+      fullSha256
+    }
+  }
+
+  /**
+   * Inspects the downloaded APK before invoking Android's PackageInstaller so we can
+   * detect signature mismatches, versionCode downgrades, or corrupted archives cleanly.
+   */
+  @Suppress("DEPRECATION")
+  fun inspectDownloadedApk(apkFile: File): ApkInstallCheckResult {
+    val installedPkg = getInstalledPackageInfoWithSigning()
+    val installedCode = if (installedPkg != null) PackageInfoCompat.getLongVersionCode(installedPkg) else 0L
+    val installedSha = extractPrimarySigningSha256(installedPkg)
+    val installedName = context.packageName
+
+    if (!apkFile.exists() || apkFile.length() < 10_000L) {
+      AppDiagnosticsLogger.log("AppUpdater", "Pre-install check failed: APK missing or too small (${apkFile.length()} bytes)", isError = true)
+      return ApkInstallCheckResult(
+        status = ApkInstallCheckStatus.CORRUPT_APK,
+        installedVersionCode = installedCode,
+        apkVersionCode = -1L,
+        installedSha256 = installedSha,
+        apkSha256 = "",
+        installedPackageName = installedName,
+        apkPackageName = "",
+        warningMessageArabic = "ملف التحديث تالف أو لم يكتمل تنزيله بالكامل. أعد التنزيل مرة أخرى."
+      )
+    }
+
+    val archiveFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      PackageManager.GET_SIGNING_CERTIFICATES
+    } else {
+      PackageManager.GET_SIGNATURES
+    }
+
+    val apkInfo = try {
+      context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, archiveFlags)
+    } catch (_: Exception) {
+      null
+    } ?: run {
+      AppDiagnosticsLogger.log("AppUpdater", "Pre-install check failed: getPackageArchiveInfo returned null for ${apkFile.absolutePath}", isError = true)
+      return ApkInstallCheckResult(
+        status = ApkInstallCheckStatus.CORRUPT_APK,
+        installedVersionCode = installedCode,
+        apkVersionCode = -1L,
+        installedSha256 = installedSha,
+        apkSha256 = "",
+        installedPackageName = installedName,
+        apkPackageName = "",
+        warningMessageArabic = "تعذر قراءة حزمة الـ APK المُنزّلة. قد يكون الملف غير مكتمل."
+      )
+    }
+
+    val apkCode = PackageInfoCompat.getLongVersionCode(apkInfo)
+    val apkName = apkInfo.packageName ?: ""
+    val apkSha = extractPrimarySigningSha256(apkInfo)
+
+    AppDiagnosticsLogger.log(
+      "AppUpdater",
+      "Pre-install check: installed=[$installedName code=$installedCode sha=${getShortFingerprint(installedSha)}] vs downloaded=[$apkName code=$apkCode sha=${getShortFingerprint(apkSha)}]"
+    )
+
+    if (apkName.isNotBlank() && apkName != installedName) {
+      return ApkInstallCheckResult(
+        status = ApkInstallCheckStatus.PACKAGE_MISMATCH,
+        installedVersionCode = installedCode,
+        apkVersionCode = apkCode,
+        installedSha256 = installedSha,
+        apkSha256 = apkSha,
+        installedPackageName = installedName,
+        apkPackageName = apkName,
+        warningMessageArabic = "معرّف الحزمة في ملف التحديث ($apkName) لا يطابق التطبيق المثبت ($installedName)."
+      )
+    }
+
+    if (apkCode in 1 until installedCode) {
+      return ApkInstallCheckResult(
+        status = ApkInstallCheckStatus.VERSION_DOWNGRADE,
+        installedVersionCode = installedCode,
+        apkVersionCode = apkCode,
+        installedSha256 = installedSha,
+        apkSha256 = apkSha,
+        installedPackageName = installedName,
+        apkPackageName = apkName,
+        warningMessageArabic = "رقم الإصدار في ملف التحديث (code $apkCode) أقدم من الإصدار المثبت حالياً (code $installedCode). سيرفض أندرويد التثبيت فوق نسخة أحدث."
+      )
+    }
+
+    if (installedSha.isNotBlank() && apkSha.isNotBlank() && !installedSha.equals(apkSha, ignoreCase = true)) {
+      return ApkInstallCheckResult(
+        status = ApkInstallCheckStatus.SIGNATURE_MISMATCH,
+        installedVersionCode = installedCode,
+        apkVersionCode = apkCode,
+        installedSha256 = installedSha,
+        apkSha256 = apkSha,
+        installedPackageName = installedName,
+        apkPackageName = apkName,
+        warningMessageArabic = "توقيع ملف التحديث مختلف عن التوقيع المثبت حالياً! احفظ نسخة احتياطية بالأسفل، ثم احذف النسخة القديمة وثبّت هذه النسخة مرة واحدة فقط لتوحيد التوقيع في كل التحديثات القادمة."
+      )
+    }
+
+    return ApkInstallCheckResult(
+      status = ApkInstallCheckStatus.OK,
+      installedVersionCode = installedCode,
+      apkVersionCode = apkCode,
+      installedSha256 = installedSha,
+      apkSha256 = apkSha,
+      installedPackageName = installedName,
+      apkPackageName = apkName
+    )
+  }
+
   /**
    * Prompts the Android OS package installer to install the APK file.
+   * Grants explicit FileProvider read URI permissions to all resolved installer activities
+   * to prevent silent Android TV 9 / MIUI PackageInstaller rejections.
    */
   fun installApk(apkFile: File): Result<Unit> {
     return try {
       if (!apkFile.exists() || apkFile.length() == 0L) {
         return Result.failure(Exception("ملف التحديث غير موجود أو فارغ."))
+      }
+
+      val check = inspectDownloadedApk(apkFile)
+      if (check.status == ApkInstallCheckStatus.CORRUPT_APK) {
+        return Result.failure(Exception(check.warningMessageArabic))
       }
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -300,12 +488,30 @@ class AppUpdateManager(private val context: Context) {
 
       val installIntent = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(apkUri, "application/vnd.android.package-archive")
+        clipData = ClipData.newRawUri("AsserTV_Update.apk", apkUri)
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
       }
 
+      try {
+        val resolvedInstallers = context.packageManager.queryIntentActivities(
+          installIntent,
+          PackageManager.MATCH_DEFAULT_ONLY
+        )
+        for (ri in resolvedInstallers) {
+          context.grantUriPermission(
+            ri.activityInfo.packageName,
+            apkUri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION
+          )
+        }
+      } catch (_: Exception) {
+      }
+
+      AppDiagnosticsLogger.log("AppUpdater", "Launching PackageInstaller for ${apkFile.name} (status=${check.status})")
       context.startActivity(installIntent)
       Result.success(Unit)
     } catch (e: Exception) {
+      AppDiagnosticsLogger.log("AppUpdater", "installApk failed: ${e.message}", isError = true)
       Result.failure(Exception("فشل فتح مثبت الحزم: ${e.localizedMessage}"))
     }
   }

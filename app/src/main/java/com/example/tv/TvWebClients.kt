@@ -179,8 +179,64 @@ class TvWebViewClient(
     "onesignal", "mc.yandex", "clarity.ms", "hotjar", "sharethis",
     "disqus", "pubfuture", "bidgear", "galaksion", "vidazoo",
     "adnxs", "criteo", "rubiconproject", "pubmatic", "openx.net",
-    "scorecardresearch", "quantserve", "facebook.net", "connect.facebook"
+    "scorecardresearch", "quantserve", "facebook.net", "connect.facebook",
+    "google-analytics", "analytics.google", "googletagmanager", "cloudflareinsights",
+    "sentry.io", "mixpanel", "segment.io", "segment.com", "amplitude",
+    "newrelic", "datadog", "matomo", "plausible", "statcounter", "facebook.com/tr"
   )
+
+  private val heavyAssetExtensions = listOf(
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".ico", ".svg", ".avif",
+    ".css", ".woff", ".woff2", ".ttf", ".otf", ".eot"
+  )
+
+  private fun emptyBlockedResponse(): WebResourceResponse =
+    WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
+
+  /**
+   * In Extractor WebView mode (not General Browser mode), block images, stylesheets,
+   * fonts, and analytics so only lightweight HTML/JS player scripts run (~80% less RAM/CPU).
+   */
+  private fun shouldBlockHeavyExtractorAsset(urlLower: String, host: String): Boolean {
+    if (isGeneralBrowserMode()) return false
+
+    // Never block media streams, subtitles, or verification challenges
+    if (urlLower.contains(".m3u8") ||
+      urlLower.contains(".mp4") ||
+      urlLower.contains(".mpd") ||
+      urlLower.contains(".ts") ||
+      urlLower.contains(".m4s") ||
+      urlLower.contains(".vtt") ||
+      urlLower.contains(".srt") ||
+      urlLower.contains("videoplayback") ||
+      urlLower.contains("/m3u8") ||
+      urlLower.contains("recaptcha") ||
+      urlLower.contains("hcaptcha") ||
+      urlLower.contains("/cdn-cgi/") ||
+      host.contains("cloudflare")
+    ) {
+      return false
+    }
+
+    // Strip query string / fragment before checking file extension
+    val pathOnly = urlLower.substringBefore('?').substringBefore('#')
+    for (ext in heavyAssetExtensions) {
+      if (pathOnly.endsWith(ext)) {
+        return true
+      }
+    }
+
+    // Block known ad/analytics/font CDN hosts in extractor mode
+    if (host.contains("fonts.googleapis.com") || host.contains("fonts.gstatic.com")) {
+      return true
+    }
+    for (ad in adHostKeywords) {
+      if (host.contains(ad) || urlLower.contains(ad)) {
+        return true
+      }
+    }
+    return false
+  }
 
   override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
     val url = request?.url?.toString() ?: return false
@@ -341,8 +397,7 @@ class TvWebViewClient(
       clean.contains("hcaptcha") ||
       clean.contains("flagsapi") ||
       clean.contains("wsrv.nl") ||
-      clean.contains("gstatic") ||
-      clean.contains("googletagmanager")
+      clean.contains("gstatic")
   }
 
   override fun onReceivedSslError(
@@ -429,16 +484,14 @@ class TvWebViewClient(
         }
       }
     }
+    if (shouldBlockHeavyExtractorAsset(urlLower, host)) {
+      return emptyBlockedResponse()
+    }
     if (isAdBlockEnabled()) {
-      val lower = url.lowercase()
       for (ad in adHostKeywords) {
-        if (lower.contains(ad)) {
+        if (urlLower.contains(ad)) {
           if (!isStreamingOrCdnHost(host)) {
-            return WebResourceResponse(
-              "text/plain",
-              "UTF-8",
-              ByteArrayInputStream("".toByteArray())
-            )
+            return emptyBlockedResponse()
           }
         }
       }
@@ -453,10 +506,9 @@ class TvWebViewClient(
     val uri = request?.url ?: return null
     val urlStr = uri.toString()
     val host = uri.host?.lowercase() ?: ""
-    val method = request.method ?: "GET"
 
     val urlLower = urlStr.lowercase()
-    if ((urlLower.contains(".m3u8") || urlLower.contains(".mp4") || urlLower.contains("videoplayback") || urlLower.contains("/m3u8")) && !urlLower.contains(".ts")) {
+    if ((urlLower.contains(".m3u8") || urlLower.contains(".mp4") || urlLower.contains(".mpd") || urlLower.contains("videoplayback") || urlLower.contains("/m3u8")) && !urlLower.contains(".ts")) {
       var isBlockedAd = false
       for (ad in adHostKeywords) {
         if (host.contains(ad)) { isBlockedAd = true; break }
@@ -481,6 +533,11 @@ class TvWebViewClient(
       }
     }
 
+    // 0. Fast Extractor Asset Blocker (strips images, CSS, fonts, and analytics in embed extraction mode)
+    if (shouldBlockHeavyExtractorAsset(urlLower, host)) {
+      return emptyBlockedResponse()
+    }
+
     // 1. Core Ad Blocker Integration (Never block Google, reCAPTCHA, hCaptcha, or Cloudflare)
     val isTrustedCaptchaOrSearch = host.contains("google.") ||
       host.contains("gstatic.") ||
@@ -501,11 +558,7 @@ class TvWebViewClient(
         }
       }
       if (isAd && !isStreamingOrCdnHost(host)) {
-        return WebResourceResponse(
-          "text/plain",
-          "UTF-8",
-          ByteArrayInputStream("".toByteArray())
-        )
+        return emptyBlockedResponse()
       }
     }
 

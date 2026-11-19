@@ -32,8 +32,11 @@ data class DiagnosticLogEntry(
 
 object AppDiagnosticsLogger {
   const val CRASH_LOG_FILE_NAME = "last_crash_log.txt"
+  const val BREADCRUMB_FILE_NAME = "last_breadcrumb.txt"
+  private const val MAX_BREADCRUMB_LINES = 24
 
   private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+  private val breadcrumbTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
   private val _logsFlow = MutableStateFlow<List<DiagnosticLogEntry>>(emptyList())
   val logsFlow: StateFlow<List<DiagnosticLogEntry>> = _logsFlow.asStateFlow()
@@ -146,6 +149,62 @@ object AppDiagnosticsLogger {
   }
 
   /**
+   * Writes a lightweight lifecycle breadcrumb synchronously to `filesDir/last_breadcrumb.txt`
+   * so that if the Android TV OS kills the process via LMKD (SIGKILL without a Java exception),
+   * the Diagnostics dialog reveals the exact last portal/stream/WebView step and heap usage.
+   */
+  @Synchronized
+  fun recordBreadcrumb(context: Context, stage: String, detail: String = "") {
+    try {
+      val appCtx = context.applicationContext ?: context
+      val breadcrumbFile = File(appCtx.filesDir, BREADCRUMB_FILE_NAME)
+      val existingLines = if (breadcrumbFile.exists() && breadcrumbFile.length() > 0L) {
+        breadcrumbFile.readLines(Charsets.UTF_8).filter { it.isNotBlank() }
+      } else {
+        emptyList()
+      }
+      val rt = Runtime.getRuntime()
+      val usedMb = ((rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L)).coerceAtLeast(0L)
+      val maxMb = (rt.maxMemory() / (1024L * 1024L)).coerceAtLeast(1L)
+      val pid = android.os.Process.myPid()
+      val ts = breadcrumbTimeFormat.format(Date())
+      val cleanDetail = detail.replace("\n", " ").trim().take(160)
+      val newLine = "$ts | PID=$pid | Heap=${usedMb}/${maxMb}MB | [$stage] $cleanDetail"
+      val updated = (existingLines + newLine).takeLast(MAX_BREADCRUMB_LINES)
+      FileOutputStream(breadcrumbFile, false).use { fos ->
+        fos.write(updated.joinToString("\n").toByteArray(Charsets.UTF_8))
+        fos.flush()
+      }
+    } catch (_: Throwable) {
+      // Never crash while recording diagnostics
+    }
+  }
+
+  fun loadLastBreadcrumbs(context: Context): String? {
+    return try {
+      val appCtx = context.applicationContext ?: context
+      val breadcrumbFile = File(appCtx.filesDir, BREADCRUMB_FILE_NAME)
+      if (breadcrumbFile.exists() && breadcrumbFile.length() > 0L) {
+        breadcrumbFile.readText(Charsets.UTF_8).trim().ifBlank { null }
+      } else {
+        null
+      }
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  fun clearLastBreadcrumbs(context: Context): Boolean {
+    return try {
+      val appCtx = context.applicationContext ?: context
+      val breadcrumbFile = File(appCtx.filesDir, BREADCRUMB_FILE_NAME)
+      if (breadcrumbFile.exists()) breadcrumbFile.delete() else true
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  /**
    * Exports the full diagnostics + saved crash report to `cacheDir/logs/asser_tv_log.txt`
    * for sharing via FileProvider (e.g. Send Files to TV).
    */
@@ -211,6 +270,14 @@ object AppDiagnosticsLogger {
     if (!savedCrash.isNullOrBlank()) {
       sb.appendLine(savedCrash)
       sb.appendLine()
+      sb.appendLine("=========================================")
+      sb.appendLine()
+    }
+
+    val savedBreadcrumbs = context?.let { loadLastBreadcrumbs(it) }
+    if (!savedBreadcrumbs.isNullOrBlank()) {
+      sb.appendLine("=== Persistent Lifecycle Breadcrumbs (SIGKILL Trail) ===")
+      sb.appendLine(savedBreadcrumbs)
       sb.appendLine("=========================================")
       sb.appendLine()
     }

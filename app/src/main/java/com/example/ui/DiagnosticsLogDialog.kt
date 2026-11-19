@@ -93,8 +93,9 @@ fun DiagnosticsLogDialog(
   val scope = rememberCoroutineScope()
   val logs by AppDiagnosticsLogger.logsFlow.collectAsState()
 
-  // Load any saved fatal crash report from filesDir/last_crash_log.txt on dialog open
+  // Load any saved fatal crash report and SIGKILL breadcrumbs from filesDir on dialog open
   var lastCrashLog by remember { mutableStateOf(AppDiagnosticsLogger.loadLastCrashLog(context)) }
+  var lastBreadcrumbs by remember { mutableStateOf(AppDiagnosticsLogger.loadLastBreadcrumbs(context)) }
 
   // QR Upload State (paste.rs)
   var isUploadingQr by remember { mutableStateOf(false) }
@@ -329,6 +330,93 @@ fun DiagnosticsLogDialog(
                       fontSize = 9.5.sp,
                       fontFamily = FontFamily.Monospace,
                       lineHeight = 13.sp
+                    )
+                  }
+                }
+              }
+            }
+          }
+
+          // 2b. PERSISTENT LIFECYCLE BREADCRUMBS (Survives OS LMKD / SIGKILL kills)
+          val breadcrumbText = lastBreadcrumbs
+          if (!breadcrumbText.isNullOrBlank()) {
+            Surface(
+              color = Color(0xFF231909),
+              shape = RoundedCornerShape(12.dp),
+              border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.75f)),
+              modifier = Modifier
+                .fillMaxWidth()
+                .testTag("last_breadcrumbs_card")
+            ) {
+              Column(
+                modifier = Modifier.padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Text(
+                    text = "🧭 آخر خطوات التشغيل المحفوظة (SIGKILL Breadcrumbs)",
+                    color = CinemaAccent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Surface(
+                    onClick = {
+                      AppDiagnosticsLogger.clearLastBreadcrumbs(context)
+                      lastBreadcrumbs = null
+                      Toast.makeText(context, "تم مسح سجل الخطوات المحفوظ", Toast.LENGTH_SHORT).show()
+                    },
+                    color = CinemaAccent.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f)),
+                    modifier = Modifier
+                      .heightIn(min = 30.dp)
+                      .testTag("btn_clear_breadcrumbs")
+                  ) {
+                    Row(
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = "مسح الخطوات",
+                        tint = CinemaAccent,
+                        modifier = Modifier.size(13.dp)
+                      )
+                      Text(
+                        text = "مسح",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                      )
+                    }
+                  }
+                }
+
+                Box(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp, max = 96.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF140F05))
+                    .padding(7.dp)
+                    .verticalScroll(rememberScrollState())
+                ) {
+                  CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Text(
+                      text = breadcrumbText,
+                      color = Color(0xFFFFE0A3),
+                      fontSize = 9.sp,
+                      fontFamily = FontFamily.Monospace,
+                      lineHeight = 12.5.sp
                     )
                   }
                 }

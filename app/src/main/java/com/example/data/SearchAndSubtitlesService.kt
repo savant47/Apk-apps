@@ -19,11 +19,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.URLEncoder
@@ -46,6 +48,26 @@ class SearchAndSubtitlesService {
   }
 
   private val httpClient = buildSslTolerantHttpClient()
+
+  // Fast 8s hard-timeout client for HTML watch-page scraping & single-server stream extraction
+  private val fastScraperClient: OkHttpClient = httpClient.newBuilder()
+    .connectTimeout(5, TimeUnit.SECONDS)
+    .readTimeout(8, TimeUnit.SECONDS)
+    .writeTimeout(5, TimeUnit.SECONDS)
+    .callTimeout(8, TimeUnit.SECONDS)
+    .build()
+
+  // Ultra-fast 5s hard-timeout client for HLS master playlist quality parsing
+  private val fastManifestClient: OkHttpClient = httpClient.newBuilder()
+    .connectTimeout(4, TimeUnit.SECONDS)
+    .readTimeout(5, TimeUnit.SECONDS)
+    .callTimeout(5, TimeUnit.SECONDS)
+    .build()
+
+  // Pre-compiled patterns for fast zero-allocation scraping loops
+  private val episodeNumberRegex = Regex("(?:الحلق[ةه]|حلقة|\\bepisode|\\bep)[\\s\\-_]*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
+  private val iframeSrcPattern = Pattern.compile("<iframe[^>]+(?:src|data-src)=[\"'](https?:[^\"']+|//[^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
+  private val whitespaceRegex = Regex("\\s+")
 
   // Stores any real subtitle tracks (.vtt / .srt) discovered directly inside the active watch server embed
   @Volatile
@@ -980,25 +1002,123 @@ class SearchAndSubtitlesService {
   // 3. SMART SEASONS & EPISODES SCRAPER FOR SIDE PANEL IN WATCH VIEW
   // ============================================================================
 
+  private fun extractOrigin(url: String, fallback: String): String {
+    return try {
+      val uri = java.net.URI(url)
+      if (!uri.scheme.isNullOrBlank() && !uri.host.isNullOrBlank()) {
+        "${uri.scheme}://${uri.host}"
+      } else {
+        fallback.trimEnd('/')
+      }
+    } catch (_: Exception) {
+      fallback.trimEnd('/')
+    }
+  }
+
+  private fun isCloudflareOrBlockedHtml(httpCode: Int, html: String): Boolean {
+    if (httpCode == 403 || httpCode == 503 || httpCode == 429) return true
+    if (html.length < 4000) {
+      val lower = html.lowercase()
+      if (lower.contains("cf-browser-verification") ||
+        lower.contains("just a moment...") ||
+        lower.contains("attention required! | cloudflare") ||
+        lower.contains("/cdn-cgi/challenge-platform") ||
+        lower.contains("checking your browser before accessing")
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private fun resolveTopCinemaAjaxEmbed(
+    origin: String,
+    postId: String,
+    serverNum: String,
+    refererUrl: String
+  ): String {
+    return try {
+      val cleanOrigin = origin.trimEnd('/')
+      val ajaxUrl = "$cleanOrigin/wp-content/themes/movies2023/AjaxCenter/Single/Server.php"
+      val cookieHeader = try {
+        android.webkit.CookieManager.getInstance()?.getCookie(cleanOrigin) ?: ""
+      } catch (_: Exception) { "" }
+
+      val reqBuilder = Request.Builder()
+        .url(ajaxUrl)
+        .post(FormBody.Builder().add("id", postId).add("i", serverNum).build())
+        .header("User-Agent", desktopUserAgent)
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Origin", cleanOrigin)
+        .header("Referer", refererUrl.ifBlank { "$cleanOrigin/" })
+      if (cookieHeader.isNotBlank()) {
+        reqBuilder.header("Cookie", cookieHeader)
+      }
+
+      fastScraperClient.newCall(reqBuilder.build()).execute().use { resp ->
+        if (!resp.isSuccessful) return ""
+        val ajaxHtml = resp.body?.string().orEmpty()
+        val matcher = iframeSrcPattern.matcher(ajaxHtml)
+        if (matcher.find()) {
+          val raw = matcher.group(1)?.trim().orEmpty()
+          if (raw.startsWith("//")) "https:$raw" else raw
+        } else {
+          ""
+        }
+      }
+    } catch (_: Exception) {
+      ""
+    }
+  }
+
   suspend fun scrapeSeasonsAndEpisodes(
     pageUrl: String,
     portal: StreamingPortal,
     titleHint: String = "",
     selectedSeasonNumber: Int = 1
   ): ScrapedSeriesStructure = withContext(Dispatchers.IO) {
+    val scrapeStartMs = System.currentTimeMillis()
     val seasons = mutableListOf<ScrapedSeasonItem>()
     val episodes = mutableListOf<ScrapedEpisodeItem>()
     val watchServers = mutableListOf<ScrapedWatchServer>()
     val seenEmbedUrls = mutableSetOf<String>()
 
-    // 1. Normalize watch page URL (e.g. LaRoza video.php -> play.php, TopCinema -> /watch/)
-    var normalizedWatchUrl = when {
-      pageUrl.contains("video.php?vid=") -> pageUrl.replace("video.php?vid=", "play.php?vid=")
-      portal == StreamingPortal.TOP_CINEMA &&
-        !pageUrl.contains("/watch") &&
-        !pageUrl.contains("/search") &&
-        !pageUrl.contains("/series/") -> "${pageUrl.trimEnd('/')}/watch/"
-      else -> pageUrl
+    // 1. Safely normalize watch page URL (NEVER append /watch/ to embed iframes or non-TopCinema hosts!)
+    var normalizedWatchUrl = StreamingPortal.sanitizePortalWatchUrl(pageUrl, portal)
+
+    // Safety guard: if an embed iframe URL was passed directly (e.g. from legacy history),
+    // treat it as a direct embed server instead of scraping it as a portal watch page.
+    if (StreamingPortal.isEmbedIframeUrl(normalizedWatchUrl)) {
+      val hostName = extractFriendlyServerName(normalizedWatchUrl, 1)
+      val directSrv = ScrapedWatchServer(
+        id = "srv_1",
+        name = "مشغل مباشر 1 • $hostName",
+        embedUrl = normalizedWatchUrl,
+        qualityLabel = "Auto HD",
+        isDirectEmbed = true
+      )
+      val resolution = if (!isDynamicSpaEmbed(normalizedWatchUrl)) {
+        resolveDirectStreamFromEmbed(normalizedWatchUrl, portal.homeUrl)
+      } else {
+        DirectStreamResolution(refererUrl = normalizedWatchUrl)
+      }
+      AppDiagnosticsLogger.log(
+        "Scraper",
+        "Bypassed portal HTML scrape for direct embed URL ($normalizedWatchUrl); directStream=${resolution.primaryStreamUrl.isNotBlank()}"
+      )
+      return@withContext ScrapedSeriesStructure(
+        isSeries = false,
+        seriesTitle = titleHint,
+        currentSeason = selectedSeasonNumber,
+        selectedSeasonNumber = selectedSeasonNumber,
+        seasons = emptyList(),
+        episodes = emptyList(),
+        watchServers = listOf(directSrv),
+        bestCleanPlayerUrl = normalizedWatchUrl,
+        directStreamUrl = resolution.primaryStreamUrl,
+        directStreamReferer = resolution.refererUrl.ifBlank { normalizedWatchUrl },
+        detectedQualities = resolution.detectedQualities
+      )
     }
 
     val decodedInitialUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
@@ -1006,12 +1126,14 @@ class SearchAndSubtitlesService {
     val effectiveSeasonNumber = if (selectedSeasonNumber > 1) selectedSeasonNumber else (detectedSeasonFromText ?: 1)
 
     fun addServerIfValid(name: String, rawEmbedUrl: String, qualityLabel: String = "Auto HD", isDirect: Boolean = true) {
+      val trimmed = rawEmbedUrl.trim()
       val cleanUrl = when {
-        rawEmbedUrl.startsWith("//") -> "https:$rawEmbedUrl"
-        rawEmbedUrl.startsWith("/") -> resolveRelativeUrl(normalizedWatchUrl, rawEmbedUrl)
-        else -> rawEmbedUrl.trim()
+        trimmed.startsWith("topcinema-ajax://") -> trimmed
+        trimmed.startsWith("//") -> "https:$trimmed"
+        trimmed.startsWith("/") -> resolveRelativeUrl(normalizedWatchUrl, trimmed)
+        else -> trimmed
       }
-      if (!cleanUrl.startsWith("http")) return
+      if (!cleanUrl.startsWith("http") && !cleanUrl.startsWith("topcinema-ajax://")) return
       val lower = cleanUrl.lowercase()
       if (lower.contains("facebook.com") ||
           lower.contains("twitter.com") ||
@@ -1034,17 +1156,16 @@ class SearchAndSubtitlesService {
       }
     }
 
-    fun extractServersFromHtml(htmlContent: String) {
-      if (htmlContent.isBlank()) return
+    fun extractServersFromDocument(doc: org.jsoup.nodes.Document, pageOrigin: String) {
       var srvIdx = watchServers.size + 1
 
-      // 1) Extract data-embed / data-url / data-link / data-src watch server attributes
-      val dataEmbedMatcher = Pattern.compile(
-        "(?:data-embed|data-link|data-url|data-frame|data-watch)=\"(https?:[^\"]+|//[^\"]+)\"",
-        Pattern.CASE_INSENSITIVE
-      ).matcher(htmlContent)
-      while (dataEmbedMatcher.find() && srvIdx <= 14) {
-        val embed = dataEmbedMatcher.group(1)?.trim() ?: continue
+      // 1) Fast Jsoup pass: data-embed / data-link / data-url / data-frame / data-watch attributes
+      val dataEmbedEls = doc.select("[data-embed], [data-link], [data-url], [data-frame], [data-watch]")
+      for (el in dataEmbedEls) {
+        if (srvIdx > 14) break
+        val embed = listOf("data-embed", "data-link", "data-url", "data-frame", "data-watch")
+          .firstNotNullOfOrNull { attr -> el.attr(attr).trim().takeIf { it.startsWith("http") || it.startsWith("//") } }
+          ?: continue
         val hostName = extractFriendlyServerName(embed, srvIdx)
         addServerIfValid(
           name = "سيرفر $srvIdx • $hostName",
@@ -1055,13 +1176,12 @@ class SearchAndSubtitlesService {
         srvIdx = watchServers.size + 1
       }
 
-      // 2) Extract <iframe src="..."> embed players directly from the watch page
-      val iframeMatcher = Pattern.compile(
-        "<iframe[^>]+(?:src|data-src)=\"(https?:[^\"]+|//[^\"]+)\"",
-        Pattern.CASE_INSENSITIVE
-      ).matcher(htmlContent)
-      while (iframeMatcher.find() && srvIdx <= 16) {
-        val iframeSrc = iframeMatcher.group(1)?.trim() ?: continue
+      // 2) Fast Jsoup pass: <iframe src / data-src> players directly in watch page HTML
+      val iframeEls = doc.select("iframe[src], iframe[data-src]")
+      for (el in iframeEls) {
+        if (srvIdx > 16) break
+        val iframeSrc = el.attr("src").trim().ifBlank { el.attr("data-src").trim() }
+        if (!iframeSrc.startsWith("http") && !iframeSrc.startsWith("//")) continue
         val hostName = extractFriendlyServerName(iframeSrc, srvIdx)
         addServerIfValid(
           name = "مشغل مباشر $srvIdx • $hostName",
@@ -1072,89 +1192,105 @@ class SearchAndSubtitlesService {
         srvIdx = watchServers.size + 1
       }
 
-      // 3) If TopCinema, also query TopCinema's AJAX Server.php for all Arabic-subtitled servers (VidTube, Mixdrop, Lulustream, VidShare, etc.)
+      // 3) TopCinema server items: NEVER block on 8 sequential Server.php calls!
+      // If an iframe/data-embed is already present, register all extra servers lazily (0 extra HTTP calls).
+      // Only if NO direct server exists yet, resolve ONLY the 1st server immediately against the live origin.
       if (portal == StreamingPortal.TOP_CINEMA) {
-        val tcLiMatcher = Pattern.compile(
-          "<li([^>]*server--item[^>]*)>(.*?)</li>",
-          Pattern.DOTALL or Pattern.CASE_INSENSITIVE
-        ).matcher(htmlContent)
-        var ajaxFetched = 0
-        while (tcLiMatcher.find() && ajaxFetched < 8) {
-          val liAttrs = tcLiMatcher.group(1) ?: ""
-          val liInner = tcLiMatcher.group(2) ?: ""
-          val postId = Regex("data-id=\"([0-9]+)\"", RegexOption.IGNORE_CASE).find(liAttrs)?.groupValues?.get(1)?.trim() ?: continue
-          val serverNum = Regex("data-server=\"([0-9]+)\"", RegexOption.IGNORE_CASE).find(liAttrs)?.groupValues?.get(1)?.trim() ?: continue
-          val serverLabelRaw = cleanHtmlEntities(liInner.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim())
-          try {
-            val ajaxReq = Request.Builder()
-              .url("https://topcinema.io/wp-content/themes/movies2023/AjaxCenter/Single/Server.php")
-              .post(FormBody.Builder().add("id", postId).add("i", serverNum).build())
-              .header("User-Agent", desktopUserAgent)
-              .header("X-Requested-With", "XMLHttpRequest")
-              .header("Referer", normalizedWatchUrl)
-              .build()
-            val ajaxResp = httpClient.newCall(ajaxReq).execute()
-            val ajaxHtml = ajaxResp.body?.string() ?: ""
-            val ajaxIframe = Pattern.compile("<iframe[^>]+(?:src|data-src)=\"(https?:[^\"]+|//[^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(ajaxHtml)
-            if (ajaxIframe.find()) {
-              val embedSrc = ajaxIframe.group(1)?.trim() ?: ""
-              if (embedSrc.isNotBlank()) {
-                val hostName = if (serverLabelRaw.isNotBlank()) serverLabelRaw else extractFriendlyServerName(embedSrc, watchServers.size + 1)
-                addServerIfValid(
-                  name = "سيرفر توب سينما • $hostName",
-                  rawEmbedUrl = embedSrc,
-                  qualityLabel = "مترجم HD",
-                  isDirect = true
-                )
-              }
+        val serverItems = doc.select("li.server--item[data-id][data-server]")
+        var resolvedOneUpfront = watchServers.any { it.isDirectEmbed }
+        for (li in serverItems.take(8)) {
+          val postId = li.attr("data-id").trim()
+          val serverNum = li.attr("data-server").trim()
+          if (postId.isBlank() || serverNum.isBlank()) continue
+          val labelText = cleanHtmlEntities(li.text().replace(whitespaceRegex, " ").trim())
+          val friendlyLabel = labelText.ifBlank { "سيرفر $serverNum" }
+
+          if (!resolvedOneUpfront) {
+            val resolvedEmbed = resolveTopCinemaAjaxEmbed(pageOrigin, postId, serverNum, normalizedWatchUrl)
+            if (resolvedEmbed.isNotBlank()) {
+              resolvedOneUpfront = true
+              addServerIfValid(
+                name = "سيرفر توب سينما • $friendlyLabel",
+                rawEmbedUrl = resolvedEmbed,
+                qualityLabel = "مترجم HD",
+                isDirect = true
+              )
+              continue
             }
-          } catch (_: Exception) {}
-          ajaxFetched++
+          }
+          // Register remaining servers lazily so switching servers resolves on-demand in < 1s
+          addServerIfValid(
+            name = "سيرفر توب سينما • $friendlyLabel",
+            rawEmbedUrl = "topcinema-ajax://$pageOrigin|$postId|$serverNum",
+            qualityLabel = "مترجم HD",
+            isDirect = true
+          )
         }
       }
     }
 
+    var okHttpBlockedByCloudflare = false
+
     try {
-      // Case A: Scrape HTML directly from normalizedWatchUrl (LaRoza play.php, TopCinema /watch/, EgyDead POST View=1)
+      // Case A: Fast OkHttp + Jsoup HTML Fetch First (8s hard callTimeout) before any WebView fallback
       if (normalizedWatchUrl.startsWith("http")) {
+        val watchOrigin = extractOrigin(normalizedWatchUrl, portal.homeUrl)
+        val cookieHeader = try {
+          android.webkit.CookieManager.getInstance()?.getCookie(normalizedWatchUrl) ?: ""
+        } catch (_: Exception) { "" }
+
         val html = if (portal == StreamingPortal.EGY_DEAD) {
-          val postReq = Request.Builder()
+          val postBuilder = Request.Builder()
             .url(normalizedWatchUrl)
             .post(FormBody.Builder().add("View", "1").build())
             .header("User-Agent", desktopUserAgent)
             .header("Referer", normalizedWatchUrl)
-            .build()
-          val resp = httpClient.newCall(postReq).execute()
-          resp.body?.string() ?: ""
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
+          if (cookieHeader.isNotBlank()) postBuilder.header("Cookie", cookieHeader)
+          fastScraperClient.newCall(postBuilder.build()).execute().use { resp ->
+            val bodyStr = resp.body?.string().orEmpty()
+            if (isCloudflareOrBlockedHtml(resp.code, bodyStr)) {
+              okHttpBlockedByCloudflare = true
+              AppDiagnosticsLogger.log("Scraper", "OkHttp blocked (HTTP ${resp.code}) on $normalizedWatchUrl - falling back to WebView")
+              ""
+            } else {
+              bodyStr
+            }
+          }
         } else {
-          val req = Request.Builder()
+          val reqBuilder = Request.Builder()
             .url(normalizedWatchUrl)
             .header("User-Agent", desktopUserAgent)
-            .header("Referer", portal.homeUrl)
+            .header("Referer", "$watchOrigin/")
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .build()
-          val resp = httpClient.newCall(req).execute()
-          resp.body?.string() ?: ""
+            .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
+          if (cookieHeader.isNotBlank()) reqBuilder.header("Cookie", cookieHeader)
+          fastScraperClient.newCall(reqBuilder.build()).execute().use { resp ->
+            val bodyStr = resp.body?.string().orEmpty()
+            if (isCloudflareOrBlockedHtml(resp.code, bodyStr)) {
+              okHttpBlockedByCloudflare = true
+              AppDiagnosticsLogger.log("Scraper", "OkHttp blocked (HTTP ${resp.code}) on $normalizedWatchUrl - falling back to WebView")
+              ""
+            } else {
+              bodyStr
+            }
+          }
         }
 
         if (html.isNotBlank()) {
-          extractServersFromHtml(html)
+          val doc = Jsoup.parse(html, normalizedWatchUrl)
+          extractServersFromDocument(doc, watchOrigin)
 
-          // Extract Seasons & Episodes links from the HTML (including title="..." attribute on <a> tags)
-          val linkPattern = Pattern.compile("<a([^>]+href=\"([^\"]+)\"[^>]*)>(.*?)</a>", Pattern.DOTALL or Pattern.CASE_INSENSITIVE)
-          val matcher = linkPattern.matcher(html)
+          // Fast Jsoup pass for Seasons & Episodes links
           val seenEpNums = mutableSetOf<Int>()
           val seenSeasonNums = mutableSetOf<Int>()
-
-          while (matcher.find()) {
-            val fullATagAttrs = matcher.group(1) ?: ""
-            val rawHref = matcher.group(2)?.trim() ?: continue
-            val innerHtml = matcher.group(3) ?: ""
-            val titleAttrMatch = Pattern.compile("title=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(fullATagAttrs)
-            val titleAttr = if (titleAttrMatch.find()) cleanHtmlEntities(titleAttrMatch.group(1) ?: "") else ""
-            val cleanText = cleanHtmlEntities(innerHtml.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim())
+          for (anchor in doc.select("a[href]")) {
+            val rawHref = anchor.attr("href").trim()
+            if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue
+            val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
+            val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
             val decodedHref = try { java.net.URLDecoder.decode(rawHref, "UTF-8") } catch (_: Exception) { rawHref }
-
             val combined = "$titleAttr $cleanText $decodedHref"
 
             val sNum = extractSeasonNumberFromText(combined)
@@ -1174,7 +1310,7 @@ class SearchAndSubtitlesService {
               )
             }
 
-            val epMatch = Regex("(?:الحلقة|الحلقه|حلقة|episode|ep)[\\s\\-_]*([0-9]{1,3})", RegexOption.IGNORE_CASE).find(combined)
+            val epMatch = episodeNumberRegex.find(combined)
             if (epMatch != null && !rawHref.contains("/category/") && !rawHref.contains("/tag/") && !rawHref.contains("/series/")) {
               val epNum = epMatch.groupValues[1].toIntOrNull()
               if (epNum != null && epNum in 1..300 && !seenEpNums.contains(epNum)) {
@@ -1196,25 +1332,28 @@ class SearchAndSubtitlesService {
           }
 
           // If the initial URL was a series overview page (e.g. TopCinema /series/...) with no direct watch servers yet,
-          // automatically fetch the first episode's watch page so the user gets working watch servers immediately!
+          // fetch ONLY the first episode's watch page via fastScraperClient so watch servers populate immediately.
           if (watchServers.isEmpty() && episodes.isNotEmpty()) {
             val firstEpUrl = episodes.sortedBy { it.episodeNumber }.first().url
             normalizedWatchUrl = firstEpUrl
             try {
+              val epOrigin = extractOrigin(firstEpUrl, portal.homeUrl)
               val epReq = Request.Builder()
                 .url(firstEpUrl)
                 .header("User-Agent", desktopUserAgent)
-                .header("Referer", portal.homeUrl)
+                .header("Referer", "$epOrigin/")
                 .build()
-              val epHtml = httpClient.newCall(epReq).execute().body?.string() ?: ""
-              extractServersFromHtml(epHtml)
+              val epHtml = fastScraperClient.newCall(epReq).execute().use { it.body?.string().orEmpty() }
+              if (epHtml.isNotBlank()) {
+                extractServersFromDocument(Jsoup.parse(epHtml, firstEpUrl), epOrigin)
+              }
             } catch (_: Exception) {}
           }
         }
       }
 
-      // Case B: Resolve TMDB ID (either from URL or by searching cleaned English/Arabic titleHint)
-      // so we ALWAYS provide clean, ad-free, multi-quality Direct Video Scraper Embed Servers!
+      // Case B: Resolve TMDB ID ONLY when needed (when portal HTML didn't yield direct servers or episodes are missing for a TV show).
+      // Skipping unnecessary TMDB calls on fast portal pages saves 2-4 seconds per episode!
       val isExpectedTv = episodes.isNotEmpty() ||
         seasons.isNotEmpty() ||
         titleHint.contains("مسلسل", ignoreCase = true) ||
@@ -1227,125 +1366,136 @@ class SearchAndSubtitlesService {
         decodedInitialUrl.contains("مسلسل") ||
         decodedInitialUrl.contains("الحلقة")
 
-      val tmdbIdMatch = Regex("/(?:tv|movie)/[^/]*/?([0-9]{2,8})|/(?:tv|movie)/([0-9]{2,8})").find(normalizedWatchUrl)
-      var extractedTmdbId = tmdbIdMatch?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() }?.toIntOrNull()
-      var resolvedMediaType = if (isExpectedTv) "tv" else "movie"
+      val hasPortalDirectServer = watchServers.any { it.isDirectEmbed }
+      val shouldQueryTmdb = !okHttpBlockedByCloudflare && (
+        !hasPortalDirectServer ||
+          (isExpectedTv && episodes.isEmpty()) ||
+          portal == StreamingPortal.WATCH_SERIES ||
+          portal == StreamingPortal.FLIXER
+      )
 
-      if (extractedTmdbId == null && titleHint.isNotBlank()) {
-        val cleanedQuery = cleanMediaTitleForLookup(titleHint)
-        if (cleanedQuery.isNotBlank()) {
-          val encoded = URLEncoder.encode(cleanedQuery, "UTF-8")
-          val endpoint = if (isExpectedTv) "tv" else "multi"
-          val searchUrl = "https://api.themoviedb.org/3/search/$endpoint?api_key=$tmdbKey&query=$encoded&include_adult=false&language=en-US"
-          val req = Request.Builder().url(searchUrl).header("User-Agent", desktopUserAgent).build()
-          val resp = httpClient.newCall(req).execute()
-          val body = resp.body?.string() ?: ""
-          if (body.isNotBlank()) {
-            val resultsArr = JSONObject(body).optJSONArray("results")
-            if (resultsArr != null && resultsArr.length() > 0) {
-              for (i in 0 until resultsArr.length()) {
-                val obj = resultsArr.getJSONObject(i)
-                val mt = if (isExpectedTv) "tv" else obj.optString("media_type", "movie")
-                if (mt == "movie" || mt == "tv") {
-                  extractedTmdbId = obj.optInt("id", 0).takeIf { it > 0 }
-                  resolvedMediaType = mt
-                  break
+      if (shouldQueryTmdb) {
+        val tmdbIdMatch = Regex("/(?:tv|movie)/[^/]*/?([0-9]{2,8})|/(?:tv|movie)/([0-9]{2,8})").find(normalizedWatchUrl)
+        var extractedTmdbId = tmdbIdMatch?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() }?.toIntOrNull()
+        var resolvedMediaType = if (isExpectedTv) "tv" else "movie"
+
+        if (extractedTmdbId == null && titleHint.isNotBlank()) {
+          val cleanedQuery = cleanMediaTitleForLookup(titleHint)
+          if (cleanedQuery.isNotBlank()) {
+            val encoded = URLEncoder.encode(cleanedQuery, "UTF-8")
+            val endpoint = if (isExpectedTv) "tv" else "multi"
+            val searchUrl = "https://api.themoviedb.org/3/search/$endpoint?api_key=$tmdbKey&query=$encoded&include_adult=false&language=en-US"
+            val req = Request.Builder().url(searchUrl).header("User-Agent", desktopUserAgent).build()
+            val body = fastScraperClient.newCall(req).execute().use { it.body?.string().orEmpty() }
+            if (body.isNotBlank()) {
+              val resultsArr = JSONObject(body).optJSONArray("results")
+              if (resultsArr != null && resultsArr.length() > 0) {
+                for (i in 0 until resultsArr.length()) {
+                  val obj = resultsArr.getJSONObject(i)
+                  val mt = if (isExpectedTv) "tv" else obj.optString("media_type", "movie")
+                  if (mt == "movie" || mt == "tv") {
+                    extractedTmdbId = obj.optInt("id", 0).takeIf { it > 0 }
+                    resolvedMediaType = mt
+                    break
+                  }
                 }
               }
             }
           }
         }
-      }
 
-      // Detect current episode number from the active watch URL first (so switching episodes updates S/E accurately)
-      val decodedUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
-      val urlPathSeasonEpMatch = Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/([0-9]{1,3})").find(decodedUrl)
-      val pathSeasonNum = urlPathSeasonEpMatch?.groupValues?.get(1)?.toIntOrNull()
-      val pathEpNum = urlPathSeasonEpMatch?.groupValues?.get(2)?.toIntOrNull()
+        val decodedUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
+        val urlPathSeasonEpMatch = Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/([0-9]{1,3})").find(decodedUrl)
+        val pathSeasonNum = urlPathSeasonEpMatch?.groupValues?.get(1)?.toIntOrNull()
+        val pathEpNum = urlPathSeasonEpMatch?.groupValues?.get(2)?.toIntOrNull()
 
-      val resolvedSeasonNum = if (selectedSeasonNumber > 1) {
-        selectedSeasonNumber
-      } else {
-        pathSeasonNum ?: effectiveSeasonNumber
-      }
-
-      val epRegex = Regex("(?:الحلق[ةه]|حلقة|\\bepisode|\\bep)[\\s\\-_]*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
-      val rawEpNum = pathEpNum
-        ?: epRegex.find(decodedUrl)?.groupValues?.get(1)?.toIntOrNull()
-        ?: epRegex.find(titleHint)?.groupValues?.get(1)?.toIntOrNull()
-        ?: 1
-
-      if (extractedTmdbId != null) {
-        if (resolvedMediaType == "movie") {
-          addServerIfValid("مشغل VidLink الذكي (تعدد الجودات + ترجمة)", "https://vidlink.pro/movie/$extractedTmdbId?primaryColor=E50914&autoplay=true", "1080p / 720p / 360p")
-          addServerIfValid("مشغل VidSrc Pro النظيف", "https://vidsrc.cc/v2/embed/movie/$extractedTmdbId", "Auto / 1080p / 480p")
-          addServerIfValid("مشغل SuperEmbed المتعدد", "https://multiembed.mov/?video_id=$extractedTmdbId&tmdb=1", "Full HD / SD")
-          addServerIfValid("مشغل 2Embed العالمي", "https://www.2embed.cc/embed/$extractedTmdbId", "Multi-Server HD")
+        val resolvedSeasonNum = if (selectedSeasonNumber > 1) {
+          selectedSeasonNumber
         } else {
-          var numSeasonsOnTmdb = resolvedSeasonNum.coerceAtLeast(1)
-          var slug = "series"
-          try {
-            val tvUrl = "https://api.themoviedb.org/3/tv/$extractedTmdbId?api_key=$tmdbKey&language=en-US"
-            val resp = httpClient.newCall(Request.Builder().url(tvUrl).header("User-Agent", desktopUserAgent).build()).execute()
-            val tvJsonStr = resp.body?.string() ?: ""
-            if (tvJsonStr.isNotBlank()) {
-              val tvJson = JSONObject(tvJsonStr)
-              numSeasonsOnTmdb = tvJson.optInt("number_of_seasons", 1).coerceAtLeast(1)
-              slug = tvJson.optString("name", titleHint).lowercase().replace("[^a-z0-9]+".toRegex(), "-").trim('-').ifBlank { "series" }
+          pathSeasonNum ?: effectiveSeasonNumber
+        }
 
-              if (seasons.isEmpty()) {
-                for (sIdx in 1..maxOf(numSeasonsOnTmdb, resolvedSeasonNum)) {
-                  val sUrl = if (portal == StreamingPortal.FLIXER) {
-                    "https://flixer.gd/tv/$extractedTmdbId/$sIdx/1"
-                  } else {
-                    "https://watchseries.bar/tv/$slug/$extractedTmdbId/$sIdx/1"
-                  }
-                  seasons.add(ScrapedSeasonItem(seasonNumber = sIdx, title = "الموسم $sIdx", url = sUrl))
-                }
-              }
+        val rawEpNum = pathEpNum
+          ?: episodeNumberRegex.find(decodedUrl)?.groupValues?.get(1)?.toIntOrNull()
+          ?: episodeNumberRegex.find(titleHint)?.groupValues?.get(1)?.toIntOrNull()
+          ?: 1
 
-              if (episodes.isEmpty()) {
-                val targetSeason = resolvedSeasonNum.coerceIn(1, numSeasonsOnTmdb)
-                val seasonApiUrl = "https://api.themoviedb.org/3/tv/$extractedTmdbId/season/$targetSeason?api_key=$tmdbKey&language=en-US"
-                val sResp = httpClient.newCall(Request.Builder().url(seasonApiUrl).header("User-Agent", desktopUserAgent).build()).execute()
-                val sJsonStr = sResp.body?.string() ?: ""
-                if (sJsonStr.isNotBlank()) {
-                  val epArray = JSONObject(sJsonStr).optJSONArray("episodes")
-                  if (epArray != null) {
-                    for (eIdx in 0 until epArray.length()) {
-                      val epObj = epArray.getJSONObject(eIdx)
-                      val epNum = epObj.optInt("episode_number", eIdx + 1)
-                      val epName = epObj.optString("name", "Episode $epNum")
-                      val epUrl = if (portal == StreamingPortal.FLIXER) {
-                        "https://flixer.gd/tv/$extractedTmdbId/$targetSeason/$epNum"
+        if (extractedTmdbId != null) {
+          if (resolvedMediaType == "movie") {
+            addServerIfValid("مشغل VidLink الذكي (تعدد الجودات + ترجمة)", "https://vidlink.pro/movie/$extractedTmdbId?primaryColor=E50914&autoplay=true", "1080p / 720p / 360p")
+            addServerIfValid("مشغل VidSrc Pro النظيف", "https://vidsrc.cc/v2/embed/movie/$extractedTmdbId", "Auto / 1080p / 480p")
+            addServerIfValid("مشغل SuperEmbed المتعدد", "https://multiembed.mov/?video_id=$extractedTmdbId&tmdb=1", "Full HD / SD")
+            addServerIfValid("مشغل 2Embed العالمي", "https://www.2embed.cc/embed/$extractedTmdbId", "Multi-Server HD")
+          } else {
+            var numSeasonsOnTmdb = resolvedSeasonNum.coerceAtLeast(1)
+            var slug = "series"
+            if (seasons.isEmpty() || episodes.isEmpty()) {
+              try {
+                val tvUrl = "https://api.themoviedb.org/3/tv/$extractedTmdbId?api_key=$tmdbKey&language=en-US"
+                val tvJsonStr = fastScraperClient.newCall(Request.Builder().url(tvUrl).header("User-Agent", desktopUserAgent).build())
+                  .execute().use { it.body?.string().orEmpty() }
+                if (tvJsonStr.isNotBlank()) {
+                  val tvJson = JSONObject(tvJsonStr)
+                  numSeasonsOnTmdb = tvJson.optInt("number_of_seasons", 1).coerceAtLeast(1)
+                  slug = tvJson.optString("name", titleHint).lowercase().replace("[^a-z0-9]+".toRegex(), "-").trim('-').ifBlank { "series" }
+
+                  if (seasons.isEmpty()) {
+                    for (sIdx in 1..maxOf(numSeasonsOnTmdb, resolvedSeasonNum)) {
+                      val sUrl = if (portal == StreamingPortal.FLIXER) {
+                        "https://flixer.gd/tv/$extractedTmdbId/$sIdx/1"
                       } else {
-                        "https://watchseries.bar/tv/$slug/$extractedTmdbId/$targetSeason/$epNum"
+                        "https://watchseries.bar/tv/$slug/$extractedTmdbId/$sIdx/1"
                       }
-                      episodes.add(
-                        ScrapedEpisodeItem(
-                          episodeNumber = epNum,
-                          title = "الحلقة $epNum: $epName",
-                          url = epUrl,
-                          seasonNumber = targetSeason
-                        )
-                      )
+                      seasons.add(ScrapedSeasonItem(seasonNumber = sIdx, title = "الموسم $sIdx", url = sUrl))
+                    }
+                  }
+
+                  if (episodes.isEmpty()) {
+                    val targetSeason = resolvedSeasonNum.coerceIn(1, numSeasonsOnTmdb)
+                    val seasonApiUrl = "https://api.themoviedb.org/3/tv/$extractedTmdbId/season/$targetSeason?api_key=$tmdbKey&language=en-US"
+                    val sJsonStr = fastScraperClient.newCall(Request.Builder().url(seasonApiUrl).header("User-Agent", desktopUserAgent).build())
+                      .execute().use { it.body?.string().orEmpty() }
+                    if (sJsonStr.isNotBlank()) {
+                      val epArray = JSONObject(sJsonStr).optJSONArray("episodes")
+                      if (epArray != null) {
+                        for (eIdx in 0 until epArray.length()) {
+                          val epObj = epArray.getJSONObject(eIdx)
+                          val epNum = epObj.optInt("episode_number", eIdx + 1)
+                          val epName = epObj.optString("name", "Episode $epNum")
+                          val epUrl = if (portal == StreamingPortal.FLIXER) {
+                            "https://flixer.gd/tv/$extractedTmdbId/$targetSeason/$epNum"
+                          } else {
+                            "https://watchseries.bar/tv/$slug/$extractedTmdbId/$targetSeason/$epNum"
+                          }
+                          episodes.add(
+                            ScrapedEpisodeItem(
+                              episodeNumber = epNum,
+                              title = "الحلقة $epNum: $epName",
+                              url = epUrl,
+                              seasonNumber = targetSeason
+                            )
+                          )
+                        }
+                      }
                     }
                   }
                 }
-              }
+              } catch (_: Exception) {}
             }
-          } catch (_: Exception) {}
 
-          val s = resolvedSeasonNum.coerceIn(1, maxOf(1, numSeasonsOnTmdb))
-          val maxAvailableEp = if (episodes.isNotEmpty()) episodes.maxOf { it.episodeNumber }.coerceAtLeast(1) else 100
-          val e = rawEpNum.coerceIn(1, maxAvailableEp)
-          addServerIfValid("مشغل VidLink الذكي (S${s}E${e})", "https://vidlink.pro/tv/$extractedTmdbId/$s/$e?primaryColor=E50914&autoplay=true", "1080p / 720p / 360p")
-          addServerIfValid("مشغل VidSrc Pro النظيف (S${s}E${e})", "https://vidsrc.cc/v2/embed/tv/$extractedTmdbId/$s/$e", "Auto / 1080p / 480p")
-          addServerIfValid("مشغل SuperEmbed المتعدد (S${s}E${e})", "https://multiembed.mov/?video_id=$extractedTmdbId&tmdb=1&s=$s&e=$e", "Full HD / SD")
-          addServerIfValid("مشغل 2Embed العالمي (S${s}E${e})", "https://www.2embed.cc/embedtv/$extractedTmdbId&s=$s&e=$e", "Multi-Server HD")
+            val s = resolvedSeasonNum.coerceIn(1, maxOf(1, numSeasonsOnTmdb))
+            val maxAvailableEp = if (episodes.isNotEmpty()) episodes.maxOf { it.episodeNumber }.coerceAtLeast(1) else 100
+            val e = rawEpNum.coerceIn(1, maxAvailableEp)
+            addServerIfValid("مشغل VidLink الذكي (S${s}E${e})", "https://vidlink.pro/tv/$extractedTmdbId/$s/$e?primaryColor=E50914&autoplay=true", "1080p / 720p / 360p")
+            addServerIfValid("مشغل VidSrc Pro النظيف (S${s}E${e})", "https://vidsrc.cc/v2/embed/tv/$extractedTmdbId/$s/$e", "Auto / 1080p / 480p")
+            addServerIfValid("مشغل SuperEmbed المتعدد (S${s}E${e})", "https://multiembed.mov/?video_id=$extractedTmdbId&tmdb=1&s=$s&e=$e", "Full HD / SD")
+            addServerIfValid("مشغل 2Embed العالمي (S${s}E${e})", "https://www.2embed.cc/embedtv/$extractedTmdbId&s=$s&e=$e", "Multi-Server HD")
+          }
         }
       }
-    } catch (_: Exception) {}
+    } catch (e: Exception) {
+      AppDiagnosticsLogger.log("Scraper", "Fast scrape exception on $normalizedWatchUrl: ${e.message}", isError = true)
+    }
 
     // Always add the normalized portal watch page itself as a server option
     addServerIfValid(
@@ -1382,29 +1532,33 @@ class SearchAndSubtitlesService {
       seasons.add(ScrapedSeasonItem(seasonNumber = effectiveSeasonNumber, title = "الموسم $effectiveSeasonNumber", url = normalizedWatchUrl))
     }
 
-    val bestEmbedUrl = watchServers.firstOrNull { it.isDirectEmbed }?.embedUrl ?: normalizedWatchUrl
+    val primaryDirectServer = watchServers.firstOrNull {
+      it.isDirectEmbed && !it.embedUrl.startsWith("topcinema-ajax://")
+    }
+    val bestEmbedUrl = primaryDirectServer?.embedUrl ?: normalizedWatchUrl
     var extractedDirectStream = ""
     var extractedStreamReferer = normalizedWatchUrl
     var detectedQualities = emptyList<VideoQualityOption>()
 
+    val scrapeElapsedMs = System.currentTimeMillis() - scrapeStartMs
     AppDiagnosticsLogger.log(
       "Scraper",
-      "Scraped ${seasons.size} seasons, ${episodes.size} episodes, ${watchServers.size} servers from $normalizedWatchUrl"
+      "Fast-scraped ${seasons.size} seasons, ${episodes.size} episodes, ${watchServers.size} servers in ${scrapeElapsedMs}ms from $normalizedWatchUrl"
     )
 
-    // Proactively resolve direct .m3u8 / .mp4 stream URL from server embeds that include streams in their HTML/JS
-    // (Skip dynamic SPA embeds like vidlink.pro / vidsrc.cc / 2embed.cc / multiembed.mov which generate streams in WebView)
-    for (srv in watchServers.filter { it.isDirectEmbed && !isDynamicSpaEmbed(it.embedUrl) }.take(5)) {
-      val resolution = resolveDirectStreamFromEmbed(srv.embedUrl, normalizedWatchUrl)
+    // Resolve ONLY the single active/primary selected server (NEVER loop across 5-6 servers in background)
+    if (!okHttpBlockedByCloudflare && primaryDirectServer != null && !isDynamicSpaEmbed(primaryDirectServer.embedUrl)) {
+      val extractStartMs = System.currentTimeMillis()
+      val resolution = resolveDirectStreamFromEmbed(primaryDirectServer.embedUrl, normalizedWatchUrl)
       if (resolution.primaryStreamUrl.isNotBlank()) {
         extractedDirectStream = resolution.primaryStreamUrl
-        extractedStreamReferer = resolution.refererUrl.ifBlank { srv.embedUrl }
+        extractedStreamReferer = resolution.refererUrl.ifBlank { primaryDirectServer.embedUrl }
         detectedQualities = resolution.detectedQualities
+        val extractElapsedMs = System.currentTimeMillis() - extractStartMs
         AppDiagnosticsLogger.log(
           "StreamExtractor",
-          "Resolved direct stream from [${srv.name}]: ${resolution.primaryStreamUrl} | Qualities: ${detectedQualities.joinToString { it.label }}"
+          "Resolved selected server [${primaryDirectServer.name}] in ${extractElapsedMs}ms: ${resolution.primaryStreamUrl} | Qualities: ${detectedQualities.joinToString { it.label }}"
         )
-        break
       }
     }
 
@@ -1498,10 +1652,34 @@ class SearchAndSubtitlesService {
     refererUrl: String,
     userAgentOverride: String = desktopUserAgent
   ): DirectStreamResolution = withContext(Dispatchers.IO) {
-    if (isDynamicSpaEmbed(embedUrl)) {
-      return@withContext DirectStreamResolution()
+    // Support lazy TopCinema AJAX servers resolved on-demand only when selected
+    var resolvedEmbedUrl = embedUrl
+    if (embedUrl.startsWith("topcinema-ajax://")) {
+      val parts = embedUrl.removePrefix("topcinema-ajax://").split("|")
+      if (parts.size == 3) {
+        resolvedEmbedUrl = resolveTopCinemaAjaxEmbed(
+          origin = parts[0],
+          postId = parts[1],
+          serverNum = parts[2],
+          refererUrl = refererUrl
+        )
+        if (resolvedEmbedUrl.isBlank()) {
+          return@withContext DirectStreamResolution(refererUrl = refererUrl)
+        }
+      } else {
+        return@withContext DirectStreamResolution(refererUrl = refererUrl)
+      }
     }
-    resolveDirectStreamFromEmbed(embedUrl, refererUrl, userAgentOverride)
+
+    if (isDynamicSpaEmbed(resolvedEmbedUrl)) {
+      return@withContext DirectStreamResolution(refererUrl = resolvedEmbedUrl)
+    }
+    val res = resolveDirectStreamFromEmbed(resolvedEmbedUrl, refererUrl, userAgentOverride)
+    if (res.primaryStreamUrl.isBlank() && res.refererUrl.isBlank()) {
+      DirectStreamResolution(refererUrl = resolvedEmbedUrl)
+    } else {
+      res
+    }
   }
 
   suspend fun parseHlsQualitiesFromManifest(
@@ -1530,12 +1708,7 @@ class SearchAndSubtitlesService {
       )
     }
     return try {
-      val origin = try {
-        val u = java.net.URI(refererUrl)
-        "${u.scheme}://${u.host}"
-      } catch (_: Exception) {
-        "https://topcinema.io"
-      }
+      val origin = extractOrigin(refererUrl, "https://topcinemaa.one")
       val cookieHeader = try {
         android.webkit.CookieManager.getInstance()?.getCookie(embedUrl) ?: ""
       } catch (_: Exception) { "" }
@@ -1552,11 +1725,12 @@ class SearchAndSubtitlesService {
         reqBuilder.header("Cookie", cookieHeader)
       }
 
-      val resp = httpClient.newCall(reqBuilder.build()).execute()
-      val html = resp.body?.string() ?: ""
-      if (html.isBlank() || html.contains("Embeds disabled", ignoreCase = true)) {
-        AppDiagnosticsLogger.log("StreamExtractor", "Empty or disabled embed response from $embedUrl (HTTP ${resp.code})")
-        return DirectStreamResolution()
+      val (httpCode, html) = fastScraperClient.newCall(reqBuilder.build()).execute().use { resp ->
+        resp.code to (resp.body?.string().orEmpty())
+      }
+      if (html.isBlank() || html.contains("Embeds disabled", ignoreCase = true) || isCloudflareOrBlockedHtml(httpCode, html)) {
+        AppDiagnosticsLogger.log("StreamExtractor", "Empty/disabled/blocked embed response from $embedUrl (HTTP $httpCode)")
+        return DirectStreamResolution(refererUrl = embedUrl)
       }
 
       val unpacked = unpackDeanEdwards(html)
@@ -1735,48 +1909,49 @@ class SearchAndSubtitlesService {
         reqBuilder.header("Cookie", cookieHeader)
       }
 
-      val resp = httpClient.newCall(reqBuilder.build()).execute()
-      if (resp.isSuccessful) {
-        val manifest = resp.body?.string() ?: ""
-        if (manifest.contains("#EXTM3U")) {
-          val lines = manifest.lines()
-          for (i in lines.indices) {
-            val line = lines[i].trim()
-            if (line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) {
-              val resMatch = Regex("RESOLUTION=\\d+x(\\d+)", RegexOption.IGNORE_CASE).find(line)
-              val nameMatch = Regex("NAME=\"?([0-9]{3,4})p?\"?", RegexOption.IGNORE_CASE).find(line)
-              val height = resMatch?.groupValues?.get(1)?.toIntOrNull()
-                ?: nameMatch?.groupValues?.get(1)?.toIntOrNull()
-                ?: 0
+      fastManifestClient.newCall(reqBuilder.build()).execute().use { resp ->
+        if (resp.isSuccessful) {
+          val manifest = resp.body?.string() ?: ""
+          if (manifest.contains("#EXTM3U")) {
+            val lines = manifest.lines()
+            for (i in lines.indices) {
+              val line = lines[i].trim()
+              if (line.startsWith("#EXT-X-STREAM-INF", ignoreCase = true)) {
+                val resMatch = Regex("RESOLUTION=\\d+x(\\d+)", RegexOption.IGNORE_CASE).find(line)
+                val nameMatch = Regex("NAME=\"?([0-9]{3,4})p?\"?", RegexOption.IGNORE_CASE).find(line)
+                val height = resMatch?.groupValues?.get(1)?.toIntOrNull()
+                  ?: nameMatch?.groupValues?.get(1)?.toIntOrNull()
+                  ?: 0
 
-              var variantUrl = ""
-              for (j in (i + 1) until minOf(i + 4, lines.size)) {
-                val nextLine = lines[j].trim()
-                if (nextLine.isNotBlank() && !nextLine.startsWith("#")) {
-                  variantUrl = resolveManifestVariantUrl(m3u8Url, nextLine)
-                  break
+                var variantUrl = ""
+                for (j in (i + 1) until minOf(i + 4, lines.size)) {
+                  val nextLine = lines[j].trim()
+                  if (nextLine.isNotBlank() && !nextLine.startsWith("#")) {
+                    variantUrl = resolveManifestVariantUrl(m3u8Url, nextLine)
+                    break
+                  }
                 }
-              }
 
-              if (height > 0 && seenHeights.add(height)) {
-                qualities.add(
-                  VideoQualityOption(
-                    id = height.toString(),
-                    label = formatQualityBadge(height),
-                    height = height,
-                    streamUrl = variantUrl
+                if (height > 0 && seenHeights.add(height)) {
+                  qualities.add(
+                    VideoQualityOption(
+                      id = height.toString(),
+                      label = formatQualityBadge(height),
+                      height = height,
+                      streamUrl = variantUrl
+                    )
                   )
-                )
+                }
               }
             }
           }
+        } else {
+          AppDiagnosticsLogger.log(
+            "HLSParser",
+            "Master playlist HTTP ${resp.code} for $m3u8Url (Referer: $refererUrl)",
+            isError = true
+          )
         }
-      } else {
-        AppDiagnosticsLogger.log(
-          "HLSParser",
-          "Master playlist HTTP ${resp.code} for $m3u8Url (Referer: $refererUrl)",
-          isError = true
-        )
       }
     } catch (e: Exception) {
       AppDiagnosticsLogger.log(
@@ -2045,8 +2220,9 @@ class SearchAndSubtitlesService {
       val encoded = URLEncoder.encode(cleanTitle, "UTF-8")
       val searchUrl = "https://api.themoviedb.org/3/search/multi?api_key=$tmdbKey&query=$encoded&include_adult=false"
       val req = Request.Builder().url(searchUrl).header("User-Agent", desktopUserAgent).build()
-      val resp = httpClient.newCall(req).execute()
-      val body = resp.body?.string() ?: return null
+      val body = fastScraperClient.newCall(req).execute().use { resp ->
+        if (resp.isSuccessful) resp.body?.string() else null
+      } ?: return null
       val results = JSONObject(body).optJSONArray("results") ?: return null
       var chosenObj: JSONObject? = null
       for (i in 0 until results.length()) {
@@ -2068,8 +2244,9 @@ class SearchAndSubtitlesService {
 
       val extUrl = "https://api.themoviedb.org/3/$mediaType/$tmdbId/external_ids?api_key=$tmdbKey"
       val extReq = Request.Builder().url(extUrl).header("User-Agent", desktopUserAgent).build()
-      val extResp = httpClient.newCall(extReq).execute()
-      val extBody = extResp.body?.string() ?: ""
+      val extBody = fastScraperClient.newCall(extReq).execute().use { extResp ->
+        if (extResp.isSuccessful) extResp.body?.string() ?: "" else ""
+      }
       val imdbId = if (extBody.isNotBlank()) JSONObject(extBody).optString("imdb_id", "") else ""
 
       TmdbExternalLookup(
@@ -2091,35 +2268,38 @@ class SearchAndSubtitlesService {
     val cleanQuery = query.trim()
     if (cleanQuery.isBlank()) return@coroutineScope cachedEmbedSubtitles
 
+    val startMs = System.currentTimeMillis()
     val seasonNum = extractSeasonNumberFromText(cleanQuery)
     val episodeNum = extractEpisodeNumberFromText(cleanQuery)
     val isLikelySeries = seasonNum != null || episodeNum != null || cleanQuery.contains("مسلسل")
 
-    val tmdbLookup = withContext(Dispatchers.IO) {
-      lookupTmdbAndImdbId(cleanQuery, isLikelySeries)
+    // Strict 4.5s budget for TMDB/IMDb ID lookup so a slow TMDB response never stalls the dialog
+    val tmdbLookup = withTimeoutOrNull(4_500L) {
+      withContext(Dispatchers.IO) {
+        lookupTmdbAndImdbId(cleanQuery, isLikelySeries)
+      }
     }
 
+    // Run Wyzie (covers OpenSubtitles + SubDL + Addic7ed) & OpenSubtitles REST in parallel with hard 7s cap each
     val wyzieDeferred = async(Dispatchers.IO) {
       if (tmdbLookup != null) {
-        searchWyzieSubtitles(
-          lookup = tmdbLookup,
-          season = seasonNum ?: 1,
-          episode = episodeNum ?: 1,
-          languageCode = languageCode,
-          sourceFilter = sourceFilter
-        )
+        withTimeoutOrNull(7_000L) {
+          searchWyzieSubtitles(
+            lookup = tmdbLookup,
+            season = seasonNum ?: 1,
+            episode = episodeNum ?: 1,
+            languageCode = languageCode,
+            sourceFilter = sourceFilter
+          )
+        } ?: emptyList()
       } else emptyList()
     }
 
     val openSubsDeferred = async(Dispatchers.IO) {
       if (sourceFilter == SubtitleSourceFilter.ALL || sourceFilter == SubtitleSourceFilter.OPEN_SUBTITLES) {
-        searchOpenSubtitles(cleanQuery, languageCode, tmdbLookup, seasonNum, episodeNum)
-      } else emptyList()
-    }
-
-    val addic7edDeferred = async(Dispatchers.IO) {
-      if (sourceFilter == SubtitleSourceFilter.ALL || sourceFilter == SubtitleSourceFilter.ADDIC7ED) {
-        searchAddic7ed(cleanQuery, languageCode, tmdbLookup, seasonNum, episodeNum)
+        withTimeoutOrNull(7_000L) {
+          searchOpenSubtitles(cleanQuery, languageCode, tmdbLookup, seasonNum, episodeNum)
+        } ?: emptyList()
       } else emptyList()
     }
 
@@ -2130,10 +2310,14 @@ class SearchAndSubtitlesService {
     combined.addAll(wyzieDeferred.await())
     // 3. Add OpenSubtitles REST results
     combined.addAll(openSubsDeferred.await())
-    // 4. Add Addic7ed results
-    combined.addAll(addic7edDeferred.await())
 
-    combined.distinctBy { it.downloadUrl.ifBlank { it.id } }
+    val deduped = combined.distinctBy { it.downloadUrl.ifBlank { it.id } }
+    val elapsedMs = System.currentTimeMillis() - startMs
+    AppDiagnosticsLogger.log(
+      "SubtitlesSearch",
+      "Finished '${cleanQuery}' ($languageCode, ${sourceFilter.name}) -> ${deduped.size} items in ${elapsedMs}ms"
+    )
+    deduped
   }
 
   private fun searchWyzieSubtitles(
@@ -2163,45 +2347,46 @@ class SearchAndSubtitlesService {
         .header("User-Agent", desktopUserAgent)
         .header("Accept", "application/json")
         .build()
-      val resp = httpClient.newCall(req).execute()
-      if (resp.isSuccessful) {
-        val body = resp.body?.string() ?: ""
-        if (body.trim().startsWith("[")) {
-          val arr = JSONArray(body)
-          for (i in 0 until minOf(arr.length(), 14)) {
-            val obj = arr.optJSONObject(i) ?: continue
-            val dlUrl = obj.optString("url", "").trim()
-            if (!dlUrl.startsWith("http")) continue
-            val fmt = obj.optString("format", "srt").lowercase()
-            val rawSource = obj.optString("source", "OpenSubtitles.org")
-            val sourceLabel = if (sourceFilter == SubtitleSourceFilter.ADDIC7ED || i % 2 == 1) {
-              "Addic7ed.com"
-            } else if (rawSource.contains("subdl", ignoreCase = true)) {
-              "OpenSubtitles • SubDL"
-            } else {
-              "OpenSubtitles.org"
-            }
-            if (sourceFilter == SubtitleSourceFilter.OPEN_SUBTITLES && sourceLabel == "Addic7ed.com") continue
-            if (sourceFilter == SubtitleSourceFilter.ADDIC7ED && sourceLabel != "Addic7ed.com") continue
-
-            val epTag = if (lookup.isSeries) " S%02dE%02d".format(season, episode) else ""
-            val release = obj.optString("release").ifBlank {
-              obj.optString("fileName").ifBlank {
-                "${lookup.title}$epTag • ${obj.optString("display", langLabel)} #${i + 1}"
+      fastScraperClient.newCall(req).execute().use { resp ->
+        if (resp.isSuccessful) {
+          val body = resp.body?.string() ?: ""
+          if (body.trim().startsWith("[")) {
+            val arr = JSONArray(body)
+            for (i in 0 until minOf(arr.length(), 14)) {
+              val obj = arr.optJSONObject(i) ?: continue
+              val dlUrl = obj.optString("url", "").trim()
+              if (!dlUrl.startsWith("http")) continue
+              val fmt = obj.optString("format", "srt").lowercase()
+              val rawSource = obj.optString("source", "OpenSubtitles.org")
+              val sourceLabel = if (sourceFilter == SubtitleSourceFilter.ADDIC7ED || i % 2 == 1) {
+                "Addic7ed.com"
+              } else if (rawSource.contains("subdl", ignoreCase = true)) {
+                "OpenSubtitles • SubDL"
+              } else {
+                "OpenSubtitles.org"
               }
-            }
-            results.add(
-              SubtitleItem(
-                id = "wyzie_${obj.optString("id", i.toString())}_$i",
-                releaseName = release,
-                languageCode = languageCode,
-                languageName = langLabel,
-                format = if (fmt == "vtt") "vtt" else "srt",
-                downloadUrl = dlUrl,
-                source = sourceLabel,
-                rating = 5.0f
+              if (sourceFilter == SubtitleSourceFilter.OPEN_SUBTITLES && sourceLabel == "Addic7ed.com") continue
+              if (sourceFilter == SubtitleSourceFilter.ADDIC7ED && sourceLabel != "Addic7ed.com") continue
+
+              val epTag = if (lookup.isSeries) " S%02dE%02d".format(season, episode) else ""
+              val release = obj.optString("release").ifBlank {
+                obj.optString("fileName").ifBlank {
+                  "${lookup.title}$epTag • ${obj.optString("display", langLabel)} #${i + 1}"
+                }
+              }
+              results.add(
+                SubtitleItem(
+                  id = "wyzie_${obj.optString("id", i.toString())}_$i",
+                  releaseName = release,
+                  languageCode = languageCode,
+                  languageName = langLabel,
+                  format = if (fmt == "vtt") "vtt" else "srt",
+                  downloadUrl = dlUrl,
+                  source = sourceLabel,
+                  rating = 5.0f
+                )
               )
-            )
+            }
           }
         }
       }
@@ -2260,31 +2445,32 @@ class SearchAndSubtitlesService {
         .header("Accept", "application/json")
         .build()
 
-      val resp = httpClient.newCall(req).execute()
-      if (resp.isSuccessful) {
-        val body = resp.body?.string() ?: ""
-        if (body.trim().startsWith("[")) {
-          val arr = JSONArray(body)
-          for (i in 0 until minOf(arr.length(), 10)) {
-            val item = arr.optJSONObject(i) ?: continue
-            val gzLink = item.optString("SubDownloadLink", "").trim()
-            if (!gzLink.startsWith("http")) continue
-            val release = item.optString("MovieReleaseName").ifBlank {
-              item.optString("SubFileName", "$cleanLookupTitle ($langLabel)")
-            }
-            val subFormat = item.optString("SubFormat", "srt").lowercase()
-            list.add(
-              SubtitleItem(
-                id = "os_rest_${item.optString("IDSubtitleFile", UUID.randomUUID().toString())}",
-                releaseName = release,
-                languageCode = languageCode,
-                languageName = langLabel,
-                format = subFormat,
-                downloadUrl = gzLink,
-                source = "OpenSubtitles.org",
-                rating = item.optString("SubRating", "9.6").toFloatOrNull()?.div(2f)?.coerceIn(3.5f, 5.0f) ?: 4.9f
+      fastScraperClient.newCall(req).execute().use { resp ->
+        if (resp.isSuccessful) {
+          val body = resp.body?.string() ?: ""
+          if (body.trim().startsWith("[")) {
+            val arr = JSONArray(body)
+            for (i in 0 until minOf(arr.length(), 10)) {
+              val item = arr.optJSONObject(i) ?: continue
+              val gzLink = item.optString("SubDownloadLink", "").trim()
+              if (!gzLink.startsWith("http")) continue
+              val release = item.optString("MovieReleaseName").ifBlank {
+                item.optString("SubFileName", "$cleanLookupTitle ($langLabel)")
+              }
+              val subFormat = item.optString("SubFormat", "srt").lowercase()
+              list.add(
+                SubtitleItem(
+                  id = "os_rest_${item.optString("IDSubtitleFile", UUID.randomUUID().toString())}",
+                  releaseName = release,
+                  languageCode = languageCode,
+                  languageName = langLabel,
+                  format = subFormat,
+                  downloadUrl = gzLink,
+                  source = "OpenSubtitles.org",
+                  rating = item.optString("SubRating", "9.6").toFloatOrNull()?.div(2f)?.coerceIn(3.5f, 5.0f) ?: 4.9f
+                )
               )
-            )
+            }
           }
         }
       }
@@ -2294,35 +2480,9 @@ class SearchAndSubtitlesService {
     list
   }
 
-  private suspend fun searchAddic7ed(
-    query: String,
-    languageCode: String = "ar",
-    tmdbLookup: TmdbExternalLookup? = null,
-    seasonNum: Int? = null,
-    episodeNum: Int? = null
-  ): List<SubtitleItem> = withContext(Dispatchers.IO) {
-    val list = mutableListOf<SubtitleItem>()
-    val cleanQuery = query.trim()
-    if (cleanQuery.isBlank()) return@withContext emptyList()
-
-    val lookup = tmdbLookup ?: lookupTmdbAndImdbId(cleanQuery, seasonNum != null || episodeNum != null)
-    if (lookup != null) {
-      val wyzieAddic7ed = searchWyzieSubtitles(
-        lookup = lookup,
-        season = seasonNum ?: 1,
-        episode = episodeNum ?: 1,
-        languageCode = languageCode,
-        sourceFilter = SubtitleSourceFilter.ADDIC7ED
-      )
-      list.addAll(wyzieAddic7ed)
-    }
-
-    list
-  }
-
   /**
    * Downloads the full `.srt`, `.vtt`, or `.gz` subtitle file from `item.downloadUrl`,
-   * auto-detects Arabic UTF-8 vs Windows-1256 encoding, parses all timed cues,
+   * auto-detects Arabic UTF-8 vs Windows-1256 encoding, parses all timed cues off the main thread,
    * and writes a local `.vtt` file into `context.cacheDir` so both ExoPlayer and WebView render it!
    */
   suspend fun resolveAndParseSubtitleItem(
@@ -2333,6 +2493,7 @@ class SearchAndSubtitlesService {
       return@withContext item
     }
 
+    val startMs = System.currentTimeMillis()
     try {
       var rawSubText = ""
 
@@ -2345,10 +2506,11 @@ class SearchAndSubtitlesService {
           reqBuilder.header("X-User-Agent", "TemporaryUserAgent")
         }
 
-        val resp = httpClient.newCall(reqBuilder.build()).execute()
-        if (resp.isSuccessful) {
-          val rawBytes = resp.body?.bytes() ?: ByteArray(0)
-          if (rawBytes.isNotEmpty()) {
+        val downloadedText = withTimeoutOrNull(9_000L) {
+          fastScraperClient.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) return@use ""
+            val rawBytes = resp.body?.bytes() ?: ByteArray(0)
+            if (rawBytes.isEmpty()) return@use ""
             val decompressedBytes = if (isGzipCompressed(rawBytes) || item.downloadUrl.lowercase().endsWith(".gz")) {
               try {
                 GZIPInputStream(ByteArrayInputStream(rawBytes)).use { it.readBytes() }
@@ -2358,9 +2520,10 @@ class SearchAndSubtitlesService {
             } else {
               rawBytes
             }
-            rawSubText = decodeSubtitleBytesWithArabicSupport(decompressedBytes)
+            decodeSubtitleBytesWithArabicSupport(decompressedBytes)
           }
-        }
+        } ?: ""
+        rawSubText = downloadedText
       }
 
       if (rawSubText.isBlank() && item.rawVttDataUri.startsWith("data:text/vtt;charset=utf-8;base64,")) {
@@ -2376,9 +2539,10 @@ class SearchAndSubtitlesService {
       cacheFile.writeText(vttContent, Charsets.UTF_8)
       val localUri = Uri.fromFile(cacheFile).toString()
 
+      val elapsedMs = System.currentTimeMillis() - startMs
       AppDiagnosticsLogger.log(
         "Subtitles",
-        "Loaded subtitle '${item.releaseName}' (${parsedCues.size} cues) -> $localUri"
+        "Loaded subtitle '${item.releaseName}' (${parsedCues.size} cues) in ${elapsedMs}ms -> $localUri"
       )
 
       item.copy(
@@ -2425,27 +2589,31 @@ class SearchAndSubtitlesService {
     }
   }
 
+  private val cueBlockSplitRegex = Regex("\n\\s*\n")
+  private val cueTimeRegex = Regex(
+    "((?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3})\\s*-->\\s*((?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3})"
+  )
+  private val assStyleTagRegex = Regex("\\{\\\\[^}]*\\}")
+  private val htmlTagRegex = Regex("<[^>]*>")
+
   fun parseSubtitleCues(rawSubtitleText: String): List<ParsedSubtitleCue> {
     if (rawSubtitleText.isBlank()) return emptyList()
-    val cues = mutableListOf<ParsedSubtitleCue>()
+    val cues = ArrayList<ParsedSubtitleCue>(256)
     val clean = rawSubtitleText
       .replace("\uFEFF", "")
       .replace("\r\n", "\n")
       .replace("\r", "\n")
       .trim()
 
-    val blocks = clean.split(Regex("\n\\s*\n"))
-    val timeRegex = Regex(
-      "((?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3})\\s*-->\\s*((?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3})"
-    )
+    val blocks = clean.split(cueBlockSplitRegex)
 
     for (block in blocks) {
       val lines = block.lines().map { it.trim() }.filter { it.isNotEmpty() }
       if (lines.isEmpty()) continue
-      val timeLineIndex = lines.indexOfFirst { timeRegex.containsMatchIn(it) }
+      val timeLineIndex = lines.indexOfFirst { it.contains("-->") && cueTimeRegex.containsMatchIn(it) }
       if (timeLineIndex == -1) continue
 
-      val match = timeRegex.find(lines[timeLineIndex]) ?: continue
+      val match = cueTimeRegex.find(lines[timeLineIndex]) ?: continue
       val startMs = parseTimestampToMs(match.groupValues[1])
       val endMs = parseTimestampToMs(match.groupValues[2])
       if (endMs <= startMs) continue
@@ -2453,8 +2621,8 @@ class SearchAndSubtitlesService {
       val textLines = lines.subList(timeLineIndex + 1, lines.size)
         .map { line ->
           line
-            .replace(Regex("\\{\\\\[^}]*\\}"), "") // Strip ASS/SSA style tags like {\an8}
-            .replace(Regex("<[^>]*>"), "")         // Strip HTML tags like <i>, <font>
+            .replace(assStyleTagRegex, "") // Strip ASS/SSA style tags like {\an8}
+            .replace(htmlTagRegex, "")     // Strip HTML tags like <i>, <font>
             .trim()
         }
         .filter { it.isNotEmpty() }
@@ -2469,7 +2637,8 @@ class SearchAndSubtitlesService {
         )
       }
     }
-    return cues.sortedBy { it.startMs }
+    cues.sortBy { it.startMs }
+    return cues
   }
 
   private fun parseTimestampToMs(ts: String): Long {

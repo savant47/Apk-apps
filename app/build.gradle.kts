@@ -17,8 +17,14 @@ android {
     applicationId = "com.aistudio.assertv"
     minSdk = 24
     targetSdk = 36
-    versionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull() ?: 35
-    versionName = System.getenv("APP_VERSION_NAME") ?: "1.0.35"
+    val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+    val dynamicVersionCode = System.getenv("APP_VERSION_CODE")?.toIntOrNull()
+      ?: ciRunNumber?.plus(100)
+      ?: 100
+    val dynamicVersionName = System.getenv("APP_VERSION_NAME")?.takeIf { it.isNotBlank() }
+      ?: "1.0.$dynamicVersionCode"
+    versionCode = dynamicVersionCode
+    versionName = dynamicVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -44,7 +50,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
@@ -125,6 +132,7 @@ dependencies {
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation(libs.jsoup)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

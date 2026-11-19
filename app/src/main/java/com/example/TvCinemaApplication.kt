@@ -1,11 +1,18 @@
 package com.example
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.os.Build
 import android.system.Os
 import android.webkit.WebView
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
+import com.example.data.AppDiagnosticsLogger
+import java.io.File
 
-class TvCinemaApplication : Application() {
+class TvCinemaApplication : Application(), ImageLoaderFactory {
 
   companion object {
     init {
@@ -27,11 +34,16 @@ class TvCinemaApplication : Application() {
     super.onCreate()
 
     // Install global persistent crash handler BEFORE anything else so fatal crashes
-    // on low-RAM Android TV devices (e.g. Xiaomi TV Stick) are saved to last_crash_log.txt.
+    // on 1GB RAM Android TV devices (e.g. Xiaomi MiTV-AESP0) are saved to last_crash_log.txt.
     val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
     Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
       try {
-        com.example.data.AppDiagnosticsLogger.saveCrashLog(
+        AppDiagnosticsLogger.recordBreadcrumb(
+          context = applicationContext,
+          stage = "UNCAUGHT_CRASH",
+          detail = "${thread.name}: ${throwable.javaClass.simpleName}: ${throwable.message?.take(120) ?: ""}"
+        )
+        AppDiagnosticsLogger.saveCrashLog(
           context = applicationContext,
           threadName = thread.name,
           throwable = throwable
@@ -42,17 +54,24 @@ class TvCinemaApplication : Application() {
       }
     }
 
-    // Clean up potentially corrupted index and pre-create WebView Code Cache directories to prevent opendir and index reconstruction errors
+    // Record startup breadcrumb so OS-level SIGKILL events leave a clean boundary
+    AppDiagnosticsLogger.recordBreadcrumb(
+      context = applicationContext,
+      stage = "APP_START",
+      detail = "v${BuildConfig.VERSION_NAME} (SDK ${Build.VERSION.SDK_INT})"
+    )
+
+    // Clean up potentially corrupted index and pre-create WebView Code Cache directories
     try {
-      val httpCacheDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache")
-      val indexFile = java.io.File(httpCacheDir, "index")
-      val jsCacheDir = java.io.File(httpCacheDir, "Code Cache/js")
-      val wasmCacheDir = java.io.File(httpCacheDir, "Code Cache/wasm")
-      
+      val httpCacheDir = File(cacheDir, "WebView/Default/HTTP Cache")
+      val indexFile = File(httpCacheDir, "index")
+      val jsCacheDir = File(httpCacheDir, "Code Cache/js")
+      val wasmCacheDir = File(httpCacheDir, "Code Cache/wasm")
+
       if (indexFile.exists() && (!jsCacheDir.exists() || !wasmCacheDir.exists())) {
         indexFile.delete()
       }
-      
+
       if (!jsCacheDir.exists()) jsCacheDir.mkdirs()
       if (!wasmCacheDir.exists()) wasmCacheDir.mkdirs()
     } catch (_: Throwable) {}
@@ -68,11 +87,41 @@ class TvCinemaApplication : Application() {
     }
   }
 
+  /**
+   * Ultra-lightweight Coil ImageLoader capped strictly for 1GB RAM Android TV 9 devices:
+   * - Max 10% app heap memory cache
+   * - Small 16MB disk cache
+   * - Hardware bitmaps disabled on Android 9 (SDK <= 28) to prevent GPU GL_INVALID_VALUE / buffer exhaustion
+   * - RGB_565 bitmaps on Android 9 to halve decoded poster RAM usage
+   */
+  override fun newImageLoader(): ImageLoader {
+    val isAndroid9OrLower = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+    return ImageLoader.Builder(this)
+      .memoryCache {
+        MemoryCache.Builder(this)
+          .maxSizePercent(0.10)
+          .strongReferencesEnabled(true)
+          .weakReferencesEnabled(false)
+          .build()
+      }
+      .diskCache {
+        DiskCache.Builder()
+          .directory(File(cacheDir, "image_cache"))
+          .maxSizeBytes(16L * 1024L * 1024L)
+          .build()
+      }
+      .allowHardware(!isAndroid9OrLower)
+      .bitmapConfig(if (isAndroid9OrLower) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888)
+      .allowRgb565(true)
+      .crossfade(false)
+      .respectCacheHeaders(false)
+      .build()
+  }
+
   override fun onTrimMemory(level: Int) {
     super.onTrimMemory(level)
     try {
-      if (level >= TRIM_MEMORY_MODERATE) {
-        // Clean up memory cache on low-memory 2GB RAM TV boxes
+      if (level >= TRIM_MEMORY_RUNNING_MODERATE) {
         coil.Coil.imageLoader(this).memoryCache?.clear()
       }
     } catch (_: Throwable) {}
@@ -81,6 +130,11 @@ class TvCinemaApplication : Application() {
   override fun onLowMemory() {
     super.onLowMemory()
     try {
+      AppDiagnosticsLogger.recordBreadcrumb(
+        context = applicationContext,
+        stage = "LOW_MEMORY",
+        detail = "System triggered onLowMemory() — clearing Coil cache"
+      )
       coil.Coil.imageLoader(this).memoryCache?.clear()
     } catch (_: Throwable) {}
   }

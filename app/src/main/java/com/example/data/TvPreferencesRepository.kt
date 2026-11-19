@@ -322,12 +322,16 @@ class TvPreferencesRepository(context: Context) {
 
   fun addHistory(title: String, url: String, portal: StreamingPortal) {
     if (url.isBlank() || url.startsWith("about:") || url.startsWith("data:")) return
-    val current = _historyFlow.value.filterNot { it.url == url }.toMutableList()
-    val cleanTitle = title.ifBlank { url }
+    // CRITICAL: Never persist third-party embed iframe URLs (vidtube, vidlink, vidsrc, etc.) or raw streams
+    // as Watch History entries — Resume Playback must always reopen the canonical Portal Watch Page!
+    if (StreamingPortal.isEmbedIframeUrl(url)) return
+    val canonicalUrl = StreamingPortal.sanitizePortalWatchUrl(url, portal)
+    val current = _historyFlow.value.filterNot { it.url == canonicalUrl }.toMutableList()
+    val cleanTitle = title.ifBlank { canonicalUrl }
     current.add(0, HistoryEntry(
       id = UUID.randomUUID().toString(),
       title = cleanTitle,
-      url = url,
+      url = canonicalUrl,
       portal = portal
     ))
     // Keep last 40 visited entries
@@ -398,12 +402,15 @@ class TvPreferencesRepository(context: Context) {
       val jsonArray = JSONArray(raw)
       for (i in 0 until jsonArray.length()) {
         val obj = jsonArray.getJSONObject(i)
+        val portal = StreamingPortal.fromId(obj.getString("portal"))
+        val rawUrl = obj.getString("url")
+        val sanitizedUrl = StreamingPortal.sanitizePortalWatchUrl(rawUrl, portal)
         list.add(
           HistoryEntry(
             id = obj.getString("id"),
             title = obj.getString("title"),
-            url = obj.getString("url"),
-            portal = StreamingPortal.fromId(obj.getString("portal")),
+            url = sanitizedUrl,
+            portal = portal,
             timestamp = obj.optLong("timestamp", System.currentTimeMillis())
           )
         )

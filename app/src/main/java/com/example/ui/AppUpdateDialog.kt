@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.BuildConfig
+import com.example.data.ApkInstallCheckStatus
 import com.example.data.AppUpdateManager
 import com.example.data.TvPreferencesRepository
 import com.example.data.UpdateDownloadState
@@ -96,6 +97,8 @@ fun AppUpdateDialog(
   val updateManager = remember { AppUpdateManager(context) }
 
   val currentVersion = BuildConfig.VERSION_NAME
+  val currentVersionCode = BuildConfig.VERSION_CODE
+  val installedShaShort = remember { updateManager.getShortFingerprint(updateManager.getInstalledSigningSha256()) }
 
   var repoInput by remember { mutableStateOf(repository.getGitHubRepo()) }
   var tokenInput by remember { mutableStateOf(repository.getGitHubToken()) }
@@ -253,10 +256,17 @@ fun AppUpdateDialog(
               )
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                  text = "الإصدار المثبت حالياً: v$currentVersion",
+                  text = "الإصدار المثبت حالياً: v$currentVersion (Code $currentVersionCode)",
                   color = Color.White,
                   fontSize = 13.5.sp,
                   fontWeight = FontWeight.Bold
+                )
+                Text(
+                  text = "بصمة التوقيع SHA-256: $installedShaShort",
+                  color = Color.LightGray,
+                  fontSize = 10.5.sp,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
                 )
                 Text(
                   text = "سجل المشاهدة والمفضلات محمية ومحفوظة بالكامل 🛡️",
@@ -613,10 +623,18 @@ fun AppUpdateDialog(
             }
 
             is UpdateDownloadState.ReadyToInstall -> {
+              val apkCheck = remember(state.apkFile.absolutePath, state.apkFile.length()) {
+                updateManager.inspectDownloadedApk(state.apkFile)
+              }
+              val hasConflict = apkCheck.status != ApkInstallCheckStatus.OK
+
               Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = CinemaSuccess.copy(alpha = 0.15f),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, CinemaSuccess),
+                color = if (hasConflict) Color(0xFF332211) else CinemaSuccess.copy(alpha = 0.15f),
+                border = androidx.compose.foundation.BorderStroke(
+                  1.5.dp,
+                  if (hasConflict) Color(0xFFFFB74D) else CinemaSuccess
+                ),
                 modifier = Modifier.fillMaxWidth()
               ) {
                 Column(
@@ -629,26 +647,62 @@ fun AppUpdateDialog(
                   Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = CinemaSuccess,
+                    tint = if (hasConflict) Color(0xFFFFB74D) else CinemaSuccess,
                     modifier = Modifier.size(36.dp)
                   )
                   Text(
-                    text = "اكتمل التنزيل بنجاح! جاهز للتثبيت 🎬",
+                    text = if (hasConflict) {
+                      "⚠️ تنبيه هام قبل التثبيت (تعارض في الحزمة)"
+                    } else {
+                      "اكتمل التنزيل بنجاح! التوقيع مطابق وجاهز للتثبيت 🎬"
+                    },
                     color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                  )
-                  Text(
-                    text = "اضغط الزر بالأسفل لفتح مثبت الأندرويد. سجل المشاهدة والمفضلات لن تحذف.",
-                    color = Color.LightGray,
-                    fontSize = 11.5.sp,
+                    fontSize = 14.5.sp,
+                    fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                   )
 
+                  if (hasConflict) {
+                    Surface(
+                      shape = RoundedCornerShape(8.dp),
+                      color = Color(0xFF24140A),
+                      border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB74D).copy(alpha = 0.6f)),
+                      modifier = Modifier.fillMaxWidth()
+                    ) {
+                      Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                      ) {
+                        Text(
+                          text = apkCheck.warningMessageArabic,
+                          color = Color(0xFFFFE0B2),
+                          fontSize = 11.5.sp
+                        )
+                        Text(
+                          text = "المثبت: Code ${apkCheck.installedVersionCode} | ${updateManager.getShortFingerprint(apkCheck.installedSha256)}",
+                          color = Color.LightGray,
+                          fontSize = 10.sp
+                        )
+                        Text(
+                          text = "الجديد: Code ${apkCheck.apkVersionCode} | ${updateManager.getShortFingerprint(apkCheck.apkSha256)}",
+                          color = Color(0xFFFFCC80),
+                          fontSize = 10.sp
+                        )
+                      }
+                    }
+                  } else {
+                    Text(
+                      text = "التحديث مطابق بالكامل (Code ${apkCheck.installedVersionCode} ➔ ${apkCheck.apkVersionCode}). اضغط الزر بالأسفل لفتح مثبت الأندرويد دون فقدان بياناتك.",
+                      color = Color.LightGray,
+                      fontSize = 11.5.sp,
+                      textAlign = TextAlign.Center
+                    )
+                  }
+
                   TvDialogButton(
-                    text = "تثبيت التحديث الآن 🚀",
+                    text = if (hasConflict) "محاولة التثبيت على أي حال" else "تثبيت التحديث الآن 🚀",
                     icon = Icons.Default.SystemUpdate,
-                    containerColor = CinemaSuccess,
+                    containerColor = if (hasConflict) Color(0xFFFFB74D) else CinemaSuccess,
                     contentColor = Color.Black,
                     onClick = { installApk(state.apkFile) },
                     testTag = "btn_install_apk"

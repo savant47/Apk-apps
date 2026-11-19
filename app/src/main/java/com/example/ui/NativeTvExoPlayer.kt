@@ -84,6 +84,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -131,6 +132,7 @@ import com.example.model.VideoQualityOption
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
+import com.example.ui.theme.CinemaFocusGlow
 import com.example.ui.theme.CinemaPrimary
 import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSuccess
@@ -172,6 +174,7 @@ fun NativeTvExoPlayer(
   onOpenSubtitles: () -> Unit = {},
   onOpenDiagnostics: () -> Unit = {},
   onQualitiesDetected: (List<VideoQualityOption>) -> Unit = {},
+  externalPause: Boolean = false,
   onFallbackToWebPlayer: () -> Unit = onDismiss
 ) {
   val context = LocalContext.current
@@ -198,6 +201,8 @@ fun NativeTvExoPlayer(
   var lastKnownGoodPositionMs by remember(videoUrl) { mutableLongStateOf(0L) }
   var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
   var isPlayerReleased by remember { mutableStateOf(false) }
+  var wasPlayingBeforeExternalPause by remember { mutableStateOf(false) }
+  val latestExternalPause by rememberUpdatedState(externalPause)
 
   // Cross-Source Resume Playback State
   var showResumePrompt by remember(contentKey, savedResumePositionMs) {
@@ -254,17 +259,18 @@ fun NativeTvExoPlayer(
     }
   }
 
-  // Balanced Low-RAM LoadControl (15-35s buffer + 24MB memory cap for Xiaomi TV Stick)
+  // Ultra-Lightweight 1GB RAM LoadControl (10-20s buffer + strict 12MB memory ceiling)
   val balancedLowRamLoadControl = remember {
     DefaultLoadControl.Builder()
       .setBufferDurationsMs(
-        15_000, // minBufferMs (15s smooth cushion)
-        35_000, // maxBufferMs (35s max prevents OOM on low-RAM TV Stick)
-        2_500,  // bufferForPlaybackMs (fast start)
-        5_000   // bufferForPlaybackAfterRebufferMs (prevents freeze/skip loops)
+        10_000, // minBufferMs (10s smooth cushion)
+        20_000, // maxBufferMs (20s ceiling for 1GB RAM Android TV)
+        2_000,  // bufferForPlaybackMs (fast start)
+        3_500   // bufferForPlaybackAfterRebufferMs (recovers cleanly without RAM spikes)
       )
-      .setTargetBufferBytes(24 * 1024 * 1024)
+      .setTargetBufferBytes(12 * 1024 * 1024)
       .setPrioritizeTimeOverSizeThresholds(false)
+      .setBackBuffer(2_000, false)
       .build()
   }
 
@@ -291,6 +297,22 @@ fun NativeTvExoPlayer(
       val dur = player.duration.coerceAtLeast(0L)
       if (pos > 15_000L || (dur > 0L && pos >= (dur * 0.95).toLong())) {
         latestOnSavePlaybackProgress(pos, dur)
+      }
+    } catch (_: Throwable) {}
+  }
+
+  // Auto-pause ExoPlayer when heavy modal dialogs (like Subtitles) open to prevent 1GB RAM/CPU freezes
+  LaunchedEffect(externalPause, player) {
+    if (isPlayerReleased) return@LaunchedEffect
+    try {
+      if (externalPause) {
+        wasPlayingBeforeExternalPause = player.isPlaying || player.playWhenReady
+        player.playWhenReady = false
+        player.pause()
+      } else if (wasPlayingBeforeExternalPause && !showResumePrompt) {
+        wasPlayingBeforeExternalPause = false
+        player.playWhenReady = true
+        player.play()
       }
     } catch (_: Throwable) {}
   }
@@ -462,13 +484,14 @@ fun NativeTvExoPlayer(
         if (playbackState == Player.STATE_READY) {
           AppDiagnosticsLogger.activePlayerMode = "Native ExoPlayer (يعمل بنجاح ✅)"
           AppDiagnosticsLogger.log("ExoPlayer", "Playback STATE_READY for $videoUrl")
+          AppDiagnosticsLogger.recordBreadcrumb(context, "EXOPLAYER_READY", title.ifBlank { videoUrl })
           if (pendingResumeSeekMs > 0L) {
             val targetMs = pendingResumeSeekMs
             pendingResumeSeekMs = 0L
             try {
               player.seekTo(targetMs)
               lastKnownGoodPositionMs = targetMs
-              player.playWhenReady = true
+              player.playWhenReady = !latestExternalPause
               AppDiagnosticsLogger.log("Resume", "Seeked to saved resume position ${targetMs}ms on STATE_READY")
             } catch (_: Throwable) {}
           }
@@ -517,6 +540,7 @@ fun NativeTvExoPlayer(
           "Attempt $retryAttempt failed ($httpCode, eof=$isUnexpectedEof, pos=${lastKnownGoodPositionMs}ms): ${cause?.message ?: error.message} | URL=$videoUrl",
           isError = true
         )
+        AppDiagnosticsLogger.recordBreadcrumb(context, "EXOPLAYER_ERR", "$httpCode attempt=$retryAttempt")
         val maxRetries = if (isUnexpectedEof) 4 else 2
         if (retryAttempt < maxRetries) {
           retryAttempt += 1
@@ -571,6 +595,7 @@ fun NativeTvExoPlayer(
       try {
         streamingOkHttpClient.connectionPool.evictAll()
       } catch (_: Throwable) {}
+      AppDiagnosticsLogger.recordBreadcrumb(context, "EXOPLAYER_RELEASE", "Released ExoPlayer + SurfaceView")
     }
   }
 
@@ -759,7 +784,7 @@ fun NativeTvExoPlayer(
         val mediaItem = mediaItemBuilder.build()
         player.setMediaItem(mediaItem, resumePositionMs)
         player.prepare()
-        player.playWhenReady = !showResumePrompt
+        player.playWhenReady = !showResumePrompt && !latestExternalPause
       } catch (t: Throwable) {
         val errMsg = "${t.javaClass.simpleName}: ${t.message ?: "Unsupported stream format"}"
         AppDiagnosticsLogger.log(
@@ -853,13 +878,15 @@ fun NativeTvExoPlayer(
     }
   }
 
+  var isOverlayControlFocused by remember { mutableStateOf(false) }
+
   Box(
     modifier = modifier
       .fillMaxSize()
       .background(Color.Black)
       .onPreviewKeyEvent { keyEvent ->
-        // Let the D-pad navigate freely inside the Resume Playback or Gear Settings overlays
-        if (showResumePrompt || showGearSettingsMenu) {
+        // Let the D-pad navigate freely inside Resume Playback, Gear Settings, Next Episode banner, or focused top bar controls
+        if (showResumePrompt || showGearSettingsMenu || showNextEpisodeCountdown || isOverlayControlFocused) {
           return@onPreviewKeyEvent false
         }
         when (keyEvent.key) {
@@ -1184,32 +1211,42 @@ fun NativeTvExoPlayer(
           // Left side: Clean, non-overlapping compact pills (Gear Quality, Subtitles, Aspect Ratio, Web Fallback, Fullscreen)
           Row(
             horizontalArrangement = Arrangement.spacedBy(5.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.onFocusChanged { focusState ->
+              isOverlayControlFocused = focusState.hasFocus
+            }
           ) {
             // 1. Gear Quality & Settings Button
+            val gearInteraction = remember { MutableInteractionSource() }
+            val isGearFocused by gearInteraction.collectIsFocusedAsState()
             Surface(
               onClick = { showGearSettingsMenu = true },
-              color = CinemaSurface,
+              interactionSource = gearInteraction,
+              color = if (isGearFocused) CinemaFocusGlow else CinemaSurface,
               shape = RoundedCornerShape(8.dp),
-              border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.8f)),
+              border = BorderStroke(
+                width = if (isGearFocused) 2.dp else 1.dp,
+                color = if (isGearFocused) Color.White else CinemaAccent.copy(alpha = 0.8f)
+              ),
               modifier = Modifier
-                .heightIn(min = 28.dp)
+                .heightIn(min = 32.dp)
+                .focusable(interactionSource = gearInteraction)
                 .testTag("exo_quality_gear_button")
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 Icon(
                   imageVector = Icons.Default.Settings,
                   contentDescription = "إعدادات الجودة والمشغل",
-                  tint = CinemaAccent,
+                  tint = if (isGearFocused) Color.Black else CinemaAccent,
                   modifier = Modifier.size(13.dp)
                 )
                 Spacer(modifier = Modifier.width(3.dp))
                 Text(
                   text = activeQualityShortBadge,
-                  color = Color.White,
+                  color = if (isGearFocused) Color.Black else Color.White,
                   fontSize = 9.5.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
@@ -1220,33 +1257,40 @@ fun NativeTvExoPlayer(
 
             // 1.5 Quick Next Episode Button (shown for series when a next episode is available)
             if (!nextEpisodeTitle.isNullOrBlank()) {
+              val nextEpInteraction = remember { MutableInteractionSource() }
+              val isNextEpFocused by nextEpInteraction.collectIsFocusedAsState()
               Surface(
                 onClick = {
                   hasTriggeredAutoNext = true
                   showNextEpisodeCountdown = false
                   onPlayNextEpisode()
                 },
-                color = CinemaSuccess.copy(alpha = 0.22f),
+                interactionSource = nextEpInteraction,
+                color = if (isNextEpFocused) CinemaFocusGlow else CinemaSuccess.copy(alpha = 0.22f),
                 shape = RoundedCornerShape(8.dp),
-                border = BorderStroke(1.dp, CinemaSuccess),
+                border = BorderStroke(
+                  width = if (isNextEpFocused) 2.dp else 1.dp,
+                  color = if (isNextEpFocused) Color.White else CinemaSuccess
+                ),
                 modifier = Modifier
-                  .heightIn(min = 28.dp)
+                  .heightIn(min = 32.dp)
+                  .focusable(interactionSource = nextEpInteraction)
                   .testTag("exo_top_next_episode_button")
               ) {
                 Row(
-                  modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                   verticalAlignment = Alignment.CenterVertically
                 ) {
                   Icon(
                     imageVector = Icons.Default.SkipNext,
                     contentDescription = "تشغيل الحلقة التالية",
-                    tint = CinemaSuccess,
+                    tint = if (isNextEpFocused) Color.Black else CinemaSuccess,
                     modifier = Modifier.size(14.dp)
                   )
                   Spacer(modifier = Modifier.width(2.dp))
                   Text(
                     text = "التالية",
-                    color = Color.White,
+                    color = if (isNextEpFocused) Color.Black else Color.White,
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
@@ -1290,28 +1334,40 @@ fun NativeTvExoPlayer(
             )
 
             // 5. Fullscreen Button
+            val fsInteraction = remember { MutableInteractionSource() }
+            val isFsFocused by fsInteraction.collectIsFocusedAsState()
             Surface(
               onClick = onToggleFullscreen,
-              color = if (isFullscreen) ClipboxWhite else CinemaPrimary,
+              interactionSource = fsInteraction,
+              color = when {
+                isFsFocused -> CinemaFocusGlow
+                isFullscreen -> ClipboxWhite
+                else -> CinemaPrimary
+              },
               shape = RoundedCornerShape(8.dp),
+              border = BorderStroke(
+                width = if (isFsFocused) 2.dp else 1.dp,
+                color = if (isFsFocused) Color.White else Color.Transparent
+              ),
               modifier = Modifier
-                .heightIn(min = 28.dp)
+                .heightIn(min = 32.dp)
+                .focusable(interactionSource = fsInteraction)
                 .testTag("exo_fullscreen_button")
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 Icon(
                   imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
                   contentDescription = if (isFullscreen) "تصغير" else "ملء الشاشة",
-                  tint = if (isFullscreen) Color.Black else Color.White,
+                  tint = if (isFullscreen || isFsFocused) Color.Black else Color.White,
                   modifier = Modifier.size(14.dp)
                 )
                 Spacer(modifier = Modifier.width(3.dp))
                 Text(
                   text = if (isFullscreen) "تصغير" else "تكبير",
-                  color = if (isFullscreen) Color.Black else Color.White,
+                  color = if (isFullscreen || isFsFocused) Color.Black else Color.White,
                   fontSize = 9.5.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
@@ -2034,21 +2090,28 @@ private fun PlayerCompactSquareBtn(
   onClick: () -> Unit,
   testTag: String
 ) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val isFocused by interactionSource.collectIsFocusedAsState()
   Surface(
     onClick = onClick,
-    color = CinemaSurface,
+    interactionSource = interactionSource,
+    color = if (isFocused) CinemaFocusGlow else CinemaSurface,
     shape = RoundedCornerShape(8.dp),
-    border = BorderStroke(1.dp, CinemaBorder),
+    border = BorderStroke(
+      width = if (isFocused) 2.dp else 1.dp,
+      color = if (isFocused) Color.White else CinemaBorder
+    ),
     modifier = Modifier
-      .size(28.dp)
+      .size(32.dp)
+      .focusable(interactionSource = interactionSource)
       .testTag(testTag)
   ) {
     Box(contentAlignment = Alignment.Center) {
       Icon(
         imageVector = icon,
         contentDescription = contentDescription,
-        tint = tint,
-        modifier = Modifier.size(14.dp)
+        tint = if (isFocused) Color.Black else tint,
+        modifier = Modifier.size(15.dp)
       )
     }
   }

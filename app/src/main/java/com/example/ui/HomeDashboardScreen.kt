@@ -86,6 +86,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import android.os.Build
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -96,6 +98,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.AppDisplayMode
 import com.example.data.SearchAndSubtitlesService
 import com.example.data.TvPreferencesRepository
@@ -864,9 +867,17 @@ fun ClipboxHeroBanner(
       .clickable { onPlayClick() }
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
-      // Backdrop Artwork
+      // Backdrop Artwork (downsampled & software bitmap on Android 9 for 1GB RAM TV boxes)
+      val heroCtx = LocalContext.current
       AsyncImage(
-        model = item.backdropUrl.ifBlank { item.posterUrl },
+        model = remember(item.backdropUrl, item.posterUrl) {
+          ImageRequest.Builder(heroCtx)
+            .data(item.backdropUrl.ifBlank { item.posterUrl })
+            .size(450, 300)
+            .allowHardware(Build.VERSION.SDK_INT > Build.VERSION_CODES.P)
+            .crossfade(false)
+            .build()
+        },
         contentDescription = item.title,
         contentScale = ContentScale.Crop,
         modifier = Modifier.fillMaxSize()
@@ -1098,8 +1109,16 @@ fun ClipboxPosterCard(
           shape = RoundedCornerShape(14.dp)
         )
     ) {
+      val posterCtx = LocalContext.current
       AsyncImage(
-        model = item.posterUrl,
+        model = remember(item.posterUrl) {
+          ImageRequest.Builder(posterCtx)
+            .data(item.posterUrl)
+            .size(300, 450)
+            .allowHardware(Build.VERSION.SDK_INT > Build.VERSION_CODES.P)
+            .crossfade(false)
+            .build()
+        },
         contentDescription = item.title,
         contentScale = ContentScale.Crop,
         modifier = Modifier.fillMaxSize()
@@ -1682,8 +1701,16 @@ fun SearchResultCard(
         )
     ) {
       if (item.posterUrl.isNotBlank()) {
+        val searchPosterCtx = LocalContext.current
         AsyncImage(
-          model = item.posterUrl,
+          model = remember(item.posterUrl) {
+            ImageRequest.Builder(searchPosterCtx)
+              .data(item.posterUrl)
+              .size(300, 450)
+              .allowHardware(Build.VERSION.SDK_INT > Build.VERSION_CODES.P)
+              .crossfade(false)
+              .build()
+          },
           contentDescription = item.title,
           contentScale = ContentScale.Crop,
           modifier = Modifier.fillMaxSize()

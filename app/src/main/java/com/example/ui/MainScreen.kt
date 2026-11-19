@@ -99,9 +99,28 @@ import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.ClipboxWhite
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import java.net.URLDecoder
+import java.util.concurrent.atomic.AtomicReference
+
+private data class EpisodeScrapeRequest(
+  val requestKey: String,
+  val targetUrl: String,
+  val portal: StreamingPortal,
+  val titleHint: String,
+  val selectedSeasonNum: Int,
+  val autoLoadBestEmbed: Boolean,
+  val nonce: Long
+)
+
+private data class PendingWebViewLoad(
+  val targetUrl: String,
+  val isDirectEmbed: Boolean,
+  val refererPage: String,
+  val isGeneralBrowser: Boolean
+)
 
 interface KeyEventProvider {
   fun setKeyEventCallback(callback: ActivityKeyEventCallback?)
@@ -163,6 +182,7 @@ fun MainScreen(
     mutableStateOf(activePortal.homeUrl.replace("topcinema.site", "topcinema.io"))
   }
   var activeWatchPageUrl by remember { mutableStateOf("") }
+  var activeServerName by remember { mutableStateOf("") }
   var activeEmbedRefererUrl by remember { mutableStateOf("") }
   var isCurrentUrlDirectEmbed by remember { mutableStateOf(false) }
 
@@ -174,10 +194,20 @@ fun MainScreen(
   val bookmarks by repository.bookmarksFlow.collectAsState()
   val history by repository.historyFlow.collectAsState()
 
-  // References
+  // References & Zero-Background-WebView Lifecycle State
   var webViewRef by remember { mutableStateOf<WebView?>(null) }
   var fullscreenContainerRef by remember { mutableStateOf<FrameLayout?>(null) }
   var webChromeClientRef by remember { mutableStateOf<TvWebChromeClient?>(null) }
+  var isWebViewMounted by remember { mutableStateOf(false) }
+  var pendingWebViewLoad by remember { mutableStateOf<PendingWebViewLoad?>(null) }
+
+  // Atomic deduplication guards so Compose recompositions NEVER double-load portals or embeds
+  val inFlightScrapeKeyRef = remember { AtomicReference<String?>(null) }
+  val lastResolvedScrapeKeyRef = remember { AtomicReference<String?>(null) }
+  val lastWebViewLoadedKeyRef = remember { AtomicReference<String?>(null) }
+  var activeEpisodeScrapeRequest by remember { mutableStateOf<EpisodeScrapeRequest?>(null) }
+  var scrapeForceNonce by remember { mutableLongStateOf(0L) }
+  var activeServerSelectionJob by remember { mutableStateOf<Job?>(null) }
 
   var lastBackPressTime by remember { mutableStateOf(0L) }
   var webViewRecreateKey by remember { mutableIntStateOf(0) }
@@ -254,31 +284,56 @@ fun MainScreen(
     AppDiagnosticsLogger.detectedQualitiesSummary = merged.joinToString { it.label }
   }
 
+  /**
+   * Hard-destroys the extractor WebView and kills its ~150MB Chromium renderer process
+   * immediately once NativeTvExoPlayer takes over or the user exits the watch view.
+   */
+  fun hardDestroyWebView(reason: String) {
+    val wv = webViewRef
+    webViewRef = null
+    fullscreenContainerRef = null
+    webChromeClientRef = null
+    pendingWebViewLoad = null
+    lastWebViewLoadedKeyRef.set(null)
+    isWebViewMounted = false
+    if (wv != null) {
+      try {
+        wv.stopLoading()
+        wv.removeJavascriptInterface("AndroidTvBridge")
+        wv.loadUrl("about:blank")
+        wv.onPause()
+        wv.pauseTimers()
+        wv.clearHistory()
+        wv.clearCache(true)
+        wv.removeAllViews()
+        (wv.parent as? ViewGroup)?.removeView(wv)
+        wv.destroy()
+      } catch (_: Throwable) {}
+      AppDiagnosticsLogger.log("WebViewDestroy", "Hard-destroyed WebView ($reason)")
+      AppDiagnosticsLogger.recordBreadcrumb(context, "WEBVIEW_DESTROYED", reason)
+    }
+  }
+
   fun stopBackgroundWebViewVideo() {
-    webViewRef?.post {
-      webViewRef?.evaluateJavascript(
-        """
-        (function() {
-          try {
-            document.querySelectorAll('video').forEach(function(v) { v.pause(); });
-            if (typeof window.jwplayer === 'function' && window.jwplayer().pause) { window.jwplayer().pause(true); }
-            if (window.hls && window.hls.stopLoad) { window.hls.stopLoad(); }
-            var frames = document.querySelectorAll('iframe');
-            for (var i = 0; i < frames.length; i++) {
-              try {
-                var cw = frames[i].contentWindow;
-                if (cw) {
-                  cw.document.querySelectorAll('video').forEach(function(v) { v.pause(); });
-                  if (typeof cw.jwplayer === 'function' && cw.jwplayer().pause) { cw.jwplayer().pause(true); }
-                  if (cw.hls && cw.hls.stopLoad) { cw.hls.stopLoad(); }
-                }
-              } catch(e) {}
-            }
-          } catch(e) {}
-        })();
-        """.trimIndent(),
-        null
-      )
+    hardDestroyWebView("stopBackgroundWebViewVideo -> freeing Chromium RAM")
+  }
+
+  // Ensure zero background WebView/portal execution whenever returning to Home or starting Native ExoPlayer
+  LaunchedEffect(isHomeActive) {
+    if (isHomeActive) {
+      activeServerSelectionJob?.cancel()
+      activeServerSelectionJob = null
+      activeEpisodeScrapeRequest = null
+      inFlightScrapeKeyRef.set(null)
+      lastResolvedScrapeKeyRef.set(null)
+      playNativeVideoUrl = null
+      hardDestroyWebView("Returned to Home dashboard")
+    }
+  }
+
+  LaunchedEffect(playNativeVideoUrl) {
+    if (!playNativeVideoUrl.isNullOrBlank() && !isGeneralBrowserSession) {
+      hardDestroyWebView("NativeTvExoPlayer handoff")
     }
   }
 
@@ -462,36 +517,32 @@ fun MainScreen(
     }
 
     if (!isGeneralBrowserSession && preferNativePlayer && !userManuallyDismissedNativePlayer) {
-      stopBackgroundWebViewVideo()
+      AppDiagnosticsLogger.recordBreadcrumb(context, "STREAM_CAPTURED", "$sourceTag -> ExoPlayer")
+      hardDestroyWebView("Direct stream captured via $sourceTag")
       playNativeVideoUrl = resolvedUrl
     }
   }
 
-  fun loadServerIntoWebView(
-    targetWebView: WebView?,
-    targetServerUrl: String,
+  fun executeWebViewLoad(
+    wv: WebView,
+    cleanTargetUrl: String,
     isDirectEmbed: Boolean,
-    portalRefererPageUrl: String = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
-    resetNativePlayer: Boolean = true
+    refererPage: String,
+    isGeneralBrowser: Boolean = false
   ) {
-    val cleanTargetUrl = targetServerUrl
-      .replace("topcinema.site", "topcinema.io")
-      .replace("video.php?vid=", "play.php?vid=")
-    currentUrl = cleanTargetUrl
-    activeEmbedRefererUrl = cleanTargetUrl
-    isCurrentUrlDirectEmbed = isDirectEmbed
-    if (resetNativePlayer) {
-      playNativeVideoUrl = null
-      detectedVideoUrl = null
+    try {
+      wv.onResume()
+      wv.resumeTimers()
+    } catch (_: Throwable) {}
+
+    val useAndroidUa = isGeneralBrowser && (cleanTargetUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE)
+    wv.settings.userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
+
+    if (isGeneralBrowser) {
+      wv.loadUrl(cleanTargetUrl, mapOf("Referer" to refererPage))
+      return
     }
 
-    val wv = targetWebView ?: return
-    wv.settings.userAgentString = desktopChromeUa
-
-    val refererPage = portalRefererPageUrl
-      .replace("topcinema.site", "topcinema.io")
-      .replace("video.php?vid=", "play.php?vid=")
-      .ifBlank { activePortal.homeUrl }
     val refererOrigin = try {
       val uri = java.net.URI(refererPage)
       "${uri.scheme}://${uri.host}/"
@@ -503,6 +554,7 @@ fun MainScreen(
       "WEBVIEW",
       "تحميل سيرفر المشاهدة (directEmbed=$isDirectEmbed) | URL=$cleanTargetUrl | Referer=$refererOrigin"
     )
+    AppDiagnosticsLogger.recordBreadcrumb(context, "WEBVIEW_LOAD", cleanTargetUrl)
 
     val lowerTarget = cleanTargetUrl.lowercase()
     val isStandaloneGlobalEmbed = lowerTarget.contains("vidlink.") ||
@@ -571,37 +623,136 @@ fun MainScreen(
     }
   }
 
+  fun loadServerIntoWebView(
+    targetWebView: WebView?,
+    targetServerUrl: String,
+    isDirectEmbed: Boolean,
+    portalRefererPageUrl: String = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+    resetNativePlayer: Boolean = true,
+    forceReload: Boolean = false
+  ) {
+    val cleanTargetUrl = targetServerUrl
+      .replace("topcinema.site", "topcinema.io")
+      .replace("video.php?vid=", "play.php?vid=")
+    val refererPage = portalRefererPageUrl
+      .replace("topcinema.site", "topcinema.io")
+      .replace("video.php?vid=", "play.php?vid=")
+      .ifBlank { activePortal.homeUrl }
+    val loadKey = "$cleanTargetUrl|$isDirectEmbed|$refererPage"
+
+    // Atomic deduplication guard: never load the exact same embed URL twice
+    if (!forceReload && isWebViewMounted && targetWebView != null && lastWebViewLoadedKeyRef.get() == loadKey) {
+      AppDiagnosticsLogger.log("WEBVIEW", "تخطي إعادة تحميل مكررة لنفس السيرفر: $cleanTargetUrl")
+      return
+    }
+
+    currentUrl = cleanTargetUrl
+    activeEmbedRefererUrl = cleanTargetUrl
+    isCurrentUrlDirectEmbed = isDirectEmbed
+    if (resetNativePlayer) {
+      playNativeVideoUrl = null
+      detectedVideoUrl = null
+    }
+    lastWebViewLoadedKeyRef.set(loadKey)
+
+    if (targetWebView != null && isWebViewMounted) {
+      pendingWebViewLoad = null
+      executeWebViewLoad(
+        wv = targetWebView,
+        cleanTargetUrl = cleanTargetUrl,
+        isDirectEmbed = isDirectEmbed,
+        refererPage = refererPage,
+        isGeneralBrowser = false
+      )
+    } else {
+      // Lazily mount/recreate WebView ONLY when needed for WebView playback or JS extraction
+      pendingWebViewLoad = PendingWebViewLoad(
+        targetUrl = cleanTargetUrl,
+        isDirectEmbed = isDirectEmbed,
+        refererPage = refererPage,
+        isGeneralBrowser = false
+      )
+      isWebViewMounted = true
+    }
+  }
+
   fun refreshSeriesSeasonsAndEpisodes(
     targetUrl: String,
     portal: StreamingPortal,
     titleHint: String,
     selectedSeasonNum: Int = 1,
-    autoLoadBestEmbed: Boolean = false
+    autoLoadBestEmbed: Boolean = false,
+    force: Boolean = false
   ) {
+    val normalizedKey = "${portal.id}|${targetUrl.trim().trimEnd('/').lowercase()}|s$selectedSeasonNum"
+    if (!force && (inFlightScrapeKeyRef.get() == normalizedKey || lastResolvedScrapeKeyRef.get() == normalizedKey)) {
+      AppDiagnosticsLogger.log("ScraperDedup", "Skipped duplicate scrape for $normalizedKey")
+      return
+    }
+
+    if (force) {
+      inFlightScrapeKeyRef.set(null)
+      lastResolvedScrapeKeyRef.set(null)
+      scrapeForceNonce += 1L
+    }
+
     isScrapingSeries = true
     detectedVideoQualities = emptyList()
     currentVideoQuality = "auto"
     userManuallyDismissedNativePlayer = false
     failedNativeStreamUrls.clear()
 
-    scope.launch {
+    activeEpisodeScrapeRequest = EpisodeScrapeRequest(
+      requestKey = normalizedKey,
+      targetUrl = targetUrl,
+      portal = portal,
+      titleHint = titleHint.ifBlank { lastSearchQuery.ifBlank { pageTitle } },
+      selectedSeasonNum = selectedSeasonNum,
+      autoLoadBestEmbed = autoLoadBestEmbed,
+      nonce = scrapeForceNonce
+    )
+  }
+
+  // Strictly keyed on (requestKey, nonce) so Compose recompositions NEVER re-trigger scraping or double-load portals!
+  LaunchedEffect(activeEpisodeScrapeRequest?.requestKey, activeEpisodeScrapeRequest?.nonce) {
+    val req = activeEpisodeScrapeRequest ?: return@LaunchedEffect
+    if (!inFlightScrapeKeyRef.compareAndSet(null, req.requestKey)) {
+      if (inFlightScrapeKeyRef.get() == req.requestKey) {
+        return@LaunchedEffect
+      }
+      inFlightScrapeKeyRef.set(req.requestKey)
+    }
+
+    AppDiagnosticsLogger.recordBreadcrumb(context, "SCRAPE_START", "${req.portal.id}: ${req.targetUrl}")
+    try {
       val scraped = searchService.scrapeSeasonsAndEpisodes(
-        pageUrl = targetUrl,
-        portal = portal,
-        titleHint = titleHint.ifBlank { lastSearchQuery.ifBlank { pageTitle } },
-        selectedSeasonNumber = selectedSeasonNum
+        pageUrl = req.targetUrl,
+        portal = req.portal,
+        titleHint = req.titleHint,
+        selectedSeasonNumber = req.selectedSeasonNum
       )
+      lastResolvedScrapeKeyRef.set(req.requestKey)
       seriesStructure = scraped
       isScrapingSeries = false
+
+      AppDiagnosticsLogger.recordBreadcrumb(
+        context,
+        "SCRAPE_DONE",
+        "servers=${scraped.watchServers.size}, direct=${scraped.directStreamUrl.isNotBlank()}"
+      )
 
       if (scraped.detectedQualities.isNotEmpty()) {
         mergeDetectedQualities(scraped.detectedQualities)
       }
 
-      val resolvedPortalWatchUrl = scraped.watchServers.firstOrNull { !it.isDirectEmbed }?.embedUrl ?: targetUrl
-      activeWatchPageUrl = resolvedPortalWatchUrl
+      val resolvedPortalWatchUrl = scraped.watchServers.firstOrNull { !it.isDirectEmbed }?.embedUrl ?: req.targetUrl
+      if (!StreamingPortal.isEmbedIframeUrl(resolvedPortalWatchUrl)) {
+        activeWatchPageUrl = resolvedPortalWatchUrl
+        val canonicalTitle = pageTitle.ifBlank { req.titleHint.ifBlank { req.portal.displayNameArabic } }
+        repository.addHistory(canonicalTitle, resolvedPortalWatchUrl, req.portal)
+      }
 
-      // If the scraper resolved a direct .m3u8 / .mp4 stream URL, launch NativeTvExoPlayer immediately by default!
+      // If the scraper resolved a direct .m3u8 / .mp4 stream URL, kill any WebView and launch NativeTvExoPlayer!
       if (scraped.directStreamUrl.isNotBlank()) {
         val streamReferer = scraped.directStreamReferer.ifBlank {
           scraped.bestCleanPlayerUrl.ifBlank { resolvedPortalWatchUrl }
@@ -613,15 +764,18 @@ fun MainScreen(
           "User-Agent" to desktopChromeUa
         )
         if (preferNativePlayer) {
+          hardDestroyWebView("Direct stream resolved by scraper")
           playNativeVideoUrl = scraped.directStreamUrl
         }
       }
 
-      // Only load the embed server into the background WebView if the scraper did NOT already resolve a direct stream!
-      if (autoLoadBestEmbed && scraped.bestCleanPlayerUrl.isNotBlank()) {
+      // Only mount & load the embed server into WebView if the scraper did NOT resolve a direct stream!
+      if (req.autoLoadBestEmbed && scraped.bestCleanPlayerUrl.isNotBlank()) {
         val bestServer = scraped.watchServers.firstOrNull { it.embedUrl == scraped.bestCleanPlayerUrl }
         val isDirect = bestServer?.isDirectEmbed ?: (scraped.bestCleanPlayerUrl != resolvedPortalWatchUrl)
-        AppDiagnosticsLogger.activeServerName = bestServer?.name ?: "تلقائي"
+        val resolvedName = bestServer?.name ?: "تلقائي"
+        activeServerName = resolvedName
+        AppDiagnosticsLogger.activeServerName = resolvedName
         if (scraped.directStreamUrl.isBlank()) {
           loadServerIntoWebView(
             targetWebView = webViewRef,
@@ -635,6 +789,9 @@ fun MainScreen(
           isCurrentUrlDirectEmbed = isDirect
         }
       }
+    } finally {
+      inFlightScrapeKeyRef.compareAndSet(req.requestKey, null)
+      isScrapingSeries = false
     }
   }
 
@@ -647,22 +804,28 @@ fun MainScreen(
     selectedSeasonNum: Int = 1
   ) {
     val targetPortal = portal ?: activePortal
-    var cleanUrl = url
-      .replace("topcinema.site", "topcinema.io")
-      .replace("video.php?vid=", "play.php?vid=")
-    if (!isGeneralBrowser &&
-        targetPortal == StreamingPortal.TOP_CINEMA &&
-        !cleanUrl.contains("/watch") &&
-        !cleanUrl.contains("/search") &&
-        !cleanUrl.contains("/series/")
-    ) {
-      cleanUrl = "${cleanUrl.trimEnd('/')}/watch/"
+    val cleanUrl = if (isGeneralBrowser) {
+      url.trim()
+    } else {
+      StreamingPortal.sanitizePortalWatchUrl(url, targetPortal)
     }
+    val isEmbedTarget = !isGeneralBrowser && StreamingPortal.isEmbedIframeUrl(cleanUrl)
 
+    AppDiagnosticsLogger.recordBreadcrumb(
+      context,
+      if (isGeneralBrowser) "NAV_BROWSER" else "NAV_PORTAL",
+      "${targetPortal.id}: $cleanUrl"
+    )
+
+    activeServerSelectionJob?.cancel()
+    activeServerSelectionJob = null
     currentUrl = cleanUrl
-    activeWatchPageUrl = cleanUrl
+    if (!isEmbedTarget) {
+      activeWatchPageUrl = cleanUrl
+    }
     activeEmbedRefererUrl = cleanUrl
-    isCurrentUrlDirectEmbed = false
+    activeServerName = ""
+    isCurrentUrlDirectEmbed = isEmbedTarget
     isGeneralBrowserSession = isGeneralBrowser
     preferNativePlayer = !isGeneralBrowser
     userManuallyDismissedNativePlayer = false
@@ -677,18 +840,46 @@ fun MainScreen(
       activePortal = portal
       repository.setActivePortal(portal)
     }
+    if (!isGeneralBrowser && !isEmbedTarget && cleanUrl.startsWith("http")) {
+      repository.addHistory(
+        title = (title ?: pageTitle).ifBlank { targetPortal.displayNameArabic },
+        url = cleanUrl,
+        portal = targetPortal
+      )
+    }
     isHomeActive = false
-    val useAndroidUa = isGeneralBrowser && (cleanUrl.contains("google.") || displayMode == AppDisplayMode.MOBILE)
-    webViewRef?.settings?.userAgentString = if (useAndroidUa) cleanAndroidChromeUa else desktopChromeUa
+
     if (isGeneralBrowser) {
-      webViewRef?.loadUrl(cleanUrl, mapOf("Referer" to targetPortal.homeUrl))
+      val wv = webViewRef
+      if (wv != null && isWebViewMounted) {
+        executeWebViewLoad(
+          wv = wv,
+          cleanTargetUrl = cleanUrl,
+          isDirectEmbed = false,
+          refererPage = targetPortal.homeUrl,
+          isGeneralBrowser = true
+        )
+      } else {
+        pendingWebViewLoad = PendingWebViewLoad(
+          targetUrl = cleanUrl,
+          isDirectEmbed = false,
+          refererPage = targetPortal.homeUrl,
+          isGeneralBrowser = true
+        )
+        isWebViewMounted = true
+      }
     } else {
+      // Kill any previous portal WebView immediately before starting fresh single-shot OkHttp scraping
+      hardDestroyWebView("Switching to new episode/portal")
+      inFlightScrapeKeyRef.set(null)
+      lastResolvedScrapeKeyRef.set(null)
       refreshSeriesSeasonsAndEpisodes(
         targetUrl = cleanUrl,
         portal = targetPortal,
         titleHint = title ?: lastSearchQuery,
         selectedSeasonNum = selectedSeasonNum,
-        autoLoadBestEmbed = autoScrapeAndLoadEmbed
+        autoLoadBestEmbed = autoScrapeAndLoadEmbed,
+        force = true
       )
     }
   }
@@ -992,26 +1183,53 @@ fun MainScreen(
       modifier = boxModifier
         .background(Color.Black)
     ) {
-      key(webViewRecreateKey) {
-        AndroidView(
-          factory = { ctx ->
-            val rootLayout = FrameLayout(ctx).apply {
-              layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-              )
+      // Strictly mount WebView ONLY when needed (General Browser or WebView fallback/extraction).
+      // While NativeTvExoPlayer plays, WebView stays completely unmounted & destroyed (0MB Chromium RAM).
+      val shouldMountWebView = isWebViewMounted && (isGeneralBrowserSession || playNativeVideoUrl == null)
+      if (shouldMountWebView) {
+        key(webViewRecreateKey) {
+          DisposableEffect(webViewRecreateKey) {
+            onDispose {
+              val wv = webViewRef
+              if (wv != null) {
+                webViewRef = null
+                fullscreenContainerRef = null
+                webChromeClientRef = null
+                try {
+                  wv.stopLoading()
+                  wv.removeJavascriptInterface("AndroidTvBridge")
+                  wv.loadUrl("about:blank")
+                  wv.onPause()
+                  wv.pauseTimers()
+                  wv.clearHistory()
+                  wv.clearCache(true)
+                  wv.removeAllViews()
+                  (wv.parent as? ViewGroup)?.removeView(wv)
+                  wv.destroy()
+                } catch (_: Throwable) {}
+              }
             }
+          }
+          AndroidView(
+            factory = { ctx ->
+              AppDiagnosticsLogger.recordBreadcrumb(ctx, "WEBVIEW_CREATE", currentUrl)
+              val rootLayout = FrameLayout(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                )
+              }
 
-            val fsContainer = FrameLayout(ctx).apply {
-              layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-              )
-              visibility = View.GONE
-            }
-            fullscreenContainerRef = fsContainer
+              val fsContainer = FrameLayout(ctx).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                visibility = View.GONE
+              }
+              fullscreenContainerRef = fsContainer
 
-            val webView = WebView(ctx).apply {
+              val webView = WebView(ctx).apply {
               layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -1158,14 +1376,25 @@ fun MainScreen(
                 isAdBlockEnabled = { repository.isAdBlockEnabled() },
                 isGeneralBrowserMode = { isGeneralBrowserSession },
                 onPageFinishedCallback = { url ->
-                  if (isGeneralBrowserSession || !isCurrentUrlDirectEmbed) {
+                  val isEmbed = StreamingPortal.isEmbedIframeUrl(url)
+                  if (isGeneralBrowserSession) {
                     currentUrl = url
+                    val detected = StreamingPortal.fromUrl(url)
+                    val title = pageTitle.ifBlank { url }
+                    if (!isEmbed) {
+                      repository.addHistory(title, url, detected)
+                    }
+                  } else if (!isCurrentUrlDirectEmbed && !isEmbed) {
+                    currentUrl = url
+                    val detected = StreamingPortal.fromUrl(url)
+                    if (StreamingPortal.belongsToPortalDomain(url, detected)) {
+                      activePortal = detected
+                      repository.setActivePortal(detected)
+                      activeWatchPageUrl = StreamingPortal.sanitizePortalWatchUrl(url, detected)
+                      val title = pageTitle.ifBlank { url }
+                      repository.addHistory(title, activeWatchPageUrl, detected)
+                    }
                   }
-                  val detected = StreamingPortal.fromUrl(url)
-                  activePortal = detected
-                  repository.setActivePortal(detected)
-                  val title = pageTitle.ifBlank { url }
-                  repository.addHistory(title, url, detected)
                 },
                 onRenderProcessGoneCallback = {
                   val now = System.currentTimeMillis()
@@ -1210,17 +1439,35 @@ fun MainScreen(
                 }
               )
 
-              val rawUrl = if (currentUrl.isNotBlank() && currentUrl.startsWith("http")) currentUrl else activePortal.homeUrl
-              if (!isGeneralBrowserSession && isCurrentUrlDirectEmbed && playNativeVideoUrl == null) {
-                loadServerIntoWebView(
-                  targetWebView = this,
-                  targetServerUrl = rawUrl,
-                  isDirectEmbed = true,
-                  portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
-                  resetNativePlayer = false
+              val queued = pendingWebViewLoad
+              pendingWebViewLoad = null
+              if (queued != null) {
+                executeWebViewLoad(
+                  wv = this,
+                  cleanTargetUrl = queued.targetUrl,
+                  isDirectEmbed = queued.isDirectEmbed,
+                  refererPage = queued.refererPage,
+                  isGeneralBrowser = queued.isGeneralBrowser
                 )
-              } else if (isGeneralBrowserSession) {
-                loadUrl(rawUrl, mapOf("Referer" to activePortal.homeUrl))
+              } else {
+                val rawUrl = if (currentUrl.isNotBlank() && currentUrl.startsWith("http")) currentUrl else activePortal.homeUrl
+                if (!isGeneralBrowserSession && isCurrentUrlDirectEmbed && playNativeVideoUrl == null) {
+                  executeWebViewLoad(
+                    wv = this,
+                    cleanTargetUrl = rawUrl,
+                    isDirectEmbed = true,
+                    refererPage = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+                    isGeneralBrowser = false
+                  )
+                } else if (isGeneralBrowserSession) {
+                  executeWebViewLoad(
+                    wv = this,
+                    cleanTargetUrl = rawUrl,
+                    isDirectEmbed = false,
+                    refererPage = activePortal.homeUrl,
+                    isGeneralBrowser = true
+                  )
+                }
               }
             }
 
@@ -1232,6 +1479,7 @@ fun MainScreen(
           update = { _ -> },
           modifier = Modifier.fillMaxSize()
         )
+        }
       }
 
       if (displayMode == AppDisplayMode.TV && controlMode == ControlMode.VIRTUAL_MOUSE) {
@@ -1492,6 +1740,7 @@ fun MainScreen(
           onOpenDiagnostics = {
             showDiagnosticsDialog = true
           },
+          externalPause = showSubtitlesDialog,
           onQualitiesDetected = { exoQualities ->
             mergeDetectedQualities(exoQualities)
           },
@@ -1502,6 +1751,15 @@ fun MainScreen(
               userManuallyDismissedNativePlayer = true
               preferNativePlayer = false
               playNativeVideoUrl = null
+              val fallbackServerUrl = activeEmbedRefererUrl.ifBlank { currentUrl }
+              loadServerIntoWebView(
+                targetWebView = webViewRef,
+                targetServerUrl = fallbackServerUrl,
+                isDirectEmbed = isCurrentUrlDirectEmbed,
+                portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+                resetNativePlayer = false,
+                forceReload = true
+              )
             }
           },
           onFallbackToWebPlayer = {
@@ -1510,15 +1768,14 @@ fun MainScreen(
             preferNativePlayer = false
             playNativeVideoUrl = null
             val fallbackServerUrl = activeEmbedRefererUrl.ifBlank { currentUrl }
-            if (currentUrl != fallbackServerUrl) {
-              loadServerIntoWebView(
-                targetWebView = webViewRef,
-                targetServerUrl = fallbackServerUrl,
-                isDirectEmbed = isCurrentUrlDirectEmbed,
-                portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
-                resetNativePlayer = false
-              )
-            }
+            loadServerIntoWebView(
+              targetWebView = webViewRef,
+              targetServerUrl = fallbackServerUrl,
+              isDirectEmbed = isCurrentUrlDirectEmbed,
+              portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+              resetNativePlayer = false,
+              forceReload = true
+            )
             Toast.makeText(
               context,
               "تم التبديل لمشغل السيرفر المدمج",
@@ -1890,6 +2147,7 @@ fun MainScreen(
               activePortal = activePortal,
               currentUrl = currentUrl,
               activeWatchPageUrl = activeWatchPageUrl,
+              activeServerName = activeServerName,
               searchQuery = lastSearchQuery,
               portalResultsMap = lastSearchPortalResults,
               seriesStructure = seriesStructure,
@@ -1906,8 +2164,11 @@ fun MainScreen(
                 userManuallyDismissedNativePlayer = false
                 preferNativePlayer = true
                 activeEmbedRefererUrl = server.embedUrl
+                activeServerName = server.name
                 AppDiagnosticsLogger.activeServerName = server.name
-                scope.launch {
+                AppDiagnosticsLogger.recordBreadcrumb(context, "SELECT_SERVER", server.name)
+                activeServerSelectionJob?.cancel()
+                activeServerSelectionJob = scope.launch {
                   val resolution = searchService.extractDirectStreamFromServer(
                     embedUrl = server.embedUrl,
                     refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
@@ -1922,13 +2183,18 @@ fun MainScreen(
                     if (resolution.detectedQualities.isNotEmpty()) {
                       mergeDetectedQualities(resolution.detectedQualities)
                     }
+                    hardDestroyWebView("Selected server resolved direct stream")
                     playNativeVideoUrl = resolution.primaryStreamUrl
                   } else {
+                    val resolvedTarget = resolution.refererUrl.takeIf { it.startsWith("http") }
+                      ?: server.embedUrl.takeIf { it.startsWith("http") }
+                      ?: activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                     loadServerIntoWebView(
                       targetWebView = webViewRef,
-                      targetServerUrl = server.embedUrl,
+                      targetServerUrl = resolvedTarget,
                       isDirectEmbed = server.isDirectEmbed,
-                      portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
+                      portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+                      forceReload = true
                     )
                   }
                 }
@@ -1969,7 +2235,8 @@ fun MainScreen(
                   portal = activePortal,
                   titleHint = lastSearchQuery.ifBlank { pageTitle },
                   selectedSeasonNum = seriesStructure.selectedSeasonNumber,
-                  autoLoadBestEmbed = true
+                  autoLoadBestEmbed = true,
+                  force = true
                 )
               },
               onSelectQuality = { option ->
@@ -1997,6 +2264,7 @@ fun MainScreen(
               activePortal = activePortal,
               currentUrl = currentUrl,
               activeWatchPageUrl = activeWatchPageUrl,
+              activeServerName = activeServerName,
               searchQuery = lastSearchQuery,
               portalResultsMap = lastSearchPortalResults,
               seriesStructure = seriesStructure,
@@ -2013,8 +2281,11 @@ fun MainScreen(
                 userManuallyDismissedNativePlayer = false
                 preferNativePlayer = true
                 activeEmbedRefererUrl = server.embedUrl
+                activeServerName = server.name
                 AppDiagnosticsLogger.activeServerName = server.name
-                scope.launch {
+                AppDiagnosticsLogger.recordBreadcrumb(context, "SELECT_SERVER", server.name)
+                activeServerSelectionJob?.cancel()
+                activeServerSelectionJob = scope.launch {
                   val resolution = searchService.extractDirectStreamFromServer(
                     embedUrl = server.embedUrl,
                     refererUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
@@ -2029,13 +2300,18 @@ fun MainScreen(
                     if (resolution.detectedQualities.isNotEmpty()) {
                       mergeDetectedQualities(resolution.detectedQualities)
                     }
+                    hardDestroyWebView("Selected server resolved direct stream")
                     playNativeVideoUrl = resolution.primaryStreamUrl
                   } else {
+                    val resolvedTarget = resolution.refererUrl.takeIf { it.startsWith("http") }
+                      ?: server.embedUrl.takeIf { it.startsWith("http") }
+                      ?: activeWatchPageUrl.ifBlank { activePortal.homeUrl }
                     loadServerIntoWebView(
                       targetWebView = webViewRef,
-                      targetServerUrl = server.embedUrl,
+                      targetServerUrl = resolvedTarget,
                       isDirectEmbed = server.isDirectEmbed,
-                      portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
+                      portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+                      forceReload = true
                     )
                   }
                 }
@@ -2076,7 +2352,8 @@ fun MainScreen(
                   portal = activePortal,
                   titleHint = lastSearchQuery.ifBlank { pageTitle },
                   selectedSeasonNum = seriesStructure.selectedSeasonNumber,
-                  autoLoadBestEmbed = true
+                  autoLoadBestEmbed = true,
+                  force = true
                 )
               },
               onSelectQuality = { option ->

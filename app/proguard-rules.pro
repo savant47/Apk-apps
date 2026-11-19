@@ -1,21 +1,40 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Asser TV — ProGuard / R8 Keep Rules for 1GB RAM Shrunk Builds
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+-keepattributes SourceFile,LineNumberTable
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Keep WebView @JavascriptInterface bridges (e.g. AndroidTvBridge / TvPlayerBridge)
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-keep class com.example.ui.TvPlayerBridge { *; }
+-keepclassmembers class com.example.ui.TvPlayerBridge {
+    public *;
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Keep Kotlin data models & enums used in JSON / preferences / Compose state
+-keep class com.example.model.** { *; }
+-keep class com.example.data.PlaybackProgressRecord { *; }
+-keep class com.example.data.AppDisplayMode { *; }
+
+# Media3 / ExoPlayer (HLS, DASH, SmoothStreaming, OkHttpDataSource, UI)
+-keep class androidx.media3.** { *; }
+-dontwarn androidx.media3.**
+
+# OkHttp & Okio
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+
+# Jsoup HTML parser (Phase 2 fast HTML scraper)
+-keep class org.jsoup.** { *; }
+-dontwarn org.jsoup.**
+-dontwarn javax.annotation.**
+
+# Coil ImageLoader
+-keep class coil.** { *; }
+-dontwarn coil.**

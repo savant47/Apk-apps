@@ -35,6 +35,15 @@ jobs:
             echo "No artifacts found. Storage quota is clean (0 MB used)."
           fi
 
+      - name: Compute Dynamic Monotonic Version (GITHUB_RUN_NUMBER + 100)
+        id: version
+        run: |
+          VERSION_CODE=$(( ${{ github.run_number }} + 100 ))
+          VERSION_NAME="1.0.${VERSION_CODE}"
+          echo "code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Computed dynamic version: v${VERSION_NAME} (versionCode=${VERSION_CODE})"
+
       - name: Set up JDK 17 (No Cache to Save Storage Quota)
         uses: actions/setup-java@v4
         with:
@@ -47,50 +56,77 @@ jobs:
           unzip -q gradle-9.3.1-bin.zip
           echo "${PWD}/gradle-9.3.1/bin" >> $GITHUB_PATH
 
-      - name: Prepare Environment & Signing Keystore
+      - name: Prepare Deterministic Persistent Signing Keystore
+        id: signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           echo "GEMINI_API_KEY=dummy_key" > .env
           mkdir -p app
           echo "GEMINI_API_KEY=dummy_key" > app/.env
-          if [ -s debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+
+          SIGNING_SOURCE=""
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Decoding persistent signing keystore from GitHub Secret (ANDROID_KEYSTORE_BASE64)..."
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > debug.keystore
+            SIGNING_SOURCE="GitHub Secret (ANDROID_KEYSTORE_BASE64) ✅"
+          elif [ -s debug.keystore.base64 ]; then
+            echo "Decoding persistent signing keystore from repository debug.keystore.base64..."
+            tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore
+            SIGNING_SOURCE="Repository debug.keystore.base64 ✅"
           else
+            echo "::warning::Neither ANDROID_KEYSTORE_BASE64 secret nor debug.keystore.base64 was found. Generating persistent keystore once and saving debug.keystore.base64 to repository..."
             keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
+            base64 -w 0 debug.keystore > debug.keystore.base64
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add debug.keystore.base64
+            git commit -m "chore: persist deterministic debug.keystore.base64 for OTA updates [skip ci]" || true
+            git push || echo "::warning::Could not auto-commit debug.keystore.base64; please add ANDROID_KEYSTORE_BASE64 secret in repo Settings."
+            SIGNING_SOURCE="Auto-Generated & Persisted Keystore ⚠️"
           fi
+
           cp debug.keystore app/debug.keystore
+          SHA256_FP=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey 2>/dev/null | grep -i "SHA256:" | head -n 1 | awk '{print $2}')
+          echo "sha256=${SHA256_FP:-UNKNOWN}" >> "$GITHUB_OUTPUT"
+          echo "source=${SIGNING_SOURCE}" >> "$GITHUB_OUTPUT"
+          echo "Verified Signing Keystore Source: ${SIGNING_SOURCE}"
+          echo "Verified Certificate SHA-256: ${SHA256_FP:-UNKNOWN}"
 
       - name: Build Signed APK
         env:
-          APP_VERSION_CODE: ${{ github.run_number }}
-          APP_VERSION_NAME: 1.0.${{ github.run_number }}
+          APP_VERSION_CODE: ${{ steps.version.outputs.code }}
+          APP_VERSION_NAME: ${{ steps.version.outputs.name }}
         run: gradle assembleDebug -x test -x lint --no-build-cache -Dkotlin.daemon.jvm.options="-Xmx2g" -Dorg.gradle.jvmargs="-Xmx4g"
 
       - name: Prepare Release APK Files
         run: |
           APK_SOURCE=$(ls app/build/outputs/apk/debug/*.apk | head -n 1)
           cp "$APK_SOURCE" "app/build/outputs/apk/debug/AsserTV.apk"
-          cp "$APK_SOURCE" "app/build/outputs/apk/debug/AsserTV-v1.0.${{ github.run_number }}.apk"
+          cp "$APK_SOURCE" "app/build/outputs/apk/debug/AsserTV-v${{ steps.version.outputs.name }}.apk"
 
       - name: Publish APK Directly to GitHub Releases (النسخ)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v1.0.${{ github.run_number }}"
-          TITLE="Asser TV v1.0.${{ github.run_number }}"
+          TAG="v${{ steps.version.outputs.name }}"
+          TITLE="Asser TV v${{ steps.version.outputs.name }}"
           NOTES="## 🎬 Asser TV - إصدار جاهز للتثبيت ($TAG)
-          - تم تجميع وتوقيع ملف الـ APK تلقائياً ونشره مباشرة في قسم النسخ (**Releases**) بدون استهلاك أي مساحة من حصة الـ Artifacts.
-          - يدعم الهواتف الذكية وشاشات **Android TV**.
-          - قم بتحميل ملف \`AsserTV.apk\` بالأسفل للتثبيت المباشر."
+          - **رقم الإصدار (versionCode):** \`${{ steps.version.outputs.code }}\`
+          - **مصدر التوقيع الثابت:** ${{ steps.signing.outputs.source }}
+          - **بصمة التوقيع (SHA-256):** \`${{ steps.signing.outputs.sha256 }}\`
+          - يدعم الهواتف الذكية وشاشات **Android TV** (بما فيها أجهزة 1GB RAM).
+          - قم بتحميل ملف \`AsserTV.apk\` بالأسفل للتثبيت المباشر فوق النسخة الحالية بدون حذف بياناتك."
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" \
               "app/build/outputs/apk/debug/AsserTV.apk" \
-              "app/build/outputs/apk/debug/AsserTV-v1.0.${{ github.run_number }}.apk" \
+              "app/build/outputs/apk/debug/AsserTV-v${{ steps.version.outputs.name }}.apk" \
               --clobber
           else
             gh release create "$TAG" \
               "app/build/outputs/apk/debug/AsserTV.apk#AsserTV.apk" \
-              "app/build/outputs/apk/debug/AsserTV-v1.0.${{ github.run_number }}.apk" \
+              "app/build/outputs/apk/debug/AsserTV-v${{ steps.version.outputs.name }}.apk" \
               --title "$TITLE" \
               --notes "$NOTES" \
               --latest

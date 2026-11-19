@@ -1,9 +1,13 @@
 package com.example.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,49 +17,58 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Subtitles
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -66,6 +79,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.model.ScrapedEpisodeItem
 import com.example.model.ScrapedSeasonItem
 import com.example.model.ScrapedSeriesStructure
@@ -76,18 +91,23 @@ import com.example.model.VideoQualityOption
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
+import com.example.ui.theme.CinemaFocusGlow
 import com.example.ui.theme.CinemaPrimary
 import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.CinemaSurfaceVariant
 import com.example.ui.theme.ClipboxWhite
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WatchSidePanel(
   activePortal: StreamingPortal,
   currentUrl: String,
   activeWatchPageUrl: String = currentUrl,
+  activeServerName: String = "",
   searchQuery: String,
   portalResultsMap: Map<StreamingPortal, List<SearchResultItem>>,
   seriesStructure: ScrapedSeriesStructure,
@@ -117,123 +137,382 @@ fun WatchSidePanel(
   var activeSubTab by remember(seriesStructure.episodes.isNotEmpty(), seriesStructure.seasons.isNotEmpty()) {
     mutableIntStateOf(if (seriesStructure.episodes.isNotEmpty() || seriesStructure.seasons.isNotEmpty()) 0 else 1)
   }
+  var showServerSelectorModal by remember { mutableStateOf(false) }
+
+  val currentActiveServer = remember(seriesStructure.watchServers, currentUrl, activeServerName) {
+    seriesStructure.watchServers.firstOrNull {
+      (activeServerName.isNotBlank() && it.name == activeServerName) ||
+        (currentUrl.isNotBlank() && it.embedUrl == currentUrl)
+    } ?: seriesStructure.watchServers.firstOrNull()
+  }
+
+  val displayedServerLabel = remember(currentActiveServer, activeServerName, isScrapingSeries, seriesStructure.watchServers) {
+    when {
+      activeServerName.isNotBlank() && activeServerName != "تلقائي" -> activeServerName
+      currentActiveServer != null -> currentActiveServer.name
+      isScrapingSeries -> "جاري سحب سيرفرات المشاهدة..."
+      else -> "اضغط لاختيار السيرفر"
+    }
+  }
 
   CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-  Surface(
-    color = CinemaDarkBackground.copy(alpha = 0.99f),
-    border = BorderStroke(1.dp, CinemaBorder),
-    shape = if (isCompactMobileSheet) {
-      RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
-    } else {
-      RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
-    },
-    modifier = modifier
-  ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .fillMaxHeight()
-        .padding(horizontal = 10.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(5.dp)
+    Surface(
+      color = CinemaDarkBackground.copy(alpha = 0.99f),
+      border = BorderStroke(1.dp, CinemaBorder),
+      shape = if (isCompactMobileSheet) {
+        RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+      } else {
+        RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
+      },
+      modifier = modifier
     ) {
-      // 1. Sleek Well-Proportioned Header (No overlapping circles!)
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .fillMaxHeight()
+          .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
       ) {
+        // 1. Sleek Well-Proportioned Header (All controls D-Pad focusable with clear focus borders)
         Row(
-          verticalAlignment = Alignment.CenterVertically,
-          modifier = Modifier.weight(1f)
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          Box(
-            modifier = Modifier
-              .size(8.dp)
-              .clip(CircleShape)
-              .background(if (isNativePlayerActive) CinemaSuccess else CinemaAccent)
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          Text(
-            text = if (searchQuery.isNotBlank()) searchQuery else activePortal.displayNameArabic,
-            color = Color.White,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.ExtraBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-          )
-          if (isScrapingSeries) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+          ) {
+            Box(
+              modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (isNativePlayerActive) CinemaSuccess else CinemaAccent)
+            )
             Spacer(modifier = Modifier.width(6.dp))
-            CircularProgressIndicator(
-              color = CinemaAccent,
-              modifier = Modifier.size(13.dp),
-              strokeWidth = 2.dp
+            Text(
+              text = if (searchQuery.isNotBlank()) searchQuery else activePortal.displayNameArabic,
+              color = Color.White,
+              fontSize = 12.sp,
+              fontWeight = FontWeight.ExtraBold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis
+            )
+            if (isScrapingSeries) {
+              Spacer(modifier = Modifier.width(6.dp))
+              CircularProgressIndicator(
+                color = CinemaAccent,
+                modifier = Modifier.size(13.dp),
+                strokeWidth = 2.dp
+              )
+            }
+          }
+
+          Spacer(modifier = Modifier.width(6.dp))
+
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            // Switch to Primary Native Player (when in WebView fallback mode)
+            if (hasDetectedDirectStream && !isNativePlayerActive) {
+              SidePanelFocusPill(
+                label = "المشغل الأساسي",
+                icon = Icons.Default.PlayArrow,
+                containerColor = CinemaSuccess,
+                contentColor = Color.Black,
+                borderColor = CinemaSuccess,
+                onClick = onSwitchToNativePlayer,
+                testTag = "play_native_video_button"
+              )
+            }
+
+            // Video Fullscreen button
+            SidePanelFocusPill(
+              label = "ملء الشاشة",
+              icon = Icons.Default.Fullscreen,
+              containerColor = CinemaPrimary,
+              contentColor = Color.White,
+              borderColor = CinemaPrimary,
+              onClick = onToggleVideoFullscreen,
+              testTag = "side_panel_fullscreen_button"
+            )
+
+            // Subtitles CC Button
+            SidePanelFocusPill(
+              label = "CC",
+              icon = Icons.Default.Subtitles,
+              containerColor = CinemaSurfaceVariant,
+              contentColor = Color.White,
+              iconTint = CinemaAccent,
+              borderColor = CinemaAccent.copy(alpha = 0.8f),
+              onClick = onOpenSubtitles,
+              testTag = "side_panel_subtitles_button"
+            )
+
+            // Refresh Servers & Episodes Button
+            SidePanelSquareIconBtn(
+              icon = Icons.Default.Refresh,
+              tint = CinemaAccent,
+              contentDescription = "تحديث السيرفرات والحلقات",
+              onClick = onRescrapePage,
+              testTag = "btn_rescrape_seasons_episodes"
+            )
+
+            // Close Panel Button
+            SidePanelSquareIconBtn(
+              icon = Icons.Default.Close,
+              tint = Color.LightGray,
+              contentDescription = "إخفاء اللوحة",
+              onClick = onClosePanel,
+              testTag = "btn_close_watch_side_panel"
             )
           }
         }
 
-        Spacer(modifier = Modifier.width(6.dp))
+        // 2. Full-Width Active Server Selector Button (Opens Centered TV Modal Horizontal D-Pad Carousel)
+        val serverSelectorInteraction = remember { MutableInteractionSource() }
+        val isServerSelectorFocused by serverSelectorInteraction.collectIsFocusedAsState()
+        val serverCount = seriesStructure.watchServers.size
 
-        Row(
-          horizontalArrangement = Arrangement.spacedBy(5.dp),
-          verticalAlignment = Alignment.CenterVertically
+        Surface(
+          onClick = {
+            if (serverCount > 0) {
+              showServerSelectorModal = true
+            } else {
+              onRescrapePage()
+            }
+          },
+          interactionSource = serverSelectorInteraction,
+          color = if (isServerSelectorFocused) CinemaSurfaceVariant else CinemaSurface,
+          shape = RoundedCornerShape(10.dp),
+          border = BorderStroke(
+            width = if (isServerSelectorFocused) 2.5.dp else 1.dp,
+            color = if (isServerSelectorFocused) CinemaFocusGlow else CinemaSuccess.copy(alpha = 0.7f)
+          ),
+          modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .scale(if (isServerSelectorFocused) 1.015f else 1.0f)
+            .focusable(interactionSource = serverSelectorInteraction)
+            .testTag("btn_open_server_selector_modal")
         ) {
-          // Switch to Primary Native Player (when in WebView fallback mode)
-          if (hasDetectedDirectStream && !isNativePlayerActive) {
-            Surface(
-              onClick = onSwitchToNativePlayer,
-              color = CinemaSuccess,
-              shape = RoundedCornerShape(8.dp),
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            Box(
               modifier = Modifier
-                .heightIn(min = 28.dp)
-                .testTag("play_native_video_button")
+                .size(30.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isServerSelectorFocused) CinemaFocusGlow else CinemaSuccess.copy(alpha = 0.18f)),
+              contentAlignment = Alignment.Center
+            ) {
+              Icon(
+                imageVector = Icons.Default.Dns,
+                contentDescription = "اختيار سيرفر المشاهدة",
+                tint = if (isServerSelectorFocused) Color.Black else CinemaSuccess,
+                modifier = Modifier.size(16.dp)
+              )
+            }
+
+            Column(
+              modifier = Modifier.weight(1f),
+              verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+              Text(
+                text = "السيرفر النشط (${serverCount} متاح)",
+                color = if (isServerSelectorFocused) CinemaFocusGlow else Color.LightGray,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+              Text(
+                text = displayedServerLabel,
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+            }
+
+            Surface(
+              color = if (isServerSelectorFocused) CinemaFocusGlow else CinemaDarkBackground,
+              shape = RoundedCornerShape(8.dp),
+              border = BorderStroke(
+                1.dp,
+                if (isServerSelectorFocused) Color.White else CinemaBorder
+              )
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
               ) {
-                Icon(
-                  imageVector = Icons.Default.PlayArrow,
-                  contentDescription = null,
-                  tint = Color.Black,
-                  modifier = Modifier.size(13.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
                 Text(
-                  text = "المشغل الأساسي",
-                  color = Color.Black,
-                  fontSize = 9.5.sp,
+                  text = if (serverCount > 0) "تبديل" else "تحديث",
+                  color = if (isServerSelectorFocused) Color.Black else CinemaAccent,
+                  fontSize = 10.5.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   softWrap = false
                 )
+                Icon(
+                  imageVector = Icons.Default.KeyboardArrowDown,
+                  contentDescription = null,
+                  tint = if (isServerSelectorFocused) Color.Black else CinemaAccent,
+                  modifier = Modifier.size(14.dp)
+                )
               }
             }
           }
+        }
 
-          // Video Fullscreen button
+        // 3. Auto-Detected Real Video Qualities Strip (D-Pad focusable with bringIntoView)
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(CinemaSurface)
+            .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Icon(
+            imageVector = Icons.Default.HighQuality,
+            contentDescription = null,
+            tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
+            modifier = Modifier.size(14.dp)
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = if (detectedQualities.isNotEmpty()) "جودات الفيديو:" else "الجودة:",
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          if (detectedQualities.isNotEmpty()) {
+            val qualityScope = rememberCoroutineScope()
+            LazyRow(
+              horizontalArrangement = Arrangement.spacedBy(5.dp),
+              modifier = Modifier.weight(1f)
+            ) {
+              items(detectedQualities, key = { it.id }) { qOption ->
+                val selected = currentQuality == qOption.id
+                val qInteraction = remember { MutableInteractionSource() }
+                val isFocused by qInteraction.collectIsFocusedAsState()
+                val bringIntoViewRequester = remember { BringIntoViewRequester() }
+                Surface(
+                  onClick = { onSelectQuality(qOption) },
+                  interactionSource = qInteraction,
+                  color = when {
+                    isFocused -> CinemaFocusGlow
+                    selected -> ClipboxWhite
+                    else -> CinemaDarkBackground
+                  },
+                  shape = RoundedCornerShape(7.dp),
+                  border = BorderStroke(
+                    width = if (isFocused) 2.dp else 1.dp,
+                    color = when {
+                      isFocused -> Color.White
+                      selected -> ClipboxWhite
+                      else -> CinemaSuccess.copy(alpha = 0.6f)
+                    }
+                  ),
+                  modifier = Modifier
+                    .heightIn(min = 34.dp)
+                    .bringIntoViewRequester(bringIntoViewRequester)
+                    .onFocusChanged { state ->
+                      if (state.isFocused) {
+                        qualityScope.launch { bringIntoViewRequester.bringIntoView() }
+                      }
+                    }
+                    .focusable(interactionSource = qInteraction)
+                    .testTag("quality_chip_${qOption.id}")
+                ) {
+                  Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                  ) {
+                    Text(
+                      text = qOption.label,
+                      color = if (selected || isFocused) Color.Black else Color.White,
+                      fontSize = 10.sp,
+                      fontWeight = if (selected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+              }
+            }
+          } else {
+            Text(
+              text = "تلقائي Auto (سيتم إظهار الجودات الفعلية فور بدء البث...)",
+              color = CinemaAccent,
+              fontSize = 10.sp,
+              fontWeight = FontWeight.SemiBold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.weight(1f)
+            )
+          }
+        }
+
+        // 4. Mode Switcher Tabs: [📺 المواسم والحلقات] vs [🌐 لستة المصادر والنتائج]
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+          val tab0Interaction = remember { MutableInteractionSource() }
+          val isTab0Focused by tab0Interaction.collectIsFocusedAsState()
           Surface(
-            onClick = onToggleVideoFullscreen,
-            color = CinemaPrimary,
+            onClick = { activeSubTab = 0 },
+            interactionSource = tab0Interaction,
+            color = when {
+              isTab0Focused -> CinemaFocusGlow
+              activeSubTab == 0 -> ClipboxWhite
+              else -> CinemaSurface
+            },
             shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(
+              width = if (isTab0Focused) 2.dp else 1.dp,
+              color = when {
+                isTab0Focused -> Color.White
+                activeSubTab == 0 -> ClipboxWhite
+                else -> CinemaBorder
+              }
+            ),
             modifier = Modifier
-              .heightIn(min = 28.dp)
-              .testTag("side_panel_fullscreen_button")
+              .weight(1f)
+              .heightIn(min = 38.dp)
+              .focusable(interactionSource = tab0Interaction)
+              .testTag("tab_seasons_episodes")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+              horizontalArrangement = Arrangement.Center,
               verticalAlignment = Alignment.CenterVertically
             ) {
               Icon(
-                imageVector = Icons.Default.Fullscreen,
-                contentDescription = "تكبير المشغل ملء الشاشة",
-                tint = Color.White,
+                imageVector = Icons.Default.VideoLibrary,
+                contentDescription = null,
+                tint = if (activeSubTab == 0 || isTab0Focused) Color.Black else CinemaAccent,
                 modifier = Modifier.size(14.dp)
               )
-              Spacer(modifier = Modifier.width(3.dp))
+              Spacer(modifier = Modifier.width(5.dp))
               Text(
-                text = "ملء الشاشة",
-                color = Color.White,
-                fontSize = 9.5.sp,
+                text = "المواسم والحلقات (${seriesStructure.episodes.size})",
+                color = if (activeSubTab == 0 || isTab0Focused) Color.Black else Color.White,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
@@ -241,336 +520,300 @@ fun WatchSidePanel(
             }
           }
 
-          // Subtitles CC Button
+          val tab1Interaction = remember { MutableInteractionSource() }
+          val isTab1Focused by tab1Interaction.collectIsFocusedAsState()
           Surface(
-            onClick = onOpenSubtitles,
-            color = CinemaSurfaceVariant,
-            border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.8f)),
+            onClick = { activeSubTab = 1 },
+            interactionSource = tab1Interaction,
+            color = when {
+              isTab1Focused -> CinemaFocusGlow
+              activeSubTab == 1 -> ClipboxWhite
+              else -> CinemaSurface
+            },
             shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(
+              width = if (isTab1Focused) 2.dp else 1.dp,
+              color = when {
+                isTab1Focused -> Color.White
+                activeSubTab == 1 -> ClipboxWhite
+                else -> CinemaBorder
+              }
+            ),
             modifier = Modifier
-              .heightIn(min = 28.dp)
-              .testTag("side_panel_subtitles_button")
+              .weight(1f)
+              .heightIn(min = 38.dp)
+              .focusable(interactionSource = tab1Interaction)
+              .testTag("tab_alternative_sources")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+              horizontalArrangement = Arrangement.Center,
               verticalAlignment = Alignment.CenterVertically
             ) {
               Icon(
-                imageVector = Icons.Default.Subtitles,
+                imageVector = Icons.Default.Layers,
                 contentDescription = null,
-                tint = CinemaAccent,
-                modifier = Modifier.size(13.dp)
+                tint = if (activeSubTab == 1 || isTab1Focused) Color.Black else CinemaPrimary,
+                modifier = Modifier.size(14.dp)
               )
-              Spacer(modifier = Modifier.width(3.dp))
+              Spacer(modifier = Modifier.width(5.dp))
               Text(
-                text = "CC",
-                color = Color.White,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
+                text = "لستة المصادر والنتائج",
+                color = if (activeSubTab == 1 || isTab1Focused) Color.Black else Color.White,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
               )
             }
           }
-
-          // Refresh Servers & Episodes Button (crisp 28dp rounded-square, no 48dp IconButton overlap!)
-          SidePanelSquareIconBtn(
-            icon = Icons.Default.Refresh,
-            tint = CinemaAccent,
-            contentDescription = "تحديث السيرفرات والحلقات",
-            onClick = onRescrapePage,
-            testTag = "btn_rescrape_seasons_episodes"
-          )
-
-          // Close Panel Button
-          SidePanelSquareIconBtn(
-            icon = Icons.Default.Close,
-            tint = Color.LightGray,
-            contentDescription = "إخفاء اللوحة",
-            onClick = onClosePanel,
-            testTag = "btn_close_watch_side_panel"
-          )
         }
-      }
 
-      // 2. Compact Single-Line Scraped Watch Servers Strip
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .clip(RoundedCornerShape(8.dp))
-          .background(CinemaSurface)
-          .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-          .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Icon(
-          imageVector = Icons.Default.Dns,
-          contentDescription = null,
-          tint = CinemaSuccess,
-          modifier = Modifier.size(13.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-          text = "السيرفرات (${seriesStructure.watchServers.size}):",
-          color = Color.White,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Bold,
-          maxLines = 1,
-          softWrap = false
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        if (seriesStructure.watchServers.isNotEmpty()) {
-          LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            modifier = Modifier.weight(1f)
-          ) {
-            items(seriesStructure.watchServers, key = { it.id }) { srv ->
-              val isSelected = currentUrl == srv.embedUrl
-              Surface(
-                onClick = { onSelectWatchServer(srv) },
-                color = if (isSelected) ClipboxWhite else CinemaDarkBackground,
-                shape = RoundedCornerShape(7.dp),
-                border = BorderStroke(
-                  1.dp,
-                  if (isSelected) ClipboxWhite else if (srv.isDirectEmbed) CinemaSuccess.copy(alpha = 0.7f) else CinemaBorder
-                ),
-                modifier = Modifier.heightIn(min = 28.dp)
-              ) {
+        // 5. Large, Expanded Content Area
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(CinemaSurface)
+            .border(1.dp, CinemaBorder, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+          if (activeSubTab == 0) {
+            val contentScope = rememberCoroutineScope()
+            Column(
+              modifier = Modifier.fillMaxSize(),
+              verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              // Spacious Seasons Strip
+              if (seriesStructure.seasons.isNotEmpty()) {
                 Row(
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                  verticalAlignment = Alignment.CenterVertically
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                  Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    tint = if (isSelected) Color.Black else CinemaSuccess,
-                    modifier = Modifier.size(12.dp)
-                  )
-                  Spacer(modifier = Modifier.width(3.dp))
                   Text(
-                    text = srv.name,
-                    color = if (isSelected) Color.Black else Color.White,
+                    text = "اختر الموسم (${seriesStructure.seasons.size} مواسم):",
+                    color = CinemaAccent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold
+                  )
+                  Text(
+                    text = "الموسم الحالي: ${seriesStructure.selectedSeasonNumber}",
+                    color = Color.LightGray,
                     fontSize = 10.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    softWrap = false
+                    fontWeight = FontWeight.SemiBold
                   )
                 }
-              }
-            }
-          }
-        } else {
-          Text(
-            text = "جاري سحب السيرفرات...",
-            color = Color.LightGray,
-            fontSize = 10.sp,
-            maxLines = 1
-          )
-        }
-      }
 
-      // 3. Auto-Detected Real Video Qualities Strip (No fake static list!)
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .clip(RoundedCornerShape(8.dp))
-          .background(CinemaSurface)
-          .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-          .padding(horizontal = 8.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Icon(
-          imageVector = Icons.Default.HighQuality,
-          contentDescription = null,
-          tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
-          modifier = Modifier.size(14.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-          text = if (detectedQualities.isNotEmpty()) "جودات الفيديو:" else "الجودة:",
-          color = Color.White,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Bold,
-          maxLines = 1,
-          softWrap = false
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        if (detectedQualities.isNotEmpty()) {
-          LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            modifier = Modifier.weight(1f)
-          ) {
-            items(detectedQualities, key = { it.id }) { qOption ->
-              val selected = currentQuality == qOption.id
-              Surface(
-                onClick = { onSelectQuality(qOption) },
-                color = if (selected) ClipboxWhite else CinemaDarkBackground,
-                shape = RoundedCornerShape(7.dp),
-                border = BorderStroke(1.dp, if (selected) ClipboxWhite else CinemaSuccess.copy(alpha = 0.6f)),
-                modifier = Modifier.heightIn(min = 26.dp)
-              ) {
+                LazyRow(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.fillMaxWidth()
+                ) {
+                  items(seriesStructure.seasons, key = { "${it.seasonNumber}_${it.url}" }) { season ->
+                    val isSelected = season.seasonNumber == seriesStructure.selectedSeasonNumber
+                    val sInteraction = remember { MutableInteractionSource() }
+                    val isFocused by sInteraction.collectIsFocusedAsState()
+                    val bringIntoView = remember { BringIntoViewRequester() }
+                    Surface(
+                      onClick = { onSelectSeason(season) },
+                      interactionSource = sInteraction,
+                      color = when {
+                        isFocused -> CinemaFocusGlow
+                        isSelected -> CinemaPrimary
+                        else -> CinemaDarkBackground
+                      },
+                      shape = RoundedCornerShape(10.dp),
+                      border = BorderStroke(
+                        width = if (isFocused) 2.5.dp else 1.5.dp,
+                        color = when {
+                          isFocused -> Color.White
+                          isSelected -> ClipboxWhite
+                          else -> CinemaBorder
+                        }
+                      ),
+                      modifier = Modifier
+                        .heightIn(min = 42.dp)
+                        .bringIntoViewRequester(bringIntoView)
+                        .onFocusChanged { if (it.isFocused) contentScope.launch { bringIntoView.bringIntoView() } }
+                        .focusable(interactionSource = sInteraction)
+                        .testTag("season_chip_${season.seasonNumber}")
+                    ) {
+                      Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                      ) {
+                        Text(
+                          text = season.title,
+                          color = if (isFocused) Color.Black else Color.White,
+                          fontSize = 12.sp,
+                          fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
+                          maxLines = 1,
+                          softWrap = false
+                        )
+                      }
+                    }
+                  }
+                }
+              }
+
+              // Expanded Multi-Row Episodes Grid (48dp touch/focus targets + crisp D-Pad ring)
+              if (seriesStructure.episodes.isNotEmpty()) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Text(
+                    text = "اختر الحلقة للتشغيل الفوري (${seriesStructure.episodes.size} حلقة متاحة):",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold
+                  )
+                }
+
+                LazyVerticalGrid(
+                  columns = GridCells.Adaptive(minSize = 104.dp),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalArrangement = Arrangement.spacedBy(8.dp),
+                  contentPadding = PaddingValues(bottom = 4.dp)
+                ) {
+                  items(seriesStructure.episodes, key = { "${it.episodeNumber}_${it.url}" }) { ep ->
+                    val isCurrentEp = activeWatchPageUrl == ep.url || currentUrl == ep.url
+                    val epInteraction = remember { MutableInteractionSource() }
+                    val isFocused by epInteraction.collectIsFocusedAsState()
+                    val bringIntoView = remember { BringIntoViewRequester() }
+                    Surface(
+                      onClick = { onSelectEpisode(ep) },
+                      interactionSource = epInteraction,
+                      color = when {
+                        isFocused -> CinemaFocusGlow
+                        isCurrentEp -> CinemaSuccess
+                        else -> CinemaDarkBackground
+                      },
+                      shape = RoundedCornerShape(10.dp),
+                      border = BorderStroke(
+                        width = if (isFocused) 2.5.dp else 1.5.dp,
+                        color = when {
+                          isFocused -> Color.White
+                          isCurrentEp -> ClipboxWhite
+                          else -> CinemaBorder
+                        }
+                      ),
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .scale(if (isFocused) 1.03f else 1.0f)
+                        .bringIntoViewRequester(bringIntoView)
+                        .onFocusChanged { if (it.isFocused) contentScope.launch { bringIntoView.bringIntoView() } }
+                        .focusable(interactionSource = epInteraction)
+                        .testTag("episode_card_${ep.episodeNumber}")
+                    ) {
+                      Row(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(horizontal = 10.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.PlayArrow,
+                          contentDescription = null,
+                          tint = when {
+                            isFocused -> Color.Black
+                            isCurrentEp -> Color.White
+                            else -> CinemaAccent
+                          },
+                          modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                          text = "الحلقة ${ep.episodeNumber}",
+                          color = if (isFocused) Color.Black else Color.White,
+                          fontSize = 12.sp,
+                          fontWeight = FontWeight.ExtraBold,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis,
+                          textAlign = TextAlign.Center
+                        )
+                      }
+                    }
+                  }
+                }
+              } else {
                 Box(
-                  contentAlignment = Alignment.Center,
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                  contentAlignment = Alignment.Center
                 ) {
                   Text(
-                    text = qOption.label,
-                    color = if (selected) Color.Black else Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                    maxLines = 1,
-                    softWrap = false
+                    text = if (isScrapingSeries) {
+                      "جاري استخراج المواسم والحلقات..."
+                    } else {
+                      "هذا العمل فيلم، أو يمكنك اختيار الحلقة من تبويب \"لستة المصادر والنتائج\" بجواره."
+                    },
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
                   )
                 }
               }
             }
-          }
-        } else {
-          Text(
-            text = "تلقائي Auto (سيتم إظهار الجودات الفعلية فور بدء البث...)",
-            color = CinemaAccent,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-          )
-        }
-      }
-
-      // 4. Mode Switcher Tabs: [📺 المواسم والحلقات] vs [🌐 لستة المصادر والنتائج]
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-      ) {
-        Surface(
-          onClick = { activeSubTab = 0 },
-          color = if (activeSubTab == 0) ClipboxWhite else CinemaSurface,
-          shape = RoundedCornerShape(8.dp),
-          border = BorderStroke(1.dp, if (activeSubTab == 0) ClipboxWhite else CinemaBorder),
-          modifier = Modifier
-            .weight(1f)
-            .heightIn(min = 32.dp)
-            .testTag("tab_seasons_episodes")
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Icon(
-              imageVector = Icons.Default.VideoLibrary,
-              contentDescription = null,
-              tint = if (activeSubTab == 0) Color.Black else CinemaAccent,
-              modifier = Modifier.size(14.dp)
-            )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-              text = "المواسم والحلقات (${seriesStructure.episodes.size})",
-              color = if (activeSubTab == 0) Color.Black else Color.White,
-              fontSize = 11.sp,
-              fontWeight = FontWeight.ExtraBold,
-              maxLines = 1,
-              softWrap = false
-            )
-          }
-        }
-
-        Surface(
-          onClick = { activeSubTab = 1 },
-          color = if (activeSubTab == 1) ClipboxWhite else CinemaSurface,
-          shape = RoundedCornerShape(8.dp),
-          border = BorderStroke(1.dp, if (activeSubTab == 1) ClipboxWhite else CinemaBorder),
-          modifier = Modifier
-            .weight(1f)
-            .heightIn(min = 32.dp)
-            .testTag("tab_alternative_sources")
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Icon(
-              imageVector = Icons.Default.Layers,
-              contentDescription = null,
-              tint = if (activeSubTab == 1) Color.Black else CinemaPrimary,
-              modifier = Modifier.size(14.dp)
-            )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-              text = "لستة المصادر والنتائج",
-              color = if (activeSubTab == 1) Color.Black else Color.White,
-              fontSize = 11.sp,
-              fontWeight = FontWeight.ExtraBold,
-              maxLines = 1,
-              softWrap = false
-            )
-          }
-        }
-      }
-
-      // 5. Large, Expanded Content Area (No whole-page vertical scroll!)
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .weight(1f)
-          .clip(RoundedCornerShape(12.dp))
-          .background(CinemaSurface)
-          .border(1.dp, CinemaBorder, RoundedCornerShape(12.dp))
-          .padding(horizontal = 10.dp, vertical = 8.dp)
-      ) {
-        if (activeSubTab == 0) {
-          Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
-            // Spacious Seasons Strip
-            if (seriesStructure.seasons.isNotEmpty()) {
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-              ) {
-                Text(
-                  text = "اختر الموسم (${seriesStructure.seasons.size} مواسم):",
-                  color = CinemaAccent,
-                  fontSize = 11.sp,
-                  fontWeight = FontWeight.ExtraBold
-                )
-                Text(
-                  text = "الموسم الحالي: ${seriesStructure.selectedSeasonNumber}",
-                  color = Color.LightGray,
-                  fontSize = 10.sp,
-                  fontWeight = FontWeight.SemiBold
-                )
-              }
-
+          } else {
+            // Tab 1: Alternative Sources & Search Results
+            val sourceScope = rememberCoroutineScope()
+            Column(
+              modifier = Modifier.fillMaxSize(),
+              verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              val enabledPortals = StreamingPortal.values().filter { it.isEnabled }
               LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth()
               ) {
-                items(seriesStructure.seasons, key = { "${it.seasonNumber}_${it.url}" }) { season ->
-                  val isSelected = season.seasonNumber == seriesStructure.selectedSeasonNumber
+                items(enabledPortals, key = { it.id }) { portal ->
+                  val count = portalResultsMap[portal]?.size ?: 0
+                  val isSelected = selectedPortalTab == portal
+                  val pInteraction = remember { MutableInteractionSource() }
+                  val isFocused by pInteraction.collectIsFocusedAsState()
+                  val bringIntoView = remember { BringIntoViewRequester() }
                   Surface(
-                    onClick = { onSelectSeason(season) },
-                    color = if (isSelected) CinemaPrimary else CinemaDarkBackground,
-                    shape = RoundedCornerShape(10.dp),
+                    onClick = { selectedPortalTab = portal },
+                    interactionSource = pInteraction,
+                    color = when {
+                      isFocused -> CinemaFocusGlow
+                      isSelected -> ClipboxWhite
+                      else -> CinemaDarkBackground
+                    },
+                    shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(
-                      1.5.dp,
-                      if (isSelected) ClipboxWhite else CinemaBorder
+                      width = if (isFocused) 2.dp else 1.dp,
+                      color = when {
+                        isFocused -> Color.White
+                        isSelected -> ClipboxWhite
+                        else -> CinemaBorder
+                      }
                     ),
-                    modifier = Modifier.heightIn(min = 38.dp)
+                    modifier = Modifier
+                      .heightIn(min = 38.dp)
+                      .bringIntoViewRequester(bringIntoView)
+                      .onFocusChanged { if (it.isFocused) sourceScope.launch { bringIntoView.bringIntoView() } }
+                      .focusable(interactionSource = pInteraction)
+                      .testTag("portal_filter_chip_${portal.id}")
                   ) {
                     Box(
                       contentAlignment = Alignment.Center,
-                      modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
                       Text(
-                        text = season.title,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        text = if (count > 0) "${portal.displayNameArabic} ($count)" else portal.displayNameArabic,
+                        color = if (isSelected || isFocused) Color.Black else Color.LightGray,
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false
                       )
@@ -578,218 +821,131 @@ fun WatchSidePanel(
                   }
                 }
               }
-            }
 
-            // Expanded Multi-Row Episodes Grid (Fills all remaining height clearly!)
-            if (seriesStructure.episodes.isNotEmpty()) {
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-              ) {
-                Text(
-                  text = "اختر الحلقة للتشغيل الفوري (${seriesStructure.episodes.size} حلقة متاحة):",
-                  color = Color.White,
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.ExtraBold
-                )
-              }
-
-              LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 100.dp),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = 4.dp)
-              ) {
-                items(seriesStructure.episodes, key = { "${it.episodeNumber}_${it.url}" }) { ep ->
-                  val isCurrentEp = activeWatchPageUrl == ep.url || currentUrl == ep.url
-                  Surface(
-                    onClick = { onSelectEpisode(ep) },
-                    color = if (isCurrentEp) CinemaSuccess else CinemaDarkBackground,
-                    shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(
-                      1.5.dp,
-                      if (isCurrentEp) ClipboxWhite else CinemaBorder
-                    ),
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .heightIn(min = 42.dp)
-                  ) {
+              val itemsForSelectedPortal = portalResultsMap[selectedPortalTab] ?: emptyList()
+              if (itemsForSelectedPortal.isNotEmpty()) {
+                LazyColumn(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                  verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                  items(itemsForSelectedPortal.take(15), key = { it.id }) { resultItem ->
+                    val isCurrentUrl = activeWatchPageUrl == resultItem.url || currentUrl == resultItem.url
+                    val rowInteraction = remember { MutableInteractionSource() }
+                    val isFocused by rowInteraction.collectIsFocusedAsState()
+                    val bringIntoView = remember { BringIntoViewRequester() }
                     Row(
                       modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 9.dp),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.Center
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                          when {
+                            isFocused -> CinemaFocusGlow.copy(alpha = 0.2f)
+                            isCurrentUrl -> CinemaPrimary.copy(alpha = 0.25f)
+                            else -> CinemaDarkBackground
+                          }
+                        )
+                        .border(
+                          width = if (isFocused) 2.dp else 1.dp,
+                          color = when {
+                            isFocused -> CinemaFocusGlow
+                            isCurrentUrl -> CinemaPrimary
+                            else -> CinemaBorder
+                          },
+                          shape = RoundedCornerShape(8.dp)
+                        )
+                        .bringIntoViewRequester(bringIntoView)
+                        .onFocusChanged { if (it.isFocused) sourceScope.launch { bringIntoView.bringIntoView() } }
+                        .focusable(interactionSource = rowInteraction)
+                        .clickable(
+                          interactionSource = rowInteraction,
+                          indication = null
+                        ) { onSelectSearchResult(resultItem, selectedPortalTab) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("source_result_${resultItem.id}"),
+                      horizontalArrangement = Arrangement.SpaceBetween,
+                      verticalAlignment = Alignment.CenterVertically
                     ) {
-                      Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        tint = if (isCurrentEp) Color.White else CinemaAccent,
-                        modifier = Modifier.size(15.dp)
-                      )
-                      Spacer(modifier = Modifier.width(4.dp))
-                      Text(
-                        text = "الحلقة ${ep.episodeNumber}",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
-                      )
+                      Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                          text = resultItem.title,
+                          color = Color.White,
+                          fontSize = 11.5.sp,
+                          fontWeight = FontWeight.SemiBold,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                          text = "${selectedPortalTab.displayNameArabic} • ${resultItem.type} • ${resultItem.quality}",
+                          color = Color.LightGray,
+                          fontSize = 10.sp,
+                          maxLines = 1,
+                          overflow = TextOverflow.Ellipsis
+                        )
+                      }
+                      Spacer(modifier = Modifier.width(6.dp))
+                      Box(
+                        modifier = Modifier
+                          .clip(RoundedCornerShape(6.dp))
+                          .background(
+                            when {
+                              isFocused -> CinemaFocusGlow
+                              isCurrentUrl -> CinemaSuccess
+                              else -> CinemaPrimary
+                            }
+                          )
+                          .padding(horizontal = 8.dp, vertical = 5.dp)
+                      ) {
+                        Text(
+                          text = if (isCurrentUrl) "يعمل الآن" else "تشغيل ▶",
+                          color = if (isFocused) Color.Black else Color.White,
+                          fontSize = 10.sp,
+                          fontWeight = FontWeight.ExtraBold,
+                          maxLines = 1,
+                          softWrap = false
+                        )
+                      }
                     }
                   }
                 }
-              }
-            } else {
-              Box(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .weight(1f),
-                contentAlignment = Alignment.Center
-              ) {
-                Text(
-                  text = if (isScrapingSeries) {
-                    "جاري استخراج المواسم والحلقات..."
-                  } else {
-                    "هذا العمل فيلم، أو يمكنك اختيار الحلقة من تبويب \"لستة المصادر والنتائج\" بجواره."
-                  },
-                  color = Color.LightGray,
-                  fontSize = 12.sp,
-                  textAlign = TextAlign.Center
-                )
-              }
-            }
-          }
-        } else {
-          // Tab 1: Alternative Sources & Search Results
-          Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-          ) {
-            val enabledPortals = StreamingPortal.values().filter { it.isEnabled }
-            LazyRow(
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-              modifier = Modifier.fillMaxWidth()
-            ) {
-              items(enabledPortals) { portal ->
-                val count = portalResultsMap[portal]?.size ?: 0
-                val isSelected = selectedPortalTab == portal
-                FilterChip(
-                  selected = isSelected,
-                  onClick = { selectedPortalTab = portal },
-                  label = {
-                    Text(
-                      text = if (count > 0) "${portal.displayNameArabic} ($count)" else portal.displayNameArabic,
-                      fontSize = 11.sp,
-                      fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                      maxLines = 1,
-                      softWrap = false
-                    )
-                  },
-                  colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = ClipboxWhite,
-                    selectedLabelColor = Color.Black,
-                    containerColor = CinemaDarkBackground,
-                    labelColor = Color.LightGray
-                  ),
-                  modifier = Modifier.heightIn(min = 32.dp)
-                )
-              }
-            }
-
-            val itemsForSelectedPortal = portalResultsMap[selectedPortalTab] ?: emptyList()
-            if (itemsForSelectedPortal.isNotEmpty()) {
-              LazyColumn(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-              ) {
-                items(itemsForSelectedPortal.take(15), key = { it.id }) { resultItem ->
-                  val isCurrentUrl = activeWatchPageUrl == resultItem.url || currentUrl == resultItem.url
-                  Row(
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .clip(RoundedCornerShape(8.dp))
-                      .background(if (isCurrentUrl) CinemaPrimary.copy(alpha = 0.25f) else CinemaDarkBackground)
-                      .border(
-                        1.dp,
-                        if (isCurrentUrl) CinemaPrimary else CinemaBorder,
-                        RoundedCornerShape(8.dp)
-                      )
-                      .clickable { onSelectSearchResult(resultItem, selectedPortalTab) }
-                      .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                  ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                      Text(
-                        text = resultItem.title,
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                      )
-                      Text(
-                        text = "${selectedPortalTab.displayNameArabic} • ${resultItem.type} • ${resultItem.quality}",
-                        color = Color.Gray,
-                        fontSize = 10.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                      )
-                    }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Box(
-                      modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isCurrentUrl) CinemaSuccess else CinemaPrimary)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                      Text(
-                        text = if (isCurrentUrl) "يعمل الآن" else "تشغيل ▶",
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        softWrap = false
-                      )
-                    }
-                  }
-                }
-              }
-            } else {
-              Box(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .weight(1f),
-                contentAlignment = Alignment.Center
-              ) {
-                Button(
-                  onClick = { onSwitchPortalDirect(selectedPortalTab) },
-                  colors = ButtonDefaults.buttonColors(
-                    containerColor = CinemaDarkBackground,
-                    contentColor = Color.White
-                  ),
-                  border = BorderStroke(1.dp, CinemaBorder),
-                  shape = RoundedCornerShape(8.dp),
-                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+              } else {
+                val searchBtnInteraction = remember { MutableInteractionSource() }
+                val isSearchBtnFocused by searchBtnInteraction.collectIsFocusedAsState()
+                Box(
                   modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 40.dp)
+                    .weight(1f),
+                  contentAlignment = Alignment.Center
                 ) {
-                  Text(
-                    text = "البحث عن العمل في ${selectedPortalTab.displayNameArabic} 🔍",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                  )
+                  Button(
+                    onClick = { onSwitchPortalDirect(selectedPortalTab) },
+                    interactionSource = searchBtnInteraction,
+                    colors = ButtonDefaults.buttonColors(
+                      containerColor = if (isSearchBtnFocused) CinemaFocusGlow else CinemaDarkBackground,
+                      contentColor = if (isSearchBtnFocused) Color.Black else Color.White
+                    ),
+                    border = BorderStroke(
+                      width = if (isSearchBtnFocused) 2.dp else 1.dp,
+                      color = if (isSearchBtnFocused) Color.White else CinemaBorder
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .heightIn(min = 48.dp)
+                      .focusable(interactionSource = searchBtnInteraction)
+                      .testTag("btn_search_selected_portal")
+                  ) {
+                    Text(
+                      text = "البحث عن العمل في ${selectedPortalTab.displayNameArabic} 🔍",
+                      fontSize = 11.5.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis
+                    )
+                  }
                 }
               }
             }
@@ -798,6 +954,371 @@ fun WatchSidePanel(
       }
     }
   }
+
+  // Centered TV Modal with Horizontal D-Pad Carousel for Server Selection
+  if (showServerSelectorModal) {
+    ServerSelectorTvModal(
+      servers = seriesStructure.watchServers,
+      activeServerId = currentActiveServer?.id,
+      activeServerName = displayedServerLabel,
+      currentUrl = currentUrl,
+      onSelectServer = { selected ->
+        showServerSelectorModal = false
+        onSelectWatchServer(selected)
+      },
+      onDismiss = { showServerSelectorModal = false }
+    )
+  }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ServerSelectorTvModal(
+  servers: List<ScrapedWatchServer>,
+  activeServerId: String?,
+  activeServerName: String,
+  currentUrl: String,
+  onSelectServer: (ScrapedWatchServer) -> Unit,
+  onDismiss: () -> Unit
+) {
+  val listState = rememberLazyListState()
+  val scope = rememberCoroutineScope()
+  val activeIndex = remember(servers, activeServerId, currentUrl) {
+    val idx = servers.indexOfFirst {
+      (activeServerId != null && it.id == activeServerId) ||
+        (currentUrl.isNotBlank() && it.embedUrl == currentUrl)
+    }
+    if (idx >= 0) idx else 0
+  }
+  val focusRequesters = remember(servers.size) { List(servers.size) { FocusRequester() } }
+
+  LaunchedEffect(servers.size, activeIndex) {
+    if (servers.isNotEmpty()) {
+      listState.scrollToItem(activeIndex.coerceIn(0, servers.lastIndex))
+      delay(120L)
+      try {
+        focusRequesters[activeIndex.coerceIn(0, servers.lastIndex)].requestFocus()
+      } catch (_: Throwable) {}
+    }
+  }
+
+  Dialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(usePlatformDefaultWidth = false)
+  ) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+      Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = CinemaDarkBackground.copy(alpha = 0.99f),
+        border = BorderStroke(1.5.dp, CinemaAccent.copy(alpha = 0.8f)),
+        shadowElevation = 24.dp,
+        modifier = Modifier
+          .fillMaxWidth(0.92f)
+          .widthIn(max = 680.dp)
+          .padding(12.dp)
+          .testTag("server_selector_tv_modal")
+      ) {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+          // Modal Header
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+              modifier = Modifier.weight(1f)
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(40.dp)
+                  .clip(CircleShape)
+                  .background(CinemaSuccess.copy(alpha = 0.16f))
+                  .border(1.dp, CinemaSuccess, CircleShape),
+                contentAlignment = Alignment.Center
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Dns,
+                  contentDescription = null,
+                  tint = CinemaSuccess,
+                  modifier = Modifier.size(20.dp)
+                )
+              }
+              Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                  text = "اختيار سيرفر المشاهدة (${servers.size})",
+                  color = Color.White,
+                  fontSize = 15.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                  text = "تنقل بالأسهم يمين / يسار واضغط OK للتشغيل الفوري",
+                  color = Color.LightGray,
+                  fontSize = 11.sp,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
+            }
+
+            val closeInteraction = remember { MutableInteractionSource() }
+            val isCloseFocused by closeInteraction.collectIsFocusedAsState()
+            Surface(
+              onClick = onDismiss,
+              interactionSource = closeInteraction,
+              color = if (isCloseFocused) CinemaFocusGlow else CinemaSurface,
+              shape = CircleShape,
+              border = BorderStroke(
+                width = if (isCloseFocused) 2.dp else 1.dp,
+                color = if (isCloseFocused) Color.White else CinemaBorder
+              ),
+              modifier = Modifier
+                .size(48.dp)
+                .focusable(interactionSource = closeInteraction)
+                .testTag("btn_close_server_modal")
+            ) {
+              Box(contentAlignment = Alignment.Center) {
+                Icon(
+                  imageVector = Icons.Default.Close,
+                  contentDescription = "إغلاق نافذة السيرفرات",
+                  tint = if (isCloseFocused) Color.Black else Color.LightGray,
+                  modifier = Modifier.size(20.dp)
+                )
+              }
+            }
+          }
+
+          // Active server indicator pill
+          Surface(
+            color = CinemaSurface,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, CinemaBorder),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = CinemaSuccess,
+                modifier = Modifier.size(16.dp)
+              )
+              Text(
+                text = "السيرفر الحالي: $activeServerName",
+                color = Color.White,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+            }
+          }
+
+          // Horizontal D-Pad Carousel of Server Cards
+          LazyRow(
+            state = listState,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("server_selector_carousel")
+          ) {
+            itemsIndexed(servers, key = { _, srv -> srv.id }) { index, srv ->
+              val isSelected = (activeServerId != null && srv.id == activeServerId) ||
+                (currentUrl.isNotBlank() && srv.embedUrl == currentUrl)
+              val cardInteraction = remember { MutableInteractionSource() }
+              val isFocused by cardInteraction.collectIsFocusedAsState()
+              val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+              Surface(
+                onClick = { onSelectServer(srv) },
+                interactionSource = cardInteraction,
+                color = when {
+                  isFocused -> CinemaSurfaceVariant
+                  isSelected -> CinemaSuccess.copy(alpha = 0.16f)
+                  else -> CinemaSurface
+                },
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(
+                  width = if (isFocused) 3.dp else if (isSelected) 1.5.dp else 1.dp,
+                  color = when {
+                    isFocused -> CinemaFocusGlow
+                    isSelected -> CinemaSuccess
+                    srv.isDirectEmbed -> CinemaAccent.copy(alpha = 0.45f)
+                    else -> CinemaBorder
+                  }
+                ),
+                shadowElevation = if (isFocused) 14.dp else 2.dp,
+                modifier = Modifier
+                  .width(196.dp)
+                  .heightIn(min = 108.dp)
+                  .scale(if (isFocused) 1.04f else 1.0f)
+                  .bringIntoViewRequester(bringIntoViewRequester)
+                  .focusRequester(focusRequesters[index])
+                  .onFocusChanged { focusState ->
+                    if (focusState.isFocused) {
+                      scope.launch {
+                        bringIntoViewRequester.bringIntoView()
+                      }
+                    }
+                  }
+                  .focusable(interactionSource = cardInteraction)
+                  .testTag("server_carousel_card_${srv.id}")
+              ) {
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                  verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Surface(
+                      color = when {
+                        isFocused -> CinemaFocusGlow
+                        isSelected -> CinemaSuccess
+                        else -> CinemaDarkBackground
+                      },
+                      shape = RoundedCornerShape(6.dp)
+                    ) {
+                      Text(
+                        text = "#${index + 1}",
+                        color = if (isFocused || isSelected) Color.Black else CinemaAccent,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                      )
+                    }
+
+                    if (isSelected) {
+                      Surface(
+                        color = CinemaSuccess,
+                        shape = RoundedCornerShape(6.dp)
+                      ) {
+                        Text(
+                          text = "يعمل الآن ✓",
+                          color = Color.Black,
+                          fontSize = 9.5.sp,
+                          fontWeight = FontWeight.ExtraBold,
+                          modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                      }
+                    } else if (srv.isDirectEmbed) {
+                      Text(
+                        text = "مباشر ⚡",
+                        color = CinemaSuccess,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Bold
+                      )
+                    }
+                  }
+
+                  Spacer(modifier = Modifier.height(8.dp))
+
+                  Text(
+                    text = srv.name,
+                    color = Color.White,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 17.sp
+                  )
+
+                  Spacer(modifier = Modifier.height(8.dp))
+
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Text(
+                      text = srv.qualityLabel.ifBlank { "Auto HD" },
+                      color = if (isFocused) CinemaFocusGlow else Color.LightGray,
+                      fontSize = 10.sp,
+                      fontWeight = FontWeight.SemiBold,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis,
+                      modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                      imageVector = Icons.Default.PlayArrow,
+                      contentDescription = null,
+                      tint = if (isFocused) CinemaFocusGlow else CinemaSuccess,
+                      modifier = Modifier.size(18.dp)
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SidePanelFocusPill(
+  label: String,
+  icon: ImageVector,
+  containerColor: Color,
+  contentColor: Color,
+  borderColor: Color,
+  iconTint: Color = contentColor,
+  onClick: () -> Unit,
+  testTag: String
+) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val isFocused by interactionSource.collectIsFocusedAsState()
+  Surface(
+    onClick = onClick,
+    interactionSource = interactionSource,
+    color = if (isFocused) CinemaFocusGlow else containerColor,
+    shape = RoundedCornerShape(8.dp),
+    border = BorderStroke(
+      width = if (isFocused) 2.dp else 1.dp,
+      color = if (isFocused) Color.White else borderColor
+    ),
+    modifier = Modifier
+      .heightIn(min = 32.dp)
+      .focusable(interactionSource = interactionSource)
+      .testTag(testTag)
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = if (isFocused) Color.Black else iconTint,
+        modifier = Modifier.size(13.dp)
+      )
+      Spacer(modifier = Modifier.width(3.dp))
+      Text(
+        text = label,
+        color = if (isFocused) Color.Black else contentColor,
+        fontSize = 9.5.sp,
+        fontWeight = FontWeight.ExtraBold,
+        maxLines = 1,
+        softWrap = false
+      )
+    }
   }
 }
 
@@ -809,21 +1330,28 @@ private fun SidePanelSquareIconBtn(
   onClick: () -> Unit,
   testTag: String
 ) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val isFocused by interactionSource.collectIsFocusedAsState()
   Surface(
     onClick = onClick,
-    color = CinemaSurface,
+    interactionSource = interactionSource,
+    color = if (isFocused) CinemaFocusGlow else CinemaSurface,
     shape = RoundedCornerShape(8.dp),
-    border = BorderStroke(1.dp, CinemaBorder),
+    border = BorderStroke(
+      width = if (isFocused) 2.dp else 1.dp,
+      color = if (isFocused) Color.White else CinemaBorder
+    ),
     modifier = Modifier
-      .size(28.dp)
+      .size(32.dp)
+      .focusable(interactionSource = interactionSource)
       .testTag(testTag)
   ) {
     Box(contentAlignment = Alignment.Center) {
       Icon(
         imageVector = icon,
         contentDescription = contentDescription,
-        tint = tint,
-        modifier = Modifier.size(14.dp)
+        tint = if (isFocused) Color.Black else tint,
+        modifier = Modifier.size(15.dp)
       )
     }
   }
