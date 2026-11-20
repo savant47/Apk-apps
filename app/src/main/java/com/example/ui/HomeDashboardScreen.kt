@@ -1,9 +1,12 @@
 package com.example.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -74,6 +77,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -87,9 +91,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -185,8 +192,10 @@ fun HomeDashboardScreen(
   var isLoadingCatalog by remember { mutableStateOf(true) }
   var catalogRefreshTrigger by remember { mutableIntStateOf(0) }
   val todayDateLabel = remember {
-    SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+    SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date())
   }
+  val railFocusRequester = remember { FocusRequester() }
+  val contentFocusRequester = remember { FocusRequester() }
 
   val history by repository.historyFlow.collectAsState()
   val displayMode by repository.displayModeFlow.collectAsState()
@@ -238,10 +247,11 @@ fun HomeDashboardScreen(
       .fillMaxSize()
       .background(CinemaDarkBackground)
   ) {
-    // 1. Clipbox Floating Pill Navigation Rail on the side
+    // 1. Clipbox Floating Pill Navigation Rail on the side (Dedicated FocusGroup for seamless D-Pad transitions)
     ClipboxNavigationRail(
       activeSection = activeSection,
       isCompactMobile = displayMode == AppDisplayMode.MOBILE,
+      railFocusRequester = railFocusRequester,
       onSelectSection = { section ->
         activeSection = section
         if (section == ClipboxRailSection.SEARCH) {
@@ -262,13 +272,15 @@ fun HomeDashboardScreen(
       onOpenUpdate = onOpenUpdate
     )
 
-    // 2. Main Clipbox Content Area
+    // 2. Main Clipbox Content Area (Dedicated FocusGroup for instant D-Pad traversal without losing focus)
     val mainDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
     LazyColumn(
       state = listState,
       modifier = Modifier
         .weight(1f)
         .fillMaxHeight()
+        .focusRequester(contentFocusRequester)
+        .focusGroup()
         .mouseVerticalDragScroll(
           listState = listState,
           scope = scope,
@@ -421,58 +433,131 @@ fun HomeDashboardScreen(
         }
       }
 
-      // Live Daily IMDb Status Strip & Manual Refresh
+      // Live Daily IMDb Status Strip & Manual Refresh (Clean BiDi-safe 2-line layout with isolated LTR date)
       item {
+        val refreshInteraction = remember { MutableInteractionSource() }
+        val isRefreshFocused by refreshInteraction.collectIsFocusedAsState()
+        val refreshScale by animateFloatAsState(
+          targetValue = if (isRefreshFocused) 1.06f else 1f,
+          animationSpec = tween(durationMillis = 100),
+          label = "imdb_refresh_scale"
+        )
         Row(
           modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(CinemaSurface)
-            .border(1.dp, CinemaBorder, RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .border(1.dp, CinemaBorder, RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f)
+          Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
           ) {
-            Box(
-              modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(if (isLoadingCatalog) CinemaAccent else CinemaSuccess)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-              text = if (isLoadingCatalog) {
-                "جاري سحب وتحديث قوائم IMDb اليومية المباشرة..."
-              } else {
-                "قوائم IMDb المباشرة • محدثة يومياً ($todayDateLabel)"
-              },
-              color = Color.White,
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis
-            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(8.dp)
+                  .clip(CircleShape)
+                  .background(if (isLoadingCatalog) CinemaAccent else CinemaSuccess)
+              )
+              Surface(
+                color = CinemaAccent,
+                shape = RoundedCornerShape(5.dp)
+              ) {
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                  Text(
+                    text = "IMDb",
+                    color = Color.Black,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                }
+              }
+              Text(
+                text = if (isLoadingCatalog) "جاري تحديث القوائم المباشرة..." else "القوائم اليومية المباشرة",
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+            }
+
+            if (!isLoadingCatalog) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Text(
+                  text = "محدّثة يومياً",
+                  color = Color.LightGray,
+                  fontSize = 10.5.sp,
+                  fontWeight = FontWeight.Medium,
+                  maxLines = 1,
+                  softWrap = false
+                )
+                Surface(
+                  color = CinemaDarkBackground,
+                  shape = RoundedCornerShape(6.dp),
+                  border = BorderStroke(1.dp, CinemaBorder)
+                ) {
+                  CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    Text(
+                      text = todayDateLabel,
+                      color = CinemaAccent,
+                      fontSize = 10.5.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+              }
+            }
           }
-          Spacer(modifier = Modifier.width(8.dp))
+
+          Spacer(modifier = Modifier.width(10.dp))
+
           Surface(
             onClick = { catalogRefreshTrigger++ },
-            color = CinemaDarkBackground,
+            interactionSource = refreshInteraction,
+            color = if (isRefreshFocused) CinemaFocusGlow else CinemaDarkBackground,
             shape = RoundedCornerShape(50),
-            border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f))
+            border = BorderStroke(
+              width = if (isRefreshFocused) 2.dp else 1.dp,
+              color = if (isRefreshFocused) ClipboxWhite else CinemaAccent.copy(alpha = 0.75f)
+            ),
+            modifier = Modifier
+              .graphicsLayer {
+                scaleX = refreshScale
+                scaleY = refreshScale
+              }
+              .heightIn(min = 36.dp)
+              .testTag("btn_refresh_imdb_catalog")
           ) {
-            Text(
-              text = "تحديث الآن ⟳",
-              color = CinemaAccent,
-              fontSize = 10.sp,
-              fontWeight = FontWeight.ExtraBold,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-              maxLines = 1,
-              softWrap = false
-            )
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+              Text(
+                text = "تحديث الآن ⟳",
+                color = if (isRefreshFocused) Color.Black else CinemaAccent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
           }
         }
       }
@@ -481,8 +566,9 @@ fun HomeDashboardScreen(
       if (activeSection == ClipboxRailSection.HOME || activeSection == ClipboxRailSection.SEARCH) {
         item {
           ClipboxCatalogRow(
-            title = "الرائج اليوم • Trending Today (IMDb)",
-            subtitle = "الأعمال الأكثر رواجاً وبحثاً اليوم على IMDb — اضغط للبحث في جميع المصادر",
+            title = "الرائج اليوم",
+            badgeLabel = "IMDb Trending",
+            subtitle = "الأعمال الأكثر رواجاً وبحثاً اليوم — اضغط للبحث في جميع المصادر",
             items = trendingItems,
             showRankBadge = false,
             onItemClick = { media ->
@@ -496,8 +582,9 @@ fun HomeDashboardScreen(
       if (activeSection == ClipboxRailSection.HOME || activeSection == ClipboxRailSection.MOVIES || activeSection == ClipboxRailSection.SEARCH) {
         item {
           ClipboxCatalogRow(
-            title = "أفضل 10 أفلام اليوم • Top 10 Movies (IMDb)",
-            subtitle = "ترتيب الأفلام الأكثر شعبية ومشاهدة اليوم على IMDb",
+            title = "أفضل 10 أفلام اليوم",
+            badgeLabel = "IMDb Top 10",
+            subtitle = "ترتيب الأفلام الأكثر شعبية ومشاهدة اليوم",
             items = top10Movies,
             showRankBadge = true,
             onItemClick = { media ->
@@ -511,8 +598,9 @@ fun HomeDashboardScreen(
       if (activeSection == ClipboxRailSection.HOME || activeSection == ClipboxRailSection.TV_SHOWS || activeSection == ClipboxRailSection.SEARCH) {
         item {
           ClipboxCatalogRow(
-            title = "أفضل 10 مسلسلات اليوم • Top 10 TV Series (IMDb)",
-            subtitle = "ترتيب المسلسلات الأكثر شعبية ومشاهدة اليوم على IMDb",
+            title = "أفضل 10 مسلسلات اليوم",
+            badgeLabel = "IMDb Top 10",
+            subtitle = "ترتيب المسلسلات الأكثر شعبية ومشاهدة اليوم",
             items = top10TvSeries,
             showRankBadge = true,
             onItemClick = { media ->
@@ -536,18 +624,21 @@ fun HomeDashboardScreen(
 fun ClipboxNavigationRail(
   activeSection: ClipboxRailSection,
   isCompactMobile: Boolean,
+  railFocusRequester: FocusRequester = remember { FocusRequester() },
   onSelectSection: (ClipboxRailSection) -> Unit,
   onOpenBookmarks: () -> Unit,
   onOpenHistory: () -> Unit,
   onOpenSources: () -> Unit,
   onOpenUpdate: () -> Unit
 ) {
-  val railWidth = if (isCompactMobile) 46.dp else 56.dp
-  val iconBoxSize = if (isCompactMobile) 34.dp else 40.dp
+  val railWidth = if (isCompactMobile) 48.dp else 60.dp
+  val iconBoxSize = if (isCompactMobile) 36.dp else 44.dp
 
   Box(
     modifier = Modifier
       .fillMaxHeight()
+      .focusRequester(railFocusRequester)
+      .focusGroup()
       .padding(start = if (isCompactMobile) 6.dp else 10.dp, top = 10.dp, bottom = 10.dp),
     contentAlignment = Alignment.Center
   ) {
@@ -663,18 +754,45 @@ private fun ClipboxRailIcon(
   size: androidx.compose.ui.unit.Dp,
   onClick: () -> Unit
 ) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val isFocused by interactionSource.collectIsFocusedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isFocused) 1.14f else 1f,
+    animationSpec = tween(durationMillis = 100),
+    label = "rail_icon_scale"
+  )
+
   Box(
     modifier = Modifier
       .size(size)
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(CircleShape)
-      .background(if (isActive) ClipboxWhite else Color.Transparent)
-      .clickable { onClick() },
+      .background(
+        when {
+          isFocused -> CinemaFocusGlow
+          isActive -> ClipboxWhite
+          else -> Color.Transparent
+        }
+      )
+      .border(
+        width = if (isFocused) 2.5.dp else 0.dp,
+        color = if (isFocused) ClipboxWhite else Color.Transparent,
+        shape = CircleShape
+      )
+      .clickable(
+        interactionSource = interactionSource,
+        indication = null,
+        onClick = onClick
+      ),
     contentAlignment = Alignment.Center
   ) {
     Icon(
       imageVector = icon,
       contentDescription = contentDescription,
-      tint = if (isActive) Color.Black else Color.LightGray,
+      tint = if (isFocused || isActive) Color.Black else Color.LightGray,
       modifier = Modifier.size(20.dp)
     )
   }
@@ -726,11 +844,17 @@ fun ClipboxTopSearchBar(
 
         Spacer(modifier = Modifier.width(6.dp))
 
+        val sourcesInteraction = remember { MutableInteractionSource() }
+        val isSourcesFocused by sourcesInteraction.collectIsFocusedAsState()
         Surface(
           onClick = onOpenSources,
-          color = CinemaSurfaceVariant,
+          interactionSource = sourcesInteraction,
+          color = if (isSourcesFocused) CinemaFocusGlow else CinemaSurfaceVariant,
           shape = RoundedCornerShape(50),
-          border = BorderStroke(1.dp, CinemaBorder),
+          border = BorderStroke(
+            width = if (isSourcesFocused) 2.dp else 1.dp,
+            color = if (isSourcesFocused) ClipboxWhite else CinemaBorder
+          ),
           modifier = Modifier.testTag("btn_dashboard_sources")
         ) {
           Row(
@@ -740,13 +864,13 @@ fun ClipboxTopSearchBar(
             Icon(
               imageVector = Icons.Default.Settings,
               contentDescription = "المصادر",
-              tint = CinemaAccent,
+              tint = if (isSourcesFocused) Color.Black else CinemaAccent,
               modifier = Modifier.size(13.dp)
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
               text = "المصادر (5)",
-              color = Color.White,
+              color = if (isSourcesFocused) Color.Black else Color.White,
               fontSize = 11.sp,
               fontWeight = FontWeight.Bold,
               maxLines = 1,
@@ -803,12 +927,16 @@ fun ClipboxTopSearchBar(
             .testTag("home_search_input")
         )
 
+        val searchBtnInteraction = remember { MutableInteractionSource() }
+        val isSearchBtnFocused by searchBtnInteraction.collectIsFocusedAsState()
         Button(
           onClick = onExecuteSearch,
+          interactionSource = searchBtnInteraction,
           colors = ButtonDefaults.buttonColors(
-            containerColor = ClipboxWhite,
+            containerColor = if (isSearchBtnFocused) CinemaFocusGlow else ClipboxWhite,
             contentColor = Color.Black
           ),
+          border = if (isSearchBtnFocused) BorderStroke(2.5.dp, ClipboxWhite) else null,
           shape = RoundedCornerShape(50),
           contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
           modifier = Modifier
@@ -833,16 +961,18 @@ fun ClipboxTopSearchBar(
 
       Spacer(modifier = Modifier.height(8.dp))
 
-      // Quick Suggestions Row (supports mouse drag left/right + touch + D-Pad)
+      // Quick Suggestions Row (supports mouse drag left/right + touch + crisp D-Pad focus)
       val suggestionsListState = rememberLazyListState()
       val suggestionsScope = rememberCoroutineScope()
       val suggestionsIsRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
       val suggestionsDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
       LazyRow(
         state = suggestionsListState,
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
           .fillMaxWidth()
+          .focusGroup()
           .mouseHorizontalDragScroll(
             listState = suggestionsListState,
             scope = suggestionsScope,
@@ -850,32 +980,47 @@ fun ClipboxTopSearchBar(
             dragSlopPx = suggestionsDragSlopPx
           )
       ) {
-        items(quickSuggestions) { suggestion ->
+        itemsIndexed(quickSuggestions) { idx, suggestion ->
           val selected = searchQuery.equals(suggestion.trim(), ignoreCase = true)
+          val chipInteraction = remember { MutableInteractionSource() }
+          val isChipFocused by chipInteraction.collectIsFocusedAsState()
           FilterChip(
             selected = selected,
             onClick = { onSuggestionClick(suggestion.trim()) },
+            interactionSource = chipInteraction,
             label = {
               Text(
                 text = suggestion.trim(),
                 fontSize = 11.sp,
+                fontWeight = if (isChipFocused || selected) FontWeight.ExtraBold else FontWeight.Medium,
                 maxLines = 1,
                 softWrap = false
               )
             },
             colors = FilterChipDefaults.filterChipColors(
-              selectedContainerColor = ClipboxWhite,
+              selectedContainerColor = if (isChipFocused) CinemaFocusGlow else ClipboxWhite,
               selectedLabelColor = Color.Black,
-              containerColor = CinemaDarkBackground,
-              labelColor = Color.LightGray
+              containerColor = if (isChipFocused) CinemaFocusGlow else CinemaDarkBackground,
+              labelColor = if (isChipFocused) Color.Black else Color.LightGray
             ),
             border = FilterChipDefaults.filterChipBorder(
               enabled = true,
-              selected = selected,
+              selected = selected || isChipFocused,
               borderColor = CinemaBorder,
-              selectedBorderColor = ClipboxWhite
+              selectedBorderColor = ClipboxWhite,
+              selectedBorderWidth = if (isChipFocused) 2.dp else 1.dp
             ),
-            modifier = Modifier.heightIn(min = 30.dp)
+            modifier = Modifier
+              .heightIn(min = 32.dp)
+              .onFocusChanged { fs ->
+                if (fs.isFocused) {
+                  suggestionsScope.launch {
+                    try {
+                      suggestionsListState.animateScrollToItem((idx - 1).coerceAtLeast(0))
+                    } catch (_: Throwable) {}
+                  }
+                }
+              }
           )
         }
       }
@@ -1078,6 +1223,7 @@ fun ClipboxCatalogRow(
   subtitle: String,
   items: List<CatalogMediaItem>,
   showRankBadge: Boolean,
+  badgeLabel: String = "",
   onItemClick: (CatalogMediaItem) -> Unit
 ) {
   val rowListState = rememberLazyListState()
@@ -1092,15 +1238,42 @@ fun ClipboxCatalogRow(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      Column(modifier = Modifier.weight(1f)) {
-        Text(
-          text = title,
-          color = Color.White,
-          fontSize = 16.sp,
-          fontWeight = FontWeight.ExtraBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis
-        )
+      Column(
+        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Text(
+            text = title,
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
+          if (badgeLabel.isNotBlank()) {
+            Surface(
+              color = CinemaAccent.copy(alpha = 0.16f),
+              shape = RoundedCornerShape(6.dp),
+              border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.65f))
+            ) {
+              CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Text(
+                  text = badgeLabel,
+                  color = CinemaAccent,
+                  fontSize = 9.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
+            }
+          }
+        }
         Text(
           text = subtitle,
           color = Color.Gray,
@@ -1121,13 +1294,15 @@ fun ClipboxCatalogRow(
       }
     }
 
-    Spacer(modifier = Modifier.height(10.dp))
+    Spacer(modifier = Modifier.height(8.dp))
 
     LazyRow(
       state = rowListState,
+      contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
       modifier = Modifier
         .fillMaxWidth()
+        .focusGroup()
         .mouseHorizontalDragScroll(
           listState = rowListState,
           scope = rowScope,
@@ -1139,6 +1314,13 @@ fun ClipboxCatalogRow(
         ClipboxPosterCard(
           item = media,
           rankNumber = if (showRankBadge) index + 1 else null,
+          onFocused = {
+            rowScope.launch {
+              try {
+                rowListState.animateScrollToItem((index - 1).coerceAtLeast(0))
+              } catch (_: Throwable) {}
+            }
+          },
           onClick = { onItemClick(media) }
         )
       }
@@ -1334,7 +1516,9 @@ private fun CarouselMouseScrollArrows(
 
   Row(
     horizontalArrangement = Arrangement.spacedBy(6.dp),
-    verticalAlignment = Alignment.CenterVertically
+    verticalAlignment = Alignment.CenterVertically,
+    // Skip mouse-only scroll arrows during TV remote D-Pad traversal for faster row-to-row jumping
+    modifier = Modifier.focusProperties { canFocus = false }
   ) {
     // Physical Start/Backward arrow
     Surface(
@@ -1352,7 +1536,9 @@ private fun CarouselMouseScrollArrows(
         1.dp,
         if (canScrollBackward) CinemaAccent.copy(alpha = 0.7f) else CinemaBorder.copy(alpha = 0.35f)
       ),
-      modifier = Modifier.size(32.dp)
+      modifier = Modifier
+        .size(32.dp)
+        .focusProperties { canFocus = false }
     ) {
       Box(contentAlignment = Alignment.Center) {
         Icon(
@@ -1380,7 +1566,9 @@ private fun CarouselMouseScrollArrows(
         1.dp,
         if (canScrollForward) CinemaAccent.copy(alpha = 0.7f) else CinemaBorder.copy(alpha = 0.35f)
       ),
-      modifier = Modifier.size(32.dp)
+      modifier = Modifier
+        .size(32.dp)
+        .focusProperties { canFocus = false }
     ) {
       Box(contentAlignment = Alignment.Center) {
         Icon(
@@ -1398,16 +1586,33 @@ private fun CarouselMouseScrollArrows(
 fun ClipboxPosterCard(
   item: CatalogMediaItem,
   rankNumber: Int? = null,
+  onFocused: () -> Unit = {},
   onClick: () -> Unit
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val isFocused by interactionSource.collectIsFocusedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isFocused) 1.06f else 1f,
+    animationSpec = tween(durationMillis = 100),
+    label = "poster_card_scale"
+  )
 
   Column(
     modifier = Modifier
       .width(138.dp)
-      .focusable(interactionSource = interactionSource)
-      .clickable { onClick() }
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
+      .onFocusChanged { fs ->
+        if (fs.isFocused) onFocused()
+      }
+      // Single shared interactionSource (clickable is already focusable — zero double D-Pad stops!)
+      .clickable(
+        interactionSource = interactionSource,
+        indication = null,
+        onClick = onClick
+      )
       .testTag("catalog_card_${item.id}")
   ) {
     Box(
@@ -1417,8 +1622,8 @@ fun ClipboxPosterCard(
         .clip(RoundedCornerShape(14.dp))
         .background(CinemaSurface)
         .border(
-          width = if (isFocused) 2.dp else 1.dp,
-          color = if (isFocused) ClipboxWhite else CinemaBorder,
+          width = if (isFocused) 3.dp else 1.dp,
+          color = if (isFocused) CinemaFocusGlow else CinemaBorder,
           shape = RoundedCornerShape(14.dp)
         )
     ) {
@@ -1513,9 +1718,9 @@ fun ClipboxPosterCard(
 
     Text(
       text = item.title,
-      color = Color.White,
+      color = if (isFocused) CinemaFocusGlow else Color.White,
       fontSize = 12.sp,
-      fontWeight = FontWeight.SemiBold,
+      fontWeight = if (isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.fillMaxWidth()
@@ -2004,12 +2209,24 @@ fun SearchResultCard(
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val isFocused by interactionSource.collectIsFocusedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isFocused) 1.06f else 1f,
+    animationSpec = tween(durationMillis = 100),
+    label = "search_result_card_scale"
+  )
 
   Column(
     modifier = Modifier
       .width(142.dp)
-      .focusable(interactionSource = interactionSource)
-      .clickable { onClick() }
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
+      .clickable(
+        interactionSource = interactionSource,
+        indication = null,
+        onClick = onClick
+      )
       .testTag("result_card_${item.id}")
   ) {
     // Clipbox Vertical Poster Card
@@ -2020,8 +2237,8 @@ fun SearchResultCard(
         .clip(RoundedCornerShape(14.dp))
         .background(CinemaSurface)
         .border(
-          width = if (isFocused) 2.dp else 1.dp,
-          color = if (isFocused) ClipboxWhite else CinemaBorder,
+          width = if (isFocused) 3.dp else 1.dp,
+          color = if (isFocused) CinemaFocusGlow else CinemaBorder,
           shape = RoundedCornerShape(14.dp)
         )
     ) {
@@ -2270,9 +2487,11 @@ fun ContinueWatchingSection(
     val historyDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
     LazyRow(
       state = historyRowState,
+      contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
       modifier = Modifier
         .fillMaxWidth()
+        .focusGroup()
         .mouseHorizontalDragScroll(
           listState = historyRowState,
           scope = historyRowScope,
@@ -2280,9 +2499,16 @@ fun ContinueWatchingSection(
           dragSlopPx = historyDragSlopPx
         )
     ) {
-      items(history.take(15), key = { it.id }) { entry ->
+      itemsIndexed(history.take(15), key = { _, it -> it.id }) { idx, entry ->
         ContinueWatchingCard(
           entry = entry,
+          onFocused = {
+            historyRowScope.launch {
+              try {
+                historyRowState.animateScrollToItem((idx - 1).coerceAtLeast(0))
+              } catch (_: Throwable) {}
+            }
+          },
           onResume = { onResumeItem(entry) },
           onDelete = { onDeleteItem(entry) }
         )
@@ -2294,9 +2520,17 @@ fun ContinueWatchingSection(
 @Composable
 fun ContinueWatchingCard(
   entry: HistoryEntry,
+  onFocused: () -> Unit = {},
   onResume: () -> Unit,
   onDelete: () -> Unit
 ) {
+  val interactionSource = remember { MutableInteractionSource() }
+  val isFocused by interactionSource.collectIsFocusedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isFocused) 1.05f else 1f,
+    animationSpec = tween(durationMillis = 100),
+    label = "continue_watching_scale"
+  )
   val formattedDate = remember(entry.timestamp) {
     try {
       val sdf = SimpleDateFormat("dd MMM", Locale.getDefault())
@@ -2309,7 +2543,18 @@ fun ContinueWatchingCard(
   Column(
     modifier = Modifier
       .width(165.dp)
-      .clickable { onResume() }
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
+      .onFocusChanged { fs ->
+        if (fs.isFocused) onFocused()
+      }
+      .clickable(
+        interactionSource = interactionSource,
+        indication = null,
+        onClick = onResume
+      )
   ) {
     Box(
       modifier = Modifier
@@ -2317,7 +2562,11 @@ fun ContinueWatchingCard(
         .height(105.dp)
         .clip(RoundedCornerShape(14.dp))
         .background(CinemaSurface)
-        .border(1.dp, CinemaBorder, RoundedCornerShape(14.dp))
+        .border(
+          width = if (isFocused) 3.dp else 1.dp,
+          color = if (isFocused) CinemaFocusGlow else CinemaBorder,
+          shape = RoundedCornerShape(14.dp)
+        )
     ) {
       // Top row: Portal badge + delete button
       Row(
@@ -2345,7 +2594,9 @@ fun ContinueWatchingCard(
 
         IconButton(
           onClick = onDelete,
-          modifier = Modifier.size(24.dp)
+          modifier = Modifier
+            .size(24.dp)
+            .focusProperties { canFocus = false }
         ) {
           Icon(
             imageVector = Icons.Default.Delete,

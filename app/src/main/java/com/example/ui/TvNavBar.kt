@@ -1,9 +1,11 @@
 package com.example.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -79,9 +82,11 @@ fun TvNavBar(
       .padding(vertical = 6.dp),
     contentAlignment = Alignment.CenterStart
   ) {
-    // Scrollable single-line LazyRow so all buttons fit cleanly on Mobile phones AND TV screens without wrapping or clipping!
+    // Scrollable single-line LazyRow with dedicated focusGroup for crisp TV D-Pad navigation
     LazyRow(
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier
+        .fillMaxWidth()
+        .focusGroup(),
       contentPadding = PaddingValues(horizontal = 8.dp),
       horizontalArrangement = Arrangement.spacedBy(6.dp),
       verticalAlignment = Alignment.CenterVertically
@@ -192,25 +197,34 @@ private fun TvNavActionButton(
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val isFocused by interactionSource.collectIsFocusedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isFocused) 1.07f else 1f,
+    animationSpec = tween(durationMillis = 100),
+    label = "nav_action_scale"
+  )
 
   Box(
     modifier = Modifier
       .heightIn(min = 40.dp)
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(RoundedCornerShape(8.dp))
       .background(
         when {
+          isFocused -> CinemaFocusGlow
           isSelected -> activeColor.copy(alpha = 0.25f)
-          isFocused -> CinemaFocusGlow.copy(alpha = 0.2f)
           else -> Color.Transparent
         }
       )
       .border(
-        width = if (isFocused) 2.dp else if (isSelected) 1.5.dp else 1.dp,
-        color = if (isFocused) CinemaFocusGlow else if (isSelected) activeColor else CinemaSurfaceVariant,
+        width = if (isFocused) 2.5.dp else if (isSelected) 1.5.dp else 1.dp,
+        color = if (isFocused) Color.White else if (isSelected) activeColor else CinemaSurfaceVariant,
         shape = RoundedCornerShape(8.dp)
       )
+      // Single focus target via clickable(interactionSource) — no duplicate .focusable() stop!
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-      .focusable(interactionSource = interactionSource)
       .padding(horizontal = 10.dp, vertical = 6.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
@@ -219,15 +233,23 @@ private fun TvNavActionButton(
       Icon(
         imageVector = icon,
         contentDescription = label,
-        tint = if (isSelected) activeColor else Color.LightGray,
+        tint = when {
+          isFocused -> Color.Black
+          isSelected -> activeColor
+          else -> Color.LightGray
+        },
         modifier = Modifier.size(16.dp)
       )
       Spacer(modifier = Modifier.width(5.dp))
       Text(
         text = label,
-        color = if (isSelected) Color.White else Color.LightGray,
+        color = when {
+          isFocused -> Color.Black
+          isSelected -> Color.White
+          else -> Color.LightGray
+        },
         fontSize = 11.sp,
-        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+        fontWeight = if (isFocused || isSelected) FontWeight.ExtraBold else FontWeight.Normal,
         maxLines = 1,
         softWrap = false
       )
@@ -246,23 +268,34 @@ private fun TvNavUtilityButton(
 ) {
   val interactionSource = remember { MutableInteractionSource() }
   val isFocused by interactionSource.collectIsFocusedAsState()
+  val scale by animateFloatAsState(
+    targetValue = if (isFocused) 1.07f else 1f,
+    animationSpec = tween(durationMillis = 100),
+    label = "nav_utility_scale"
+  )
 
   Box(
     modifier = Modifier
       .heightIn(min = 40.dp)
+      .graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+      }
       .clip(RoundedCornerShape(8.dp))
       .background(
-        if (isActive) activeColor.copy(alpha = 0.25f)
-        else if (isFocused) CinemaFocusGlow.copy(alpha = 0.2f)
-        else Color.Transparent
+        when {
+          isFocused -> CinemaFocusGlow
+          isActive -> activeColor.copy(alpha = 0.25f)
+          else -> Color.Transparent
+        }
       )
       .border(
-        width = if (isFocused) 2.dp else 1.dp,
-        color = if (isFocused) CinemaFocusGlow else if (isActive) activeColor else CinemaSurfaceVariant,
+        width = if (isFocused) 2.5.dp else 1.dp,
+        color = if (isFocused) Color.White else if (isActive) activeColor else CinemaSurfaceVariant,
         shape = RoundedCornerShape(8.dp)
       )
+      // Single focus target via clickable(interactionSource) — no duplicate .focusable() stop!
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-      .focusable(interactionSource = interactionSource)
       .padding(horizontal = 10.dp, vertical = 6.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
@@ -271,15 +304,23 @@ private fun TvNavUtilityButton(
       Icon(
         imageVector = icon,
         contentDescription = label,
-        tint = if (isActive) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
+        tint = when {
+          isFocused -> Color.Black
+          isActive -> activeColor
+          else -> Color.LightGray
+        },
         modifier = Modifier.size(16.dp)
       )
       Spacer(modifier = Modifier.width(4.dp))
       Text(
         text = label,
-        color = if (isActive) Color.White else if (isFocused) CinemaFocusGlow else Color.LightGray,
+        color = when {
+          isFocused -> Color.Black
+          isActive -> Color.White
+          else -> Color.LightGray
+        },
         fontSize = 11.sp,
-        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+        fontWeight = if (isFocused || isActive) FontWeight.ExtraBold else FontWeight.Normal,
         maxLines = 1,
         softWrap = false
       )

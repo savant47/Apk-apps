@@ -153,6 +153,9 @@ class TvKeyHandler(
 
   private fun handleDpadNavKeys(event: KeyEvent): Boolean {
     val webView = getWebView() ?: return false
+    // Only scroll WebView with D-Pad if WebView itself currently holds focus;
+    // never hijack Compose navigation on Home Dashboard, Top Bar, Side Panel, or Dialogs!
+    if (!webView.hasFocus()) return false
     val isDown = event.action == KeyEvent.ACTION_DOWN
     val keyCode = event.keyCode
 

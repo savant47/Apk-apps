@@ -48,6 +48,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.movableContentOf
@@ -227,29 +228,22 @@ fun MainScreen(
   val failedNativeStreamUrls = remember { mutableSetOf<String>() }
 
   // Standardized Episode Display Title (`Silo S01E01` / `Lost S04E15` / `Movie (2024)`)
-  val standardizedMediaInfo = remember(
-    seriesStructure.seriesTitle,
-    seriesStructure.isSeries,
-    seriesStructure.selectedSeasonNumber,
-    seriesStructure.currentEpisodeNumber,
-    pageTitle,
-    lastSearchQuery,
-    activeWatchPageUrl,
-    activeEmbedRefererUrl,
-    currentUrl,
-    activeServerName
-  ) {
-    SearchAndSubtitlesService.formatStandardizedEpisodeInfo(
-      seriesTitle = seriesStructure.seriesTitle,
-      pageTitle = pageTitle,
-      lastSearchQuery = lastSearchQuery,
-      watchPageUrl = activeWatchPageUrl.ifBlank { currentUrl },
-      embedUrl = activeEmbedRefererUrl.ifBlank { currentUrl },
-      serverName = activeServerName,
-      isSeriesHint = seriesStructure.isSeries,
-      selectedSeasonHint = seriesStructure.selectedSeasonNumber,
-      currentEpisodeHint = seriesStructure.currentEpisodeNumber
-    )
+  // Backed by derivedStateOf so movablePlayerBox (movableContentOf) ALWAYS observes live updates
+  // instead of capturing the initial empty "Asser TV" value at composition time!
+  val standardizedMediaInfo by remember {
+    derivedStateOf {
+      SearchAndSubtitlesService.formatStandardizedEpisodeInfo(
+        seriesTitle = seriesStructure.seriesTitle,
+        pageTitle = pageTitle,
+        lastSearchQuery = lastSearchQuery,
+        watchPageUrl = activeWatchPageUrl.ifBlank { currentUrl },
+        embedUrl = activeEmbedRefererUrl.ifBlank { currentUrl },
+        serverName = activeServerName,
+        isSeriesHint = seriesStructure.isSeries,
+        selectedSeasonHint = seriesStructure.selectedSeasonNumber,
+        currentEpisodeHint = seriesStructure.currentEpisodeNumber
+      )
+    }
   }
 
   // Ensure permissive SSL is installed early for all streaming CDNs
@@ -1164,17 +1158,11 @@ fun MainScreen(
     return null
   }
 
-  val nextEpisodeItem = remember(
-    seriesStructure,
-    activeWatchPageUrl,
-    activeEmbedRefererUrl,
-    currentUrl,
-    pageTitle,
-    standardizedMediaInfo.seasonNumber,
-    standardizedMediaInfo.episodeNumber,
-    isGeneralBrowserSession
-  ) {
-    resolveNextEpisode()
+  // Backed by derivedStateOf so movablePlayerBox (movableContentOf) ALWAYS receives the live next episode!
+  val nextEpisodeItem by remember {
+    derivedStateOf {
+      resolveNextEpisode()
+    }
   }
 
   fun buildCleanEpisodeNavTitle(seasonNum: Int, episodeNum: Int, fallbackEpTitle: String): String {
@@ -1286,10 +1274,20 @@ fun MainScreen(
     )
   }
 
-  DisposableEffect(activity, playNativeVideoUrl) {
+  DisposableEffect(activity) {
     val keyEventProvider = activity as? KeyEventProvider
     keyEventProvider?.setKeyEventCallback { event ->
-      if (playNativeVideoUrl != null) {
+      val anyModalOpen = showDiagnosticsDialog ||
+        showUpdateDialog ||
+        showDisplayModeDialog ||
+        showFavoritesDialog ||
+        showHistoryDialog ||
+        showGuideDialog ||
+        showSubtitlesDialog ||
+        showQualityDialog ||
+        showAdBlockDialog
+      // NEVER let WebView TvKeyHandler intercept D-Pad keys on Home Dashboard, Native ExoPlayer, or any open modal dialog!
+      if (isHomeActive || playNativeVideoUrl != null || !isWebViewMounted || anyModalOpen) {
         false
       } else {
         tvKeyHandler.handleKeyEvent(event)
@@ -1727,9 +1725,9 @@ fun MainScreen(
             }
           }
 
-          if (nextEpisodeItem != null) {
+          nextEpisodeItem?.let { nextEp ->
             Surface(
-              onClick = { playNextEpisodeAutomatically(nextEpisodeItem) },
+              onClick = { playNextEpisodeAutomatically(nextEp) },
               color = CinemaPrimary.copy(alpha = 0.88f),
               shape = RoundedCornerShape(50),
               border = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
@@ -2089,13 +2087,8 @@ fun MainScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                   )
-                  val qBadge = when (TvPreferencesRepository.normalizeQualityId(currentVideoQuality)) {
-                    TvPreferencesRepository.QUALITY_LOWEST -> "أقل جودة (توفير)"
-                    TvPreferencesRepository.QUALITY_AUTO -> "تلقائي"
-                    else -> "${currentVideoQuality.removeSuffix("p")}p"
-                  }
                   Text(
-                    text = "${activePortal.displayNameArabic} • الجودة: $qBadge",
+                    text = activePortal.displayNameArabic,
                     color = CinemaAccent,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.SemiBold,
