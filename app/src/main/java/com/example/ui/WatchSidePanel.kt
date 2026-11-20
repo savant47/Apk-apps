@@ -11,6 +11,8 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -373,43 +375,44 @@ fun WatchSidePanel(
           }
         }
 
-        // 3. Auto-Detected Real Video Qualities Strip (D-Pad focusable with bringIntoView)
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(CinemaSurface)
-            .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          Icon(
-            imageVector = Icons.Default.HighQuality,
-            contentDescription = null,
-            tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
-            modifier = Modifier.size(14.dp)
-          )
-          Spacer(modifier = Modifier.width(4.dp))
-          Text(
-            text = if (detectedQualities.isNotEmpty()) "جودات الفيديو:" else "الجودة:",
-            color = Color.White,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            softWrap = false
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          if (detectedQualities.isNotEmpty()) {
-            val qualityScope = rememberCoroutineScope()
-            LazyRow(
-              horizontalArrangement = Arrangement.spacedBy(5.dp),
-              modifier = Modifier.weight(1f)
+        // 3. Auto-Detected Real Video Qualities Strip (FlowRow wrap on narrow mobile sheets so labels never clip)
+        if (isCompactMobileSheet && detectedQualities.isNotEmpty()) {
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(8.dp))
+              .background(CinemaSurface)
+              .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+              .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Icon(
+                imageVector = Icons.Default.HighQuality,
+                contentDescription = null,
+                tint = CinemaSuccess,
+                modifier = Modifier.size(14.dp)
+              )
+              Spacer(modifier = Modifier.width(5.dp))
+              Text(
+                text = "جودات الفيديو المتاحة:",
+                color = Color.White,
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+              modifier = Modifier.fillMaxWidth()
             ) {
-              items(detectedQualities, key = { it.id }) { qOption ->
+              detectedQualities.forEach { qOption ->
                 val selected = currentQuality == qOption.id
                 val qInteraction = remember { MutableInteractionSource() }
                 val isFocused by qInteraction.collectIsFocusedAsState()
-                val bringIntoViewRequester = remember { BringIntoViewRequester() }
                 Surface(
                   onClick = { onSelectQuality(qOption) },
                   interactionSource = qInteraction,
@@ -429,12 +432,6 @@ fun WatchSidePanel(
                   ),
                   modifier = Modifier
                     .heightIn(min = 34.dp)
-                    .bringIntoViewRequester(bringIntoViewRequester)
-                    .onFocusChanged { state ->
-                      if (state.isFocused) {
-                        qualityScope.launch { bringIntoViewRequester.bringIntoView() }
-                      }
-                    }
                     .focusable(interactionSource = qInteraction)
                     .testTag("quality_chip_${qOption.id}")
                 ) {
@@ -448,27 +445,110 @@ fun WatchSidePanel(
                       fontSize = 10.sp,
                       fontWeight = if (selected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
                       maxLines = 1,
-                      softWrap = false
+                      overflow = TextOverflow.Ellipsis
                     )
                   }
                 }
               }
             }
-          } else {
-            val savedLabel = when (currentQuality.lowercase()) {
-              "lowest" -> "أقل جودة (توفير الباقة) • جاري رصد الجودات..."
-              "auto" -> "تلقائي Auto • جاري رصد الجودات..."
-              else -> "${currentQuality}p (محفوظة) • جاري رصد الجودات..."
-            }
-            Text(
-              text = savedLabel,
-              color = CinemaAccent,
-              fontSize = 10.sp,
-              fontWeight = FontWeight.SemiBold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              modifier = Modifier.weight(1f)
+          }
+        } else {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(8.dp))
+              .background(CinemaSurface)
+              .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+              .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Icon(
+              imageVector = Icons.Default.HighQuality,
+              contentDescription = null,
+              tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
+              modifier = Modifier.size(14.dp)
             )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+              text = if (detectedQualities.isNotEmpty()) "جودات الفيديو:" else "الجودة:",
+              color = Color.White,
+              fontSize = 10.sp,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+              softWrap = false
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            if (detectedQualities.isNotEmpty()) {
+              val qualityScope = rememberCoroutineScope()
+              LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier.weight(1f)
+              ) {
+                items(detectedQualities, key = { it.id }) { qOption ->
+                  val selected = currentQuality == qOption.id
+                  val qInteraction = remember { MutableInteractionSource() }
+                  val isFocused by qInteraction.collectIsFocusedAsState()
+                  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+                  Surface(
+                    onClick = { onSelectQuality(qOption) },
+                    interactionSource = qInteraction,
+                    color = when {
+                      isFocused -> CinemaFocusGlow
+                      selected -> ClipboxWhite
+                      else -> CinemaDarkBackground
+                    },
+                    shape = RoundedCornerShape(7.dp),
+                    border = BorderStroke(
+                      width = if (isFocused) 2.dp else 1.dp,
+                      color = when {
+                        isFocused -> Color.White
+                        selected -> ClipboxWhite
+                        else -> CinemaSuccess.copy(alpha = 0.6f)
+                      }
+                    ),
+                    modifier = Modifier
+                      .heightIn(min = 34.dp)
+                      .bringIntoViewRequester(bringIntoViewRequester)
+                      .onFocusChanged { state ->
+                        if (state.isFocused) {
+                          qualityScope.launch { bringIntoViewRequester.bringIntoView() }
+                        }
+                      }
+                      .focusable(interactionSource = qInteraction)
+                      .testTag("quality_chip_${qOption.id}")
+                  ) {
+                    Box(
+                      contentAlignment = Alignment.Center,
+                      modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                    ) {
+                      Text(
+                        text = qOption.label,
+                        color = if (selected || isFocused) Color.Black else Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = if (selected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
+                      )
+                    }
+                  }
+                }
+              }
+            } else {
+              val savedLabel = when (currentQuality.lowercase()) {
+                "lowest" -> "أقل جودة (توفير الباقة) • جاري رصد الجودات..."
+                "auto" -> "تلقائي Auto • جاري رصد الجودات..."
+                else -> "${currentQuality}p (محفوظة) • جاري رصد الجودات..."
+              }
+              Text(
+                text = savedLabel,
+                color = CinemaAccent,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+              )
+            }
           }
         }
 
@@ -611,7 +691,19 @@ fun WatchSidePanel(
                   )
                 }
 
+                val seasonsListState = rememberLazyListState()
+                LaunchedEffect(seriesStructure.selectedSeasonNumber, seriesStructure.seasons.size) {
+                  val activeIdx = seriesStructure.seasons.indexOfFirst {
+                    it.seasonNumber == seriesStructure.selectedSeasonNumber
+                  }
+                  if (activeIdx >= 0) {
+                    try {
+                      seasonsListState.animateScrollToItem((activeIdx - 1).coerceAtLeast(0))
+                    } catch (_: Throwable) {}
+                  }
+                }
                 LazyRow(
+                  state = seasonsListState,
                   horizontalArrangement = Arrangement.spacedBy(8.dp),
                   modifier = Modifier.fillMaxWidth()
                 ) {

@@ -575,7 +575,8 @@ class SearchAndSubtitlesService {
   private suspend fun searchTopCinema(query: String): List<SearchResultItem> = withContext(Dispatchers.IO) {
     val results = mutableListOf<SearchResultItem>()
     val encoded = URLEncoder.encode(query, "UTF-8")
-    val url = "https://topcinema.io/search/?query=$encoded&type=all"
+    val baseHome = StreamingPortal.TOP_CINEMA.homeUrl.substringBefore("/home").trimEnd('/').ifBlank { "https://topcinema.io" }
+    val url = "$baseHome/search/?query=$encoded&type=all"
 
     try {
       val request = Request.Builder()
@@ -585,88 +586,71 @@ class SearchAndSubtitlesService {
         .header("Accept-Language", "ar,en-US;q=0.7,en;q=0.3")
         .build()
 
-      val response = httpClient.newCall(request).execute()
-      val html = response.body?.string() ?: ""
-
-      val boxPattern = Pattern.compile(
-        "<div[^>]*class=\"[^\"]*Small--Box[^\"]*\"[^>]*>.*?<a[^>]+href=\"([^\"]+)\"[^>]+title=\"([^\"]+)\"[^>]*>.*?<img[^>]+(?:data-src|src)=\"([^\"]+)\"",
-        Pattern.DOTALL or Pattern.CASE_INSENSITIVE
-      )
-      var matcher = boxPattern.matcher(html)
-      var count = 0
-      val seenUrls = mutableSetOf<String>()
-
-      while (matcher.find() && count < 20) {
-        val link = matcher.group(1)?.trim() ?: ""
-        val title = matcher.group(2)?.trim() ?: ""
-        val poster = matcher.group(3)?.trim() ?: ""
-
-        if (title.isNotBlank() && !link.contains("/recent/") && !link.contains("/category/") && !link.contains("/page/")) {
-          val absoluteLink = if (link.startsWith("/")) "https://topcinema.io$link" else link
-          if (!seenUrls.contains(absoluteLink)) {
-            seenUrls.add(absoluteLink)
-            val absolutePoster = if (poster.startsWith("/")) "https://topcinema.io$poster" else poster
-            val isSeries = title.contains("مسلسل", ignoreCase = true) ||
-              title.contains("حلقة", ignoreCase = true) ||
-              link.contains("series", ignoreCase = true)
-            val isSeriesOverview = link.contains("/series/", ignoreCase = true) ||
-              (title.contains("مسلسل", ignoreCase = true) && !title.contains("حلقة") && !title.contains("الحلقة") && !title.contains("الحلقه"))
-
-            val cleanBase = absoluteLink.trimEnd('/')
-            val watchUrl = if (!cleanBase.endsWith("/watch") && !isSeriesOverview) "$cleanBase/watch/" else "$cleanBase/"
-
-            results.add(
-              SearchResultItem(
-                id = UUID.randomUUID().toString(),
-                title = cleanHtmlEntities(title),
-                url = watchUrl,
-                portal = StreamingPortal.TOP_CINEMA,
-                posterUrl = absolutePoster,
-                type = if (isSeries) "مسلسل (توب سينما)" else "فيلم (توب سينما)",
-                quality = if (title.contains("1080", ignoreCase = true)) "1080p Web-DL" else "HD 720p",
-                year = "2024",
-                rating = "8.5"
-              )
-            )
-            count++
-          }
-        }
+      val (html, resolvedUrl) = httpClient.newCall(request).execute().use { resp ->
+        (resp.body?.string() ?: "") to resp.request.url.toString()
       }
+      if (html.isBlank()) return@withContext emptyList()
 
-      if (results.isEmpty()) {
-        val fallbackPattern = Pattern.compile(
-          "<a[^>]+href=\"(https?://topcinema\\.io/[^\"]+)\"[^>]+title=\"([^\"]+)\"[^>]*class=\"[^\"]*recent--block[^\"]*\"",
-          Pattern.DOTALL or Pattern.CASE_INSENSITIVE
+      val doc = Jsoup.parse(html, resolvedUrl)
+      val liveOrigin = extractOrigin(resolvedUrl, baseHome)
+      val seenUrls = mutableSetOf<String>()
+      val candidates = doc.select("div.Small--Box, article, a.recent--block")
+
+      for (el in candidates) {
+        if (results.size >= 24) break
+        val anchor = if (el.tagName().equals("a", ignoreCase = true)) el else el.selectFirst("a[href]") ?: continue
+        val rawLink = anchor.attr("href").trim()
+        if (rawLink.isBlank() || rawLink.startsWith("#") || rawLink.startsWith("javascript:")) continue
+        if (rawLink.contains("/recent/") || rawLink.contains("/category/") || rawLink.contains("/tag/") || rawLink.contains("/page/")) continue
+
+        val rawTitle = cleanHtmlEntities(
+          anchor.attr("title").trim()
+            .ifBlank { el.selectFirst("h3, h2, .title, .Title")?.text()?.trim().orEmpty() }
+            .ifBlank { anchor.text().replace(whitespaceRegex, " ").trim() }
         )
-        matcher = fallbackPattern.matcher(html)
-        while (matcher.find() && count < 15) {
-          val link = matcher.group(1)?.trim() ?: ""
-          val title = matcher.group(2)?.trim() ?: ""
-          if (!link.contains("/recent/") && !link.contains("/category/")) {
-            val isSeriesOverview = link.contains("/series/", ignoreCase = true) ||
-              (title.contains("مسلسل", ignoreCase = true) && !title.contains("حلقة") && !title.contains("الحلقة") && !title.contains("الحلقه"))
-            val cleanBase = link.trimEnd('/')
-            val watchUrl = if (!cleanBase.endsWith("/watch") && !isSeriesOverview) "$cleanBase/watch/" else "$cleanBase/"
-            results.add(
-              SearchResultItem(
-                id = UUID.randomUUID().toString(),
-                title = cleanHtmlEntities(title),
-                url = watchUrl,
-                portal = StreamingPortal.TOP_CINEMA,
-                posterUrl = "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=400&q=80",
-                type = "مشاهدة مباشرة",
-                quality = "1080p Full HD",
-                year = "2024",
-                rating = "8.4"
-              )
-            )
-            count++
-          }
+        if (rawTitle.isBlank()) continue
+
+        val absoluteLink = resolveRelativeUrl(liveOrigin, rawLink)
+        if (!seenUrls.add(absoluteLink)) continue
+
+        val imgEl = el.selectFirst("img[data-src], img[src]")
+        val rawPoster = imgEl?.attr("data-src")?.trim().orEmpty().ifBlank { imgEl?.attr("src")?.trim().orEmpty() }
+        val absolutePoster = if (rawPoster.isNotBlank()) {
+          resolveRelativeUrl(liveOrigin, rawPoster)
+        } else {
+          "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=400&q=80"
         }
+
+        val decodedLink = try { java.net.URLDecoder.decode(absoluteLink, "UTF-8") } catch (_: Exception) { absoluteLink }
+        val isSeries = rawTitle.contains("مسلسل", ignoreCase = true) ||
+          rawTitle.contains("حلقة", ignoreCase = true) ||
+          rawTitle.contains("الموسم", ignoreCase = true) ||
+          decodedLink.contains("/series/", ignoreCase = true) ||
+          decodedLink.contains("مسلسل")
+        val isSeriesOverview = decodedLink.contains("/series/", ignoreCase = true) ||
+          (isSeries && !rawTitle.contains("حلقة") && !rawTitle.contains("الحلقة") && !rawTitle.contains("الحلقه") && !decodedLink.contains("الحلقة") && !decodedLink.contains("حلقة"))
+
+        val cleanBase = absoluteLink.trimEnd('/')
+        val watchUrl = if (!cleanBase.endsWith("/watch") && !isSeriesOverview) "$cleanBase/watch/" else "$cleanBase/"
+
+        results.add(
+          SearchResultItem(
+            id = UUID.randomUUID().toString(),
+            title = rawTitle,
+            url = watchUrl,
+            portal = StreamingPortal.TOP_CINEMA,
+            posterUrl = absolutePoster,
+            type = if (isSeries) "مسلسل (توب سينما)" else "فيلم (توب سينما)",
+            quality = if (rawTitle.contains("1080", ignoreCase = true)) "1080p Web-DL" else "HD 720p",
+            year = Regex("(19|20)[0-9]{2}").find(rawTitle)?.value ?: "2025",
+            rating = "8.5"
+          )
+        )
       }
     } catch (_: Exception) {}
 
-    results
+    // Prefer /series/ overview items first so tapping a show opens its full season structure immediately
+    results.sortedByDescending { it.url.contains("/series/", ignoreCase = true) }
   }
 
   private suspend fun searchWatchSeries(query: String): List<SearchResultItem> = withContext(Dispatchers.IO) {
@@ -1126,7 +1110,14 @@ class SearchAndSubtitlesService {
 
     val decodedInitialUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
     val detectedSeasonFromText = extractSeasonNumberFromText("$titleHint $decodedInitialUrl")
-    val effectiveSeasonNumber = if (selectedSeasonNumber > 1) selectedSeasonNumber else (detectedSeasonFromText ?: 1)
+    var effectiveSeasonNumber = if (selectedSeasonNumber > 1) selectedSeasonNumber else (detectedSeasonFromText ?: 1)
+
+    val isArabicPortal = portal == StreamingPortal.TOP_CINEMA ||
+      portal == StreamingPortal.EGY_DEAD ||
+      portal == StreamingPortal.LAROZA ||
+      portal == StreamingPortal.PORTAL_5
+    val portalSeasonMap = linkedMapOf<Int, String>()
+    var showTokens = extractNormalizedShowTokens(cleanSeriesTitleHint.ifBlank { decodedInitialUrl })
 
     fun addServerIfValid(name: String, rawEmbedUrl: String, qualityLabel: String = "Auto HD", isDirect: Boolean = true) {
       val trimmed = rawEmbedUrl.trim()
@@ -1234,131 +1225,349 @@ class SearchAndSubtitlesService {
 
     var okHttpBlockedByCloudflare = false
 
+    fun fetchHtmlWithResolvedUrl(targetUrl: String, useEgyDeadPost: Boolean = false): Pair<String, String> {
+      if (!targetUrl.startsWith("http")) return "" to targetUrl
+      val targetOrigin = extractOrigin(targetUrl, portal.homeUrl)
+      val cookieHeader = try {
+        android.webkit.CookieManager.getInstance()?.getCookie(targetUrl) ?: ""
+      } catch (_: Exception) { "" }
+      return try {
+        val reqBuilder = Request.Builder()
+          .url(targetUrl)
+          .header("User-Agent", desktopUserAgent)
+          .header("Referer", if (useEgyDeadPost) targetUrl else "$targetOrigin/")
+          .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+          .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
+        if (useEgyDeadPost) {
+          reqBuilder.post(FormBody.Builder().add("View", "1").build())
+        }
+        if (cookieHeader.isNotBlank()) reqBuilder.header("Cookie", cookieHeader)
+        fastScraperClient.newCall(reqBuilder.build()).execute().use { resp ->
+          val finalUrl = resp.request.url.toString().ifBlank { targetUrl }
+          val bodyStr = resp.body?.string().orEmpty()
+          if (isCloudflareOrBlockedHtml(resp.code, bodyStr)) {
+            okHttpBlockedByCloudflare = true
+            AppDiagnosticsLogger.log("Scraper", "OkHttp blocked (HTTP ${resp.code}) on $targetUrl - falling back to WebView")
+            "" to finalUrl
+          } else {
+            bodyStr to finalUrl
+          }
+        }
+      } catch (_: Exception) {
+        "" to targetUrl
+      }
+    }
+
+    var activeDocTitle = ""
+
     try {
       // Case A: Fast OkHttp + Jsoup HTML Fetch First (8s hard callTimeout) before any WebView fallback
       if (normalizedWatchUrl.startsWith("http")) {
-        val watchOrigin = extractOrigin(normalizedWatchUrl, portal.homeUrl)
-        val cookieHeader = try {
-          android.webkit.CookieManager.getInstance()?.getCookie(normalizedWatchUrl) ?: ""
-        } catch (_: Exception) { "" }
-
-        val html = if (portal == StreamingPortal.EGY_DEAD) {
-          val postBuilder = Request.Builder()
-            .url(normalizedWatchUrl)
-            .post(FormBody.Builder().add("View", "1").build())
-            .header("User-Agent", desktopUserAgent)
-            .header("Referer", normalizedWatchUrl)
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
-          if (cookieHeader.isNotBlank()) postBuilder.header("Cookie", cookieHeader)
-          fastScraperClient.newCall(postBuilder.build()).execute().use { resp ->
-            val bodyStr = resp.body?.string().orEmpty()
-            if (isCloudflareOrBlockedHtml(resp.code, bodyStr)) {
-              okHttpBlockedByCloudflare = true
-              AppDiagnosticsLogger.log("Scraper", "OkHttp blocked (HTTP ${resp.code}) on $normalizedWatchUrl - falling back to WebView")
-              ""
-            } else {
-              bodyStr
-            }
-          }
-        } else {
-          val reqBuilder = Request.Builder()
-            .url(normalizedWatchUrl)
-            .header("User-Agent", desktopUserAgent)
-            .header("Referer", "$watchOrigin/")
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
-          if (cookieHeader.isNotBlank()) reqBuilder.header("Cookie", cookieHeader)
-          fastScraperClient.newCall(reqBuilder.build()).execute().use { resp ->
-            val bodyStr = resp.body?.string().orEmpty()
-            if (isCloudflareOrBlockedHtml(resp.code, bodyStr)) {
-              okHttpBlockedByCloudflare = true
-              AppDiagnosticsLogger.log("Scraper", "OkHttp blocked (HTTP ${resp.code}) on $normalizedWatchUrl - falling back to WebView")
-              ""
-            } else {
-              bodyStr
-            }
-          }
+        var watchOrigin = extractOrigin(normalizedWatchUrl, portal.homeUrl)
+        val useInitialEgyPost = portal == StreamingPortal.EGY_DEAD && !isArabicPortalSearchUrl(normalizedWatchUrl)
+        var (html, resolvedHttpUrl) = fetchHtmlWithResolvedUrl(normalizedWatchUrl, useEgyDeadPost = useInitialEgyPost)
+        if (resolvedHttpUrl.startsWith("http")) {
+          watchOrigin = extractOrigin(resolvedHttpUrl, watchOrigin)
         }
 
         if (html.isNotBlank()) {
-          val doc = Jsoup.parse(html, normalizedWatchUrl)
+          var doc = Jsoup.parse(html, resolvedHttpUrl)
+          activeDocTitle = doc.title()
+
+          // Stage 0 (Arabic Portals): If the opened URL is a search page (e.g. TopCinema /search/?query=..., EgyDead /?s=..., LaRoza search.php),
+          // harvest ALL matching seasons first, then resolve to the real target season/episode page instead of scraping search cards as episodes!
+          if (isArabicPortal && isArabicPortalSearchUrl(normalizedWatchUrl)) {
+            collectArabicPortalSeasonsFromDoc(doc, resolvedHttpUrl, portal, showTokens, portalSeasonMap)
+            // On TopCinema long-running shows, check page 2 of search results if Season 1 isn't on page 1
+            if (portal == StreamingPortal.TOP_CINEMA && portalSeasonMap.size >= 3 && !portalSeasonMap.containsKey(1)) {
+              val page2Link = doc.selectFirst("a[href*='/page/2']")?.attr("href")?.trim().orEmpty()
+              if (page2Link.isNotBlank()) {
+                val (p2Html, p2Url) = fetchHtmlWithResolvedUrl(resolveRelativeUrl(resolvedHttpUrl, page2Link))
+                if (p2Html.isNotBlank()) {
+                  collectArabicPortalSeasonsFromDoc(Jsoup.parse(p2Html, p2Url), p2Url, portal, showTokens, portalSeasonMap)
+                }
+              }
+            }
+
+            val preferredTargetUrl = when {
+              selectedSeasonNumber > 1 && portalSeasonMap.containsKey(selectedSeasonNumber) -> portalSeasonMap[selectedSeasonNumber]
+              portalSeasonMap.containsKey(1) -> portalSeasonMap[1]
+              portalSeasonMap.isNotEmpty() -> portalSeasonMap[portalSeasonMap.keys.min()]
+              else -> findBestMatchingCardUrl(doc, resolvedHttpUrl, portal, showTokens)
+            }
+
+            if (!preferredTargetUrl.isNullOrBlank() && !isArabicPortalSearchUrl(preferredTargetUrl)) {
+              normalizedWatchUrl = StreamingPortal.sanitizePortalWatchUrl(preferredTargetUrl, portal)
+              val (targetHtml, targetFinalUrl) = fetchHtmlWithResolvedUrl(
+                normalizedWatchUrl,
+                useEgyDeadPost = (portal == StreamingPortal.EGY_DEAD)
+              )
+              if (targetHtml.isNotBlank()) {
+                resolvedHttpUrl = targetFinalUrl
+                watchOrigin = extractOrigin(targetFinalUrl, watchOrigin)
+                doc = Jsoup.parse(targetHtml, targetFinalUrl)
+                activeDocTitle = doc.title()
+              }
+            }
+          }
+
+          // Re-sync show tokens from resolved URL / page title if titleHint was empty or generic
+          val decodedCurrentUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
+          if (showTokens.isEmpty()) {
+            showTokens = extractNormalizedShowTokens(activeDocTitle.ifBlank { decodedCurrentUrl })
+          }
+
+          // Recompute effectiveSeasonNumber from the ACTUAL resolved watch/series URL (never stay stuck on Season 1 when S13 is loaded!)
+          if (selectedSeasonNumber <= 1) {
+            val resolvedSeasonFromPage = extractSeasonNumberFromText(decodedCurrentUrl)
+              ?: extractSeasonNumberFromText(activeDocTitle)
+            if (resolvedSeasonFromPage != null && resolvedSeasonFromPage in 1..40) {
+              effectiveSeasonNumber = resolvedSeasonFromPage
+            }
+          }
+
           extractServersFromDocument(doc, watchOrigin)
 
-          // Fast Jsoup pass for Seasons & Episodes links
           val seenEpNums = mutableSetOf<Int>()
-          val seenSeasonNums = mutableSetOf<Int>()
-          for (anchor in doc.select("a[href]")) {
-            val rawHref = anchor.attr("href").trim()
-            if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue
-            val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
-            val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
-            val decodedHref = try { java.net.URLDecoder.decode(rawHref, "UTF-8") } catch (_: Exception) { rawHref }
-            val combined = "$titleAttr $cleanText $decodedHref"
+          if (isArabicPortal) {
+            // Harvest seasons & active-season episodes cleanly with strict show-token & season filtering
+            collectArabicPortalSeasonsFromDoc(doc, resolvedHttpUrl, portal, showTokens, portalSeasonMap)
+            collectArabicPortalEpisodesFromDoc(
+              doc = doc,
+              baseUrl = resolvedHttpUrl,
+              portal = portal,
+              activeSeasonNumber = effectiveSeasonNumber,
+              showTokens = showTokens,
+              episodes = episodes,
+              seenEpNums = seenEpNums
+            )
 
-            val sNum = extractSeasonNumberFromText(combined)
-            if (sNum != null &&
-                sNum in 1..30 &&
-                !seenSeasonNums.contains(sNum) &&
-                (rawHref.contains("season", ignoreCase = true) || decodedHref.contains("الموسم") || cleanText.contains("الموسم") || titleAttr.contains("الموسم")) &&
-                !decodedHref.contains("الحلقة") && !decodedHref.contains("حلقة")
-            ) {
-              seenSeasonNums.add(sNum)
+            // Stage 1b: If we landed on a /watch/ page or single episode page and are missing other seasons or episodes,
+            // follow the parent /series/ (TopCinema) or /serie/ / /season/ (EgyDead) page ONCE to collect all seasons & episodes!
+            if (!okHttpBlockedByCloudflare && (portalSeasonMap.size <= 1 || episodes.isEmpty())) {
+              val parentCandidates = mutableListOf<String>()
+              if (portal == StreamingPortal.TOP_CINEMA) {
+                findParentOverviewLink(doc, resolvedHttpUrl, listOf("/series/"), showTokens)?.let { parentCandidates.add(it) }
+                // On TopCinema, /watch/ pages sometimes omit the /series/ link that lives on the non-/watch/ episode details page
+                if (parentCandidates.isEmpty() && normalizedWatchUrl.contains("/watch", ignoreCase = true)) {
+                  val detailsUrl = normalizedWatchUrl.substringBefore("/watch").trimEnd('/') + "/"
+                  if (detailsUrl != normalizedWatchUrl) parentCandidates.add(detailsUrl)
+                }
+              } else if (portal == StreamingPortal.EGY_DEAD) {
+                findParentOverviewLink(doc, resolvedHttpUrl, listOf("/serie/"), showTokens)?.let { parentCandidates.add(it) }
+                findParentOverviewLink(doc, resolvedHttpUrl, listOf("/season/"), showTokens)?.let { parentCandidates.add(it) }
+              }
+
+              val visitedParents = mutableSetOf(normalizedWatchUrl.trimEnd('/').lowercase())
+              for (parentUrl in parentCandidates.take(2)) {
+                val normParent = parentUrl.trimEnd('/').lowercase()
+                if (!visitedParents.add(normParent)) continue
+                val (pHtml, pFinalUrl) = fetchHtmlWithResolvedUrl(parentUrl)
+                if (pHtml.isBlank()) continue
+                val pDoc = Jsoup.parse(pHtml, pFinalUrl)
+                collectArabicPortalSeasonsFromDoc(pDoc, pFinalUrl, portal, showTokens, portalSeasonMap)
+                if (episodes.isEmpty()) {
+                  collectArabicPortalEpisodesFromDoc(
+                    doc = pDoc,
+                    baseUrl = pFinalUrl,
+                    portal = portal,
+                    activeSeasonNumber = effectiveSeasonNumber,
+                    showTokens = showTokens,
+                    episodes = episodes,
+                    seenEpNums = seenEpNums
+                  )
+                }
+                // If TopCinema details page revealed the parent /series/ URL and we still have <= 1 season, fetch /series/ once
+                if (portal == StreamingPortal.TOP_CINEMA && portalSeasonMap.size <= 1 && !parentUrl.contains("/series/", ignoreCase = true)) {
+                  val seriesLink = findParentOverviewLink(pDoc, pFinalUrl, listOf("/series/"), showTokens)
+                  if (!seriesLink.isNullOrBlank() && visitedParents.add(seriesLink.trimEnd('/').lowercase())) {
+                    val (sHtml, sFinalUrl) = fetchHtmlWithResolvedUrl(seriesLink)
+                    if (sHtml.isNotBlank()) {
+                      val sDoc = Jsoup.parse(sHtml, sFinalUrl)
+                      collectArabicPortalSeasonsFromDoc(sDoc, sFinalUrl, portal, showTokens, portalSeasonMap)
+                      if (episodes.isEmpty()) {
+                        collectArabicPortalEpisodesFromDoc(
+                          doc = sDoc,
+                          baseUrl = sFinalUrl,
+                          portal = portal,
+                          activeSeasonNumber = effectiveSeasonNumber,
+                          showTokens = showTokens,
+                          episodes = episodes,
+                          seenEpNums = seenEpNums
+                        )
+                      }
+                    }
+                  }
+                }
+              }
+
+              // For EgyDead: if /serie/ gave us the active season's /season/ URL and episodes are still empty, fetch that season URL once
+              if (portal == StreamingPortal.EGY_DEAD && episodes.isEmpty()) {
+                val activeSeasonUrl = portalSeasonMap[effectiveSeasonNumber]
+                if (!activeSeasonUrl.isNullOrBlank() && visitedParents.add(activeSeasonUrl.trimEnd('/').lowercase())) {
+                  val (sHtml, sFinalUrl) = fetchHtmlWithResolvedUrl(activeSeasonUrl)
+                  if (sHtml.isNotBlank()) {
+                    collectArabicPortalEpisodesFromDoc(
+                      doc = Jsoup.parse(sHtml, sFinalUrl),
+                      baseUrl = sFinalUrl,
+                      portal = portal,
+                      activeSeasonNumber = effectiveSeasonNumber,
+                      showTokens = showTokens,
+                      episodes = episodes,
+                      seenEpNums = seenEpNums
+                    )
+                  }
+                }
+              }
+            }
+
+            // Stage 2 (Multi-Season Live Origin Search Discovery):
+            // Many Arabic portals (TopCinema, EgyDead, LaRoza) index each season as a separate WordPress post
+            // without cross-linking all 13 seasons inside /watch/. Query the live portal search ONCE to aggregate ALL seasons!
+            val looksLikeTvSeries = episodes.isNotEmpty() ||
+              portalSeasonMap.isNotEmpty() ||
+              effectiveSeasonNumber > 1 ||
+              titleHint.contains("مسلسل", ignoreCase = true) ||
+              titleHint.contains("حلقة", ignoreCase = true) ||
+              titleHint.contains("الموسم", ignoreCase = true) ||
+              decodedCurrentUrl.contains("/series/", ignoreCase = true) ||
+              decodedCurrentUrl.contains("/season/", ignoreCase = true) ||
+              decodedCurrentUrl.contains("/serie/", ignoreCase = true) ||
+              decodedCurrentUrl.contains("/episode/", ignoreCase = true) ||
+              decodedCurrentUrl.contains("مسلسل") ||
+              decodedCurrentUrl.contains("الحلقة") ||
+              decodedCurrentUrl.contains("الموسم") ||
+              activeDocTitle.contains("مسلسل") ||
+              activeDocTitle.contains("الموسم")
+
+            if (looksLikeTvSeries && !okHttpBlockedByCloudflare && portalSeasonMap.size <= 1 && showTokens.isNotEmpty()) {
+              val showQuery = showTokens.joinToString(" ")
+              val encodedQuery = try { URLEncoder.encode(showQuery, "UTF-8") } catch (_: Exception) { showQuery.replace(" ", "+") }
+              val searchCandidates = when (portal) {
+                StreamingPortal.TOP_CINEMA -> listOf(
+                  "$watchOrigin/search/?query=$encodedQuery&type=all",
+                  "$watchOrigin/?s=$encodedQuery"
+                )
+                StreamingPortal.EGY_DEAD -> listOf("$watchOrigin/?s=$encodedQuery")
+                StreamingPortal.LAROZA -> listOf("$watchOrigin/search.php?keywords=$encodedQuery")
+                else -> emptyList()
+              }
+
+              for (searchUrl in searchCandidates) {
+                val (sHtml, sFinalUrl) = fetchHtmlWithResolvedUrl(searchUrl)
+                if (sHtml.isBlank()) continue
+                val sDoc = Jsoup.parse(sHtml, sFinalUrl)
+                collectArabicPortalSeasonsFromDoc(sDoc, sFinalUrl, portal, showTokens, portalSeasonMap)
+                if (portal == StreamingPortal.LAROZA && episodes.isEmpty()) {
+                  collectArabicPortalEpisodesFromDoc(
+                    doc = sDoc,
+                    baseUrl = sFinalUrl,
+                    portal = portal,
+                    activeSeasonNumber = effectiveSeasonNumber,
+                    showTokens = showTokens,
+                    episodes = episodes,
+                    seenEpNums = seenEpNums
+                  )
+                }
+                // For TopCinema shows with many seasons (e.g. American Horror Story 13 seasons), check page 2 once if Season 1 isn't found yet
+                if (portal == StreamingPortal.TOP_CINEMA && portalSeasonMap.size >= 3 && !portalSeasonMap.containsKey(1)) {
+                  val page2Href = sDoc.selectFirst("a[href*='/page/2']")?.attr("href")?.trim().orEmpty()
+                  if (page2Href.isNotBlank()) {
+                    val (p2Html, p2Url) = fetchHtmlWithResolvedUrl(resolveRelativeUrl(sFinalUrl, page2Href))
+                    if (p2Html.isNotBlank()) {
+                      collectArabicPortalSeasonsFromDoc(Jsoup.parse(p2Html, p2Url), p2Url, portal, showTokens, portalSeasonMap)
+                    }
+                  }
+                }
+                if (portalSeasonMap.size > 1) break
+              }
+            }
+
+            // Convert discovered portalSeasonMap into sorted seasons list
+            for ((sNum, sUrl) in portalSeasonMap.entries.sortedBy { it.key }) {
               seasons.add(
                 ScrapedSeasonItem(
                   seasonNumber = sNum,
                   title = "الموسم $sNum",
-                  url = resolveRelativeUrl(normalizedWatchUrl, rawHref)
+                  url = sUrl
                 )
               )
             }
+          } else {
+            // Non-Arabic portals (WatchSeries / Flixer): keep fast existing anchor pass
+            val seenSeasonNums = mutableSetOf<Int>()
+            for (anchor in doc.select("a[href]")) {
+              val rawHref = anchor.attr("href").trim()
+              if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue
+              val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
+              val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
+              val decodedHref = try { java.net.URLDecoder.decode(rawHref, "UTF-8") } catch (_: Exception) { rawHref }
+              val combined = "$titleAttr $cleanText $decodedHref"
 
-            val epMatch = episodeNumberRegex.find(combined)
-            if (epMatch != null && !rawHref.contains("/category/") && !rawHref.contains("/tag/") && !rawHref.contains("/series/")) {
-              val epNum = epMatch.groupValues[1].toIntOrNull()
-              if (epNum != null && epNum in 1..300 && !seenEpNums.contains(epNum)) {
-                seenEpNums.add(epNum)
-                var resolvedEp = resolveRelativeUrl(normalizedWatchUrl, rawHref).replace("video.php?vid=", "play.php?vid=")
-                if (portal == StreamingPortal.TOP_CINEMA && !resolvedEp.contains("/watch")) {
-                  resolvedEp = "${resolvedEp.trimEnd('/')}/watch/"
-                }
-                episodes.add(
-                  ScrapedEpisodeItem(
-                    episodeNumber = epNum,
-                    title = "الحلقة $epNum",
-                    url = resolvedEp,
-                    seasonNumber = effectiveSeasonNumber
+              val sNum = extractSeasonNumberFromText(combined)
+              if (sNum != null &&
+                  sNum in 1..40 &&
+                  !seenSeasonNums.contains(sNum) &&
+                  (rawHref.contains("season", ignoreCase = true) || decodedHref.contains("الموسم") || cleanText.contains("الموسم") || titleAttr.contains("الموسم")) &&
+                  !decodedHref.contains("الحلقة") && !decodedHref.contains("حلقة")
+              ) {
+                seenSeasonNums.add(sNum)
+                seasons.add(
+                  ScrapedSeasonItem(
+                    seasonNumber = sNum,
+                    title = "الموسم $sNum",
+                    url = resolveRelativeUrl(normalizedWatchUrl, rawHref)
                   )
                 )
+              }
+
+              val epMatch = episodeNumberRegex.find(combined)
+              if (epMatch != null && !rawHref.contains("/category/") && !rawHref.contains("/tag/") && !rawHref.contains("/series/")) {
+                val epNum = epMatch.groupValues[1].toIntOrNull()
+                if (epNum != null && epNum in 1..300 && !seenEpNums.contains(epNum)) {
+                  seenEpNums.add(epNum)
+                  val resolvedEp = resolveRelativeUrl(normalizedWatchUrl, rawHref).replace("video.php?vid=", "play.php?vid=")
+                  episodes.add(
+                    ScrapedEpisodeItem(
+                      episodeNumber = epNum,
+                      title = "الحلقة $epNum",
+                      url = resolvedEp,
+                      seasonNumber = effectiveSeasonNumber
+                    )
+                  )
+                }
               }
             }
           }
 
-          // If the initial URL was a series overview page (e.g. TopCinema /series/...) with no direct watch servers yet,
-          // fetch ONLY the first episode's watch page via fastScraperClient so watch servers populate immediately.
+          // Stage 3: If the opened URL was a series/season overview page (e.g. TopCinema /series/... or EgyDead /season/...)
+          // with no direct watch servers yet, fetch the target episode's watch page so servers populate immediately.
           if (watchServers.isEmpty() && episodes.isNotEmpty()) {
-            val firstEpUrl = episodes.sortedBy { it.episodeNumber }.first().url
-            normalizedWatchUrl = firstEpUrl
-            try {
-              val epOrigin = extractOrigin(firstEpUrl, portal.homeUrl)
-              val epReq = Request.Builder()
-                .url(firstEpUrl)
-                .header("User-Agent", desktopUserAgent)
-                .header("Referer", "$epOrigin/")
-                .build()
-              val epHtml = fastScraperClient.newCall(epReq).execute().use { it.body?.string().orEmpty() }
-              if (epHtml.isNotBlank()) {
-                extractServersFromDocument(Jsoup.parse(epHtml, firstEpUrl), epOrigin)
-              }
-            } catch (_: Exception) {}
+            val targetEp = episodes.firstOrNull { it.episodeNumber == selectedEpisodeNumber }
+              ?: episodes.sortedBy { it.episodeNumber }.first()
+            normalizedWatchUrl = targetEp.url
+            val decodedEpUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
+            if (selectedSeasonNumber <= 1) {
+              extractSeasonNumberFromText(decodedEpUrl)?.takeIf { it in 1..40 }?.let { effectiveSeasonNumber = it }
+            }
+            val (epHtml, epFinalUrl) = fetchHtmlWithResolvedUrl(
+              normalizedWatchUrl,
+              useEgyDeadPost = (portal == StreamingPortal.EGY_DEAD)
+            )
+            if (epHtml.isNotBlank()) {
+              val epOrigin = extractOrigin(epFinalUrl, watchOrigin)
+              extractServersFromDocument(Jsoup.parse(epHtml, epFinalUrl), epOrigin)
+            }
           }
         }
       }
 
       // Case B: Resolve TMDB ID ONLY when needed (when portal HTML didn't yield direct servers or episodes are missing for a TV show).
       // Skipping unnecessary TMDB calls on fast portal pages saves 2-4 seconds per episode!
+      val decodedCurrentForTvCheck = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
       val isExpectedTv = episodes.isNotEmpty() ||
         seasons.isNotEmpty() ||
+        effectiveSeasonNumber > 1 ||
         titleHint.contains("مسلسل", ignoreCase = true) ||
         titleHint.contains("حلقة", ignoreCase = true) ||
         titleHint.contains("الحلقة", ignoreCase = true) ||
@@ -1366,6 +1575,10 @@ class SearchAndSubtitlesService {
         titleHint.contains("الموسم", ignoreCase = true) ||
         normalizedWatchUrl.contains("/tv/", ignoreCase = true) ||
         normalizedWatchUrl.contains("/series/", ignoreCase = true) ||
+        normalizedWatchUrl.contains("/season/", ignoreCase = true) ||
+        normalizedWatchUrl.contains("/serie/", ignoreCase = true) ||
+        decodedCurrentForTvCheck.contains("مسلسل") ||
+        decodedCurrentForTvCheck.contains("الحلقة") ||
         decodedInitialUrl.contains("مسلسل") ||
         decodedInitialUrl.contains("الحلقة")
 
@@ -1531,7 +1744,8 @@ class SearchAndSubtitlesService {
       }
     }
 
-    if (seasons.isEmpty() && episodes.isNotEmpty()) {
+    // Ensure the active season is always represented in the seasons list
+    if ((episodes.isNotEmpty() || seasons.isNotEmpty()) && seasons.none { it.seasonNumber == effectiveSeasonNumber }) {
       seasons.add(ScrapedSeasonItem(seasonNumber = effectiveSeasonNumber, title = "الموسم $effectiveSeasonNumber", url = normalizedWatchUrl))
     }
 
@@ -1546,7 +1760,7 @@ class SearchAndSubtitlesService {
     val scrapeElapsedMs = System.currentTimeMillis() - scrapeStartMs
     AppDiagnosticsLogger.log(
       "Scraper",
-      "Fast-scraped ${seasons.size} seasons, ${episodes.size} episodes, ${watchServers.size} servers in ${scrapeElapsedMs}ms from $normalizedWatchUrl"
+      "Fast-scraped ${seasons.size} seasons (active=S$effectiveSeasonNumber), ${episodes.size} episodes, ${watchServers.size} servers in ${scrapeElapsedMs}ms from $normalizedWatchUrl"
     )
 
     // Resolve ONLY the single active/primary selected server (NEVER loop across 5-6 servers in background)
@@ -1565,22 +1779,27 @@ class SearchAndSubtitlesService {
       }
     }
 
-    val sortedEpisodes = episodes.sortedBy { it.episodeNumber }
-    val detectedEpisodeFromUrl = extractEpisodeNumberFromText(decodedInitialUrl)
+    // Stamp every episode with the true active season so clicking an episode never reverts to Season 1
+    val sortedEpisodes = episodes
+      .map { ep -> if (ep.seasonNumber != effectiveSeasonNumber) ep.copy(seasonNumber = effectiveSeasonNumber) else ep }
+      .sortedBy { it.episodeNumber }
+    val decodedFinalWatchUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
+    val detectedEpisodeFromUrl = extractEpisodeNumberFromText(decodedFinalWatchUrl)
+      ?: extractEpisodeNumberFromText(decodedInitialUrl)
     val effectiveEpisodeNumber = when {
       selectedEpisodeNumber > 0 -> selectedEpisodeNumber
       detectedEpisodeFromUrl != null && detectedEpisodeFromUrl > 0 -> detectedEpisodeFromUrl
-      else -> 1
+      else -> sortedEpisodes.firstOrNull()?.episodeNumber ?: 1
     }
     val resolvedNextEpisode = sortedEpisodes.firstOrNull { it.episodeNumber > effectiveEpisodeNumber }
 
     ScrapedSeriesStructure(
       isSeries = sortedEpisodes.isNotEmpty() || seasons.isNotEmpty(),
-      seriesTitle = cleanSeriesTitleHint,
+      seriesTitle = cleanSeriesTitleHint.ifBlank { stripEpisodeAndSeasonSuffix(activeDocTitle) },
       currentSeason = effectiveSeasonNumber,
       selectedSeasonNumber = effectiveSeasonNumber,
       currentEpisodeNumber = effectiveEpisodeNumber,
-      seasons = seasons.sortedBy { it.seasonNumber },
+      seasons = seasons.distinctBy { it.seasonNumber }.sortedBy { it.seasonNumber },
       episodes = sortedEpisodes,
       nextEpisode = resolvedNextEpisode,
       watchServers = watchServers,
@@ -1589,6 +1808,300 @@ class SearchAndSubtitlesService {
       directStreamReferer = extractedStreamReferer,
       detectedQualities = detectedQualities
     )
+  }
+
+  private fun isArabicPortalSearchUrl(url: String): Boolean {
+    val l = url.lowercase()
+    return l.contains("/search/") ||
+      l.contains("/search?") ||
+      l.contains("?s=") ||
+      l.contains("&s=") ||
+      l.contains("?query=") ||
+      l.contains("search.php")
+  }
+
+  private fun extractNormalizedShowTokens(rawTitle: String): List<String> {
+    val decoded = try { java.net.URLDecoder.decode(rawTitle, "UTF-8") } catch (_: Exception) { rawTitle }
+    // If a full URL was passed, extract only the meaningful path/query slug
+    val strippedUrl = if (decoded.startsWith("http", ignoreCase = true)) {
+      val queryParam = Regex("[?&](?:query|s|keywords)=([^&]+)", RegexOption.IGNORE_CASE)
+        .find(decoded)?.groupValues?.get(1)
+      if (!queryParam.isNullOrBlank()) {
+        queryParam.replace("+", " ")
+      } else {
+        decoded.substringAfter("://").substringAfter("/", "")
+          .replace("/watch", " ")
+          .replace("/series/", " ")
+          .replace("/season/", " ")
+          .replace("/serie/", " ")
+          .replace("/episode/", " ")
+      }
+    } else {
+      decoded
+    }
+
+    val base = stripEpisodeAndSeasonSuffix(strippedUrl)
+      .replace(Regex("\\(\\s*(19|20)[0-9]{2}\\s*\\)"), " ")
+      .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+      .lowercase()
+      .trim()
+
+    val stopWords = setOf(
+      "مسلسل", "فيلم", "فلم", "انمي", "أنمي", "برنامج", "مترجم", "مترجمة", "مترجمه",
+      "مدبلج", "مدبلجة", "مدبلجه", "اون", "لاين", "اونلاين", "كامل", "كاملة", "كامله",
+      "مشاهدة", "مشاهده", "تحميل", "جميع", "الحلقات", "حلقات", "الحلقة", "الحلقه", "حلقة", "حلقه",
+      "الموسم", "موسم", "والاخيرة", "الأخيرة", "الاخيرة", "توب", "سينما", "ايجي", "ديد", "لاروزا",
+      "topcinema", "egydead", "laroza", "watch", "series", "season", "episode", "hd", "web", "dl",
+      "all", "type", "query", "search", "com", "one", "live", "boats", "the", "of"
+    )
+
+    val tokens = base.split(Regex("\\s+"))
+      .filter { it.length >= 2 && it !in stopWords && !it.all { ch -> ch.isDigit() } }
+      .distinct()
+
+    if (tokens.isNotEmpty()) return tokens
+    // Fallback for single-word titles like "The" or short titles
+    return base.split(Regex("\\s+")).filter { it.isNotBlank() && it !in stopWords }.distinct()
+  }
+
+  private fun matchesShowTokens(candidateText: String, showTokens: List<String>): Boolean {
+    if (showTokens.isEmpty()) return true
+    val decoded = try { java.net.URLDecoder.decode(candidateText, "UTF-8") } catch (_: Exception) { candidateText }
+    val normalized = decoded
+      .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+      .lowercase()
+      .trim()
+    if (normalized.isBlank()) return false
+
+    val candidateWords = normalized.split(Regex("\\s+")).toSet()
+    var matchedCount = 0
+    for (tok in showTokens) {
+      val isAscii = tok.all { it.code < 128 }
+      val matched = if (isAscii) {
+        tok in candidateWords
+      } else {
+        tok in candidateWords || normalized.contains(tok)
+      }
+      if (matched) matchedCount++
+    }
+    val required = if (showTokens.size <= 3) showTokens.size else kotlin.math.ceil(showTokens.size * 0.75).toInt().coerceAtLeast(2)
+    return matchedCount >= required
+  }
+
+  private fun isSeasonOverviewUrl(url: String, portal: StreamingPortal): Boolean {
+    val l = url.lowercase()
+    return when (portal) {
+      StreamingPortal.TOP_CINEMA -> l.contains("/series/")
+      StreamingPortal.EGY_DEAD -> l.contains("/season/") || l.contains("/serie/")
+      else -> l.contains("/series/") || l.contains("/season/")
+    }
+  }
+
+  private fun registerArabicSeasonCandidate(
+    seasonNumber: Int,
+    candidateUrl: String,
+    portal: StreamingPortal,
+    seasonMap: MutableMap<Int, String>
+  ) {
+    if (seasonNumber !in 1..40 || !candidateUrl.startsWith("http")) return
+    val existing = seasonMap[seasonNumber]
+    val candidateIsOverview = isSeasonOverviewUrl(candidateUrl, portal)
+    val existingIsOverview = existing != null && isSeasonOverviewUrl(existing, portal)
+    if (existing == null || (candidateIsOverview && !existingIsOverview)) {
+      seasonMap[seasonNumber] = candidateUrl
+    }
+  }
+
+  private fun collectArabicPortalSeasonsFromDoc(
+    doc: org.jsoup.nodes.Document,
+    baseUrl: String,
+    portal: StreamingPortal,
+    showTokens: List<String>,
+    seasonMap: MutableMap<Int, String>
+  ) {
+    // 1. Dedicated season containers on TopCinema & EgyDead (scoped directly to the current show!)
+    val scopedSelectors = when (portal) {
+      StreamingPortal.TOP_CINEMA -> "section.allSeasons a[href], .SeasonsList a[href], .seasons a[href], .Season--Box a[href]"
+      StreamingPortal.EGY_DEAD -> ".seasons-list a[href], .SeasonsList a[href], .seasons a[href], ul.seasons a[href]"
+      else -> ".SeasonsList a[href], .seasons a[href]"
+    }
+    for (anchor in doc.select(scopedSelectors)) {
+      val rawHref = anchor.attr("href").trim()
+      if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue
+      val absUrl = resolveRelativeUrl(baseUrl, rawHref)
+      if (absUrl.contains("/category/") || absUrl.contains("/tag/") || absUrl.contains("/page/")) continue
+      val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
+      val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
+      val decodedHref = try { java.net.URLDecoder.decode(absUrl, "UTF-8") } catch (_: Exception) { absUrl }
+      val combined = "$titleAttr $cleanText $decodedHref"
+      // Even inside a scoped container, ignore obvious unrelated series if showTokens are available and URL names another show
+      val sNum = extractSeasonNumberFromText(combined)
+      if (sNum != null && sNum in 1..40) {
+        val tokenOk = showTokens.isEmpty() ||
+          matchesShowTokens(combined, showTokens) ||
+          cleanText.startsWith("الموسم") ||
+          cleanText.startsWith("موسم") ||
+          cleanText.startsWith("Season", ignoreCase = true)
+        if (tokenOk) {
+          registerArabicSeasonCandidate(sNum, absUrl, portal, seasonMap)
+        }
+      }
+    }
+
+    // 2. General anchors across cards/search results/breadcrumbs (strictly filtered by showTokens!)
+    for (anchor in doc.select("a[href]")) {
+      val rawHref = anchor.attr("href").trim()
+      if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue
+      val absUrl = resolveRelativeUrl(baseUrl, rawHref)
+      if (absUrl.contains("/category/") ||
+        absUrl.contains("/tag/") ||
+        absUrl.contains("/page/") ||
+        absUrl.contains("/recent/") ||
+        absUrl.contains("/genre/") ||
+        absUrl.contains("/actor") ||
+        isArabicPortalSearchUrl(absUrl)
+      ) continue
+
+      val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
+      val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
+      val decodedHref = try { java.net.URLDecoder.decode(absUrl, "UTF-8") } catch (_: Exception) { absUrl }
+      val combined = "$titleAttr $cleanText $decodedHref"
+
+      if (showTokens.isNotEmpty() && !matchesShowTokens(combined, showTokens)) continue
+
+      val sNum = extractSeasonNumberFromText(combined)
+      val isOverview = isSeasonOverviewUrl(absUrl, portal)
+      val isEpisodeLink = decodedHref.contains("الحلقة") || decodedHref.contains("حلقة") || decodedHref.contains("/episode/", ignoreCase = true)
+
+      if (sNum != null && sNum in 1..40) {
+        // Overview URLs (/series/, /season/) always win; episode URLs are kept as fallback so seasons without /series/ links still appear!
+        val normalizedCandidate = if (portal == StreamingPortal.TOP_CINEMA && isEpisodeLink && !absUrl.contains("/watch")) {
+          "${absUrl.trimEnd('/')}/watch/"
+        } else {
+          absUrl
+        }
+        registerArabicSeasonCandidate(sNum, normalizedCandidate, portal, seasonMap)
+      } else if (isOverview && !isEpisodeLink && !seasonMap.containsKey(1)) {
+        // Unnumbered /series/ or /serie/ post matching the show (typically Season 1)
+        if (!decodedHref.contains("/serie/", ignoreCase = true) || portal != StreamingPortal.EGY_DEAD) {
+          registerArabicSeasonCandidate(1, absUrl, portal, seasonMap)
+        }
+      }
+    }
+  }
+
+  private fun collectArabicPortalEpisodesFromDoc(
+    doc: org.jsoup.nodes.Document,
+    baseUrl: String,
+    portal: StreamingPortal,
+    activeSeasonNumber: Int,
+    showTokens: List<String>,
+    episodes: MutableList<ScrapedEpisodeItem>,
+    seenEpNums: MutableSet<Int>
+  ) {
+    val scopedSelectors = when (portal) {
+      StreamingPortal.TOP_CINEMA -> "div.allepcont a[href], .EpisodesList a[href], ul.Episodes--List a[href], .episodes a[href], .Row a[href]"
+      StreamingPortal.EGY_DEAD -> ".episodes-list a[href], .EpsList a[href], ul.episodes a[href], .EpisodeItem a[href]"
+      else -> ".episodes a[href], .EpisodesList a[href]"
+    }
+
+    fun processAnchors(anchors: org.jsoup.select.Elements, isScopedContainer: Boolean) {
+      for (anchor in anchors) {
+        val rawHref = anchor.attr("href").trim()
+        if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue
+        val absUrl = resolveRelativeUrl(baseUrl, rawHref)
+        if (absUrl.contains("/category/") ||
+          absUrl.contains("/tag/") ||
+          absUrl.contains("/page/") ||
+          absUrl.contains("/series/") ||
+          absUrl.contains("/season/") ||
+          absUrl.contains("/serie/") ||
+          isArabicPortalSearchUrl(absUrl)
+        ) continue
+
+        val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
+        val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
+        val decodedHref = try { java.net.URLDecoder.decode(absUrl, "UTF-8") } catch (_: Exception) { absUrl }
+        val combined = "$titleAttr $cleanText $decodedHref"
+
+        if (!isScopedContainer && showTokens.isNotEmpty() && !matchesShowTokens(combined, showTokens)) continue
+
+        // Skip episodes explicitly belonging to a DIFFERENT season!
+        val explicitSeason = extractSeasonNumberFromText(decodedHref) ?: extractSeasonNumberFromText("$titleAttr $cleanText")
+        if (explicitSeason != null && explicitSeason != activeSeasonNumber) continue
+
+        val epNum = extractEpisodeNumberFromText(combined)
+          ?: episodeNumberRegex.find(combined)?.groupValues?.get(1)?.toIntOrNull()
+        if (epNum != null && epNum in 1..300 && seenEpNums.add(epNum)) {
+          var resolvedEp = absUrl.replace("video.php?vid=", "play.php?vid=")
+          if (portal == StreamingPortal.TOP_CINEMA && !resolvedEp.contains("/watch")) {
+            resolvedEp = "${resolvedEp.trimEnd('/')}/watch/"
+          }
+          episodes.add(
+            ScrapedEpisodeItem(
+              episodeNumber = epNum,
+              title = "الحلقة $epNum",
+              url = resolvedEp,
+              seasonNumber = activeSeasonNumber
+            )
+          )
+        }
+      }
+    }
+
+    // Prefer dedicated episode containers first so sidebar/recommended episodes never interfere
+    val scopedAnchors = doc.select(scopedSelectors)
+    if (scopedAnchors.isNotEmpty()) {
+      processAnchors(scopedAnchors, isScopedContainer = true)
+    }
+    if (episodes.isEmpty()) {
+      processAnchors(doc.select("a[href]"), isScopedContainer = false)
+    }
+  }
+
+  private fun findParentOverviewLink(
+    doc: org.jsoup.nodes.Document,
+    baseUrl: String,
+    pathMarkers: List<String>,
+    showTokens: List<String>
+  ): String? {
+    for (anchor in doc.select("a[href]")) {
+      val rawHref = anchor.attr("href").trim()
+      if (rawHref.isBlank() || rawHref.startsWith("#")) continue
+      val absUrl = resolveRelativeUrl(baseUrl, rawHref)
+      if (pathMarkers.none { absUrl.contains(it, ignoreCase = true) }) continue
+      val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
+      val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
+      val decodedHref = try { java.net.URLDecoder.decode(absUrl, "UTF-8") } catch (_: Exception) { absUrl }
+      val combined = "$titleAttr $cleanText $decodedHref"
+      if (showTokens.isEmpty() || matchesShowTokens(combined, showTokens)) {
+        return absUrl
+      }
+    }
+    return null
+  }
+
+  private fun findBestMatchingCardUrl(
+    doc: org.jsoup.nodes.Document,
+    baseUrl: String,
+    portal: StreamingPortal,
+    showTokens: List<String>
+  ): String? {
+    var fallback: String? = null
+    for (anchor in doc.select("div.Small--Box a[href], li.movieItem a[href], article a[href], a[href]")) {
+      val rawHref = anchor.attr("href").trim()
+      if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) continue
+      val absUrl = resolveRelativeUrl(baseUrl, rawHref)
+      if (absUrl.contains("/category/") || absUrl.contains("/tag/") || absUrl.contains("/page/") || isArabicPortalSearchUrl(absUrl)) continue
+      val titleAttr = cleanHtmlEntities(anchor.attr("title").trim())
+      val cleanText = cleanHtmlEntities(anchor.text().replace(whitespaceRegex, " ").trim())
+      val decodedHref = try { java.net.URLDecoder.decode(absUrl, "UTF-8") } catch (_: Exception) { absUrl }
+      val combined = "$titleAttr $cleanText $decodedHref"
+      if (showTokens.isNotEmpty() && !matchesShowTokens(combined, showTokens)) continue
+      if (isSeasonOverviewUrl(absUrl, portal)) return absUrl
+      if (fallback == null) fallback = absUrl
+    }
+    return fallback
   }
 
   private fun isDynamicSpaEmbed(url: String): Boolean {
@@ -2129,23 +2642,11 @@ class SearchAndSubtitlesService {
     if (xMatch != null) {
       return xMatch.groupValues[1].toIntOrNull()
     }
-    val digitMatch = Regex("(?:الموسم|موسم|\\bseason)\\s*[-:_]?\\s*([0-9]{1,2})\\b", RegexOption.IGNORE_CASE).findAll(decoded).lastOrNull()
+    val digitMatch = Regex("(?:الموسم|موسم|\\bseason)\\s*[-:_]?\\s*([0-9]{1,2})(?:\\b|[^0-9])", RegexOption.IGNORE_CASE).findAll(decoded).lastOrNull()
     if (digitMatch != null) {
       return digitMatch.groupValues[1].toIntOrNull()
     }
-    return when {
-      decoded.contains("الموسم الاول") || decoded.contains("الموسم الأول") || decoded.contains("الموسم-الاول") || decoded.contains("الموسم-الأول") -> 1
-      decoded.contains("الموسم الثاني") || decoded.contains("الموسم الثانى") || decoded.contains("الموسم-الثاني") || decoded.contains("الموسم-الثانى") -> 2
-      decoded.contains("الموسم الثالث") || decoded.contains("الموسم-الثالث") -> 3
-      decoded.contains("الموسم الرابع") || decoded.contains("الموسم-الرابع") -> 4
-      decoded.contains("الموسم الخامس") || decoded.contains("الموسم-الخامس") -> 5
-      decoded.contains("الموسم السادس") || decoded.contains("الموسم-السادس") -> 6
-      decoded.contains("الموسم السابع") || decoded.contains("الموسم-السابع") -> 7
-      decoded.contains("الموسم الثامن") || decoded.contains("الموسم-الثامن") -> 8
-      decoded.contains("الموسم التاسع") || decoded.contains("الموسم-التاسع") -> 9
-      decoded.contains("الموسم العاشر") || decoded.contains("الموسم-العاشر") -> 10
-      else -> null
-    }
+    return parseArabicOrdinalSeason(decoded)
   }
 
   private fun extractEpisodeNumberFromText(text: String): Int? {
@@ -2857,10 +3358,51 @@ class SearchAndSubtitlesService {
       return basePart
         .replace(Regex("\\bS0*[0-9]{1,2}\\s*E0*[0-9]{1,3}\\b.*$", RegexOption.IGNORE_CASE), "")
         .replace(Regex("\\b0*[0-9]{1,2}x0*[0-9]{1,3}\\b.*$", RegexOption.IGNORE_CASE), "")
-        .replace(Regex("(?:الموسم|موسم)\\s*(?:الاول|الأول|الثاني|الثانى|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|[0-9]{1,2}).*$"), "")
+        .replace(Regex("(?:الموسم|موسم)\\s*(?:الحادي|الحادى|الاحدى|الاحدي|الاول|الأول|الثاني|الثانى|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|العشرون|العشرين|[0-9]{1,2}).*$"), "")
         .replace(Regex("(?:الحلقة|الحلقه|حلقة|حلقه)\\s*[0-9]{1,3}.*$"), "")
         .replace(Regex("\\s+"), " ")
         .trim(' ', '-', ':', '|', '•')
+    }
+
+    /**
+     * Parses Arabic ordinal season labels from 1 up to 20 (e.g. "الموسم الأول" .. "الموسم الثالث عشر" .. "الموسم العشرون"),
+     * normalizing hyphens/underscores to spaces and checking compound ordinals (11..19) before single ordinals (1..10).
+     */
+    fun parseArabicOrdinalSeason(raw: String): Int? {
+      if (raw.isBlank()) return null
+      val norm = raw
+        .replace('-', ' ')
+        .replace('_', ' ')
+        .replace('/', ' ')
+        .replace('أ', 'ا')
+        .replace('إ', 'ا')
+        .replace('آ', 'ا')
+        .replace('ى', 'ي')
+        .replace(Regex("\\s+"), " ")
+      if (!norm.contains("موسم")) return null
+      return when {
+        norm.contains("موسم الحادي عشر") || norm.contains("موسم الاحدي عشر") -> 11
+        norm.contains("موسم الثاني عشر") -> 12
+        norm.contains("موسم الثالث عشر") -> 13
+        norm.contains("موسم الرابع عشر") -> 14
+        norm.contains("موسم الخامس عشر") -> 15
+        norm.contains("موسم السادس عشر") -> 16
+        norm.contains("موسم السابع عشر") -> 17
+        norm.contains("موسم الثامن عشر") -> 18
+        norm.contains("موسم التاسع عشر") -> 19
+        norm.contains("موسم العشرون") || norm.contains("موسم العشرين") -> 20
+        norm.contains("موسم الاول") -> 1
+        norm.contains("موسم الثاني") -> 2
+        norm.contains("موسم الثالث") -> 3
+        norm.contains("موسم الرابع") -> 4
+        norm.contains("موسم الخامس") -> 5
+        norm.contains("موسم السادس") -> 6
+        norm.contains("موسم السابع") -> 7
+        norm.contains("موسم الثامن") -> 8
+        norm.contains("موسم التاسع") -> 9
+        norm.contains("موسم العاشر") -> 10
+        else -> null
+      }
     }
 
     /**
@@ -2892,19 +3434,7 @@ class SearchAndSubtitlesService {
           .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
         Regex("(?:الموسم|موسم|\\bseason)\\s*[-:_]?\\s*([0-9]{1,2})(?:\\b|[^0-9])", RegexOption.IGNORE_CASE)
           .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
-        return when {
-          src.contains("الموسم الاول") || src.contains("الموسم الأول") || src.contains("الموسم-الاول") || src.contains("الموسم-الأول") -> 1
-          src.contains("الموسم الثاني") || src.contains("الموسم الثانى") || src.contains("الموسم-الثاني") || src.contains("الموسم-الثانى") -> 2
-          src.contains("الموسم الثالث") || src.contains("الموسم-الثالث") -> 3
-          src.contains("الموسم الرابع") || src.contains("الموسم-الرابع") -> 4
-          src.contains("الموسم الخامس") || src.contains("الموسم-الخامس") -> 5
-          src.contains("الموسم السادس") || src.contains("الموسم-السادس") -> 6
-          src.contains("الموسم السابع") || src.contains("الموسم-السابع") -> 7
-          src.contains("الموسم الثامن") || src.contains("الموسم-الثامن") -> 8
-          src.contains("الموسم التاسع") || src.contains("الموسم-التاسع") -> 9
-          src.contains("الموسم العاشر") || src.contains("الموسم-العاشر") -> 10
-          else -> null
-        }
+        return parseArabicOrdinalSeason(src)
       }
 
       fun extractEpisodeFromSource(src: String): Int? {

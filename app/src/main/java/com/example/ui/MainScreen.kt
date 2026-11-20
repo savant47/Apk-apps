@@ -83,6 +83,7 @@ import com.example.data.TvPreferencesRepository
 import com.example.model.AppMainTab
 import com.example.model.ControlMode
 import com.example.model.ScrapedEpisodeItem
+import com.example.model.ScrapedSeasonItem
 import com.example.model.ScrapedSeriesStructure
 import com.example.model.SearchResultItem
 import com.example.model.StreamingPortal
@@ -837,13 +838,52 @@ fun MainScreen(
         selectedEpisodeNumber = req.selectedEpisodeNum
       )
       lastResolvedScrapeKeyRef.set(req.requestKey)
-      seriesStructure = scraped
+      val prevBaseTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(seriesStructure.seriesTitle)
+        .lowercase().replace(Regex("[^a-z0-9\\u0621-\\u064A]+"), " ").trim()
+      val newBaseTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+        scraped.seriesTitle.ifBlank { req.titleHint }
+      ).lowercase().replace(Regex("[^a-z0-9\\u0621-\\u064A]+"), " ").trim()
+      val isSameShow = prevBaseTitle.isNotBlank() &&
+        newBaseTitle.isNotBlank() &&
+        (prevBaseTitle == newBaseTitle || prevBaseTitle.contains(newBaseTitle) || newBaseTitle.contains(prevBaseTitle))
+
+      val mergedSeasons = if (isSameShow && seriesStructure.seasons.size > 1 && scraped.seasons.isNotEmpty()) {
+        val byNum = linkedMapOf<Int, ScrapedSeasonItem>()
+        for (oldSeason in seriesStructure.seasons) {
+          if (StreamingPortal.belongsToPortalDomain(oldSeason.url, req.portal)) {
+            byNum[oldSeason.seasonNumber] = oldSeason
+          }
+        }
+        for (freshSeason in scraped.seasons) {
+          val existing = byNum[freshSeason.seasonNumber]
+          val freshIsOverview = freshSeason.url.contains("/series/", ignoreCase = true) ||
+            freshSeason.url.contains("/season/", ignoreCase = true) ||
+            freshSeason.url.contains("/serie/", ignoreCase = true)
+          val existingIsOverview = existing?.url?.let {
+            it.contains("/series/", ignoreCase = true) ||
+              it.contains("/season/", ignoreCase = true) ||
+              it.contains("/serie/", ignoreCase = true)
+          } ?: false
+          if (existing == null || freshIsOverview || !existingIsOverview) {
+            byNum[freshSeason.seasonNumber] = freshSeason
+          }
+        }
+        byNum.values.sortedBy { it.seasonNumber }
+      } else {
+        scraped.seasons
+      }
+
+      seriesStructure = if (mergedSeasons.size > scraped.seasons.size) {
+        scraped.copy(seasons = mergedSeasons)
+      } else {
+        scraped
+      }
       isScrapingSeries = false
 
       AppDiagnosticsLogger.recordBreadcrumb(
         context,
         "SCRAPE_DONE",
-        "servers=${scraped.watchServers.size}, direct=${scraped.directStreamUrl.isNotBlank()}"
+        "seasons=${seriesStructure.seasons.size}, activeS=${seriesStructure.selectedSeasonNumber}, eps=${seriesStructure.episodes.size}, servers=${scraped.watchServers.size}, direct=${scraped.directStreamUrl.isNotBlank()}"
       )
 
       if (scraped.detectedQualities.isNotEmpty()) {

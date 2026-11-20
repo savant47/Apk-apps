@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -242,73 +243,80 @@ fun HomeDashboardScreen(
     }
   }
 
-  Row(
-    modifier = modifier
-      .fillMaxSize()
-      .background(CinemaDarkBackground)
-  ) {
-    // 1. Clipbox Floating Pill Navigation Rail on the side (Dedicated FocusGroup for seamless D-Pad transitions)
-    ClipboxNavigationRail(
-      activeSection = activeSection,
-      isCompactMobile = displayMode == AppDisplayMode.MOBILE,
-      railFocusRequester = railFocusRequester,
-      onSelectSection = { section ->
-        activeSection = section
-        if (section == ClipboxRailSection.SEARCH) {
-          scope.launch {
-            listState.animateScrollToItem(0)
-            try {
-              searchInputFocusRequester.requestFocus()
-            } catch (_: Exception) {}
-          }
-        } else if (section == ClipboxRailSection.HOME) {
-          hasSearched = false
-          scope.launch { listState.animateScrollToItem(0) }
-        }
-      },
-      onOpenBookmarks = onOpenBookmarks,
-      onOpenHistory = onOpenHistory,
-      onOpenSources = { showSourcesDialog = true },
-      onOpenUpdate = onOpenUpdate
-    )
-
-    // 2. Main Clipbox Content Area (Dedicated FocusGroup for instant D-Pad traversal without losing focus)
-    val mainDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
-    LazyColumn(
-      state = listState,
-      modifier = Modifier
-        .weight(1f)
-        .fillMaxHeight()
-        .focusRequester(contentFocusRequester)
-        .focusGroup()
-        .mouseVerticalDragScroll(
-          listState = listState,
-          scope = scope,
-          dragSlopPx = mainDragSlopPx
-        )
-        .padding(horizontal = if (displayMode == AppDisplayMode.MOBILE) 10.dp else 16.dp, vertical = 10.dp),
-      verticalArrangement = Arrangement.spacedBy(18.dp)
+  CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    BoxWithConstraints(
+      modifier = modifier
+        .fillMaxSize()
+        .background(CinemaDarkBackground)
     ) {
-      // Top Search Bar (Opens right at the top for searching any Arabic, English, Korean, Turkish, Asian movie or series)
-      item {
-        ClipboxTopSearchBar(
-          searchQuery = searchQuery,
-          onQueryChange = { searchQuery = it },
-          onExecuteSearch = { executeMultiSourceSearch(searchQuery) },
-          onClearSearch = {
-            searchQuery = ""
-            hasSearched = false
-            portalResultsMap = emptyMap()
-          },
-          quickSuggestions = quickSuggestions,
-          onSuggestionClick = { suggestion ->
-            searchQuery = suggestion
-            executeMultiSourceSearch(suggestion)
-          },
-          onOpenSources = { showSourcesDialog = true },
-          focusRequester = searchInputFocusRequester
-        )
-      }
+      val isCompactMobile = displayMode == AppDisplayMode.MOBILE || maxWidth < 720.dp
+
+      Row(modifier = Modifier.fillMaxSize()) {
+        // 1. Clipbox Floating Pill Navigation Rail (Hidden completely on mobile/portrait phones to reclaim full width)
+        if (!isCompactMobile) {
+          ClipboxNavigationRail(
+            activeSection = activeSection,
+            isCompactMobile = false,
+            railFocusRequester = railFocusRequester,
+            onSelectSection = { section ->
+              activeSection = section
+              if (section == ClipboxRailSection.SEARCH) {
+                scope.launch {
+                  listState.animateScrollToItem(0)
+                  try {
+                    searchInputFocusRequester.requestFocus()
+                  } catch (_: Exception) {}
+                }
+              } else if (section == ClipboxRailSection.HOME) {
+                hasSearched = false
+                scope.launch { listState.animateScrollToItem(0) }
+              }
+            },
+            onOpenBookmarks = onOpenBookmarks,
+            onOpenHistory = onOpenHistory,
+            onOpenSources = { showSourcesDialog = true },
+            onOpenUpdate = onOpenUpdate
+          )
+        }
+
+        // 2. Main Clipbox Content Area (Dedicated FocusGroup for instant D-Pad traversal without losing focus)
+        val mainDragSlopPx = with(LocalDensity.current) { 8.dp.toPx() }
+        LazyColumn(
+          state = listState,
+          modifier = Modifier
+            .weight(1f)
+            .fillMaxHeight()
+            .focusRequester(contentFocusRequester)
+            .focusGroup()
+            .mouseVerticalDragScroll(
+              listState = listState,
+              scope = scope,
+              dragSlopPx = mainDragSlopPx
+            )
+            .padding(horizontal = if (isCompactMobile) 12.dp else 16.dp, vertical = 10.dp),
+          verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+          // Top Search Bar (Opens right at the top for searching any Arabic, English, Korean, Turkish, Asian movie or series)
+          item {
+            ClipboxTopSearchBar(
+              searchQuery = searchQuery,
+              onQueryChange = { searchQuery = it },
+              onExecuteSearch = { executeMultiSourceSearch(searchQuery) },
+              onClearSearch = {
+                searchQuery = ""
+                hasSearched = false
+                portalResultsMap = emptyMap()
+              },
+              quickSuggestions = quickSuggestions,
+              onSuggestionClick = { suggestion ->
+                searchQuery = suggestion
+                executeMultiSourceSearch(suggestion)
+              },
+              onOpenSources = { showSourcesDialog = true },
+              focusRequester = searchInputFocusRequester,
+              isCompactMobile = isCompactMobile
+            )
+          }
 
       // Multi-Source Search Results Section (Divided by Website: TopCinema, LaRoza, WatchSeries, EgyDead, Flixer)
       if (isSearching) {
@@ -571,6 +579,7 @@ fun HomeDashboardScreen(
             subtitle = "الأعمال الأكثر رواجاً وبحثاً اليوم — اضغط للبحث في جميع المصادر",
             items = trendingItems,
             showRankBadge = false,
+            showMouseScrollArrows = !isCompactMobile,
             onItemClick = { media ->
               executeMultiSourceSearch(media.title)
             }
@@ -587,6 +596,7 @@ fun HomeDashboardScreen(
             subtitle = "ترتيب الأفلام الأكثر شعبية ومشاهدة اليوم",
             items = top10Movies,
             showRankBadge = true,
+            showMouseScrollArrows = !isCompactMobile,
             onItemClick = { media ->
               executeMultiSourceSearch(media.title)
             }
@@ -603,10 +613,13 @@ fun HomeDashboardScreen(
             subtitle = "ترتيب المسلسلات الأكثر شعبية ومشاهدة اليوم",
             items = top10TvSeries,
             showRankBadge = true,
+            showMouseScrollArrows = !isCompactMobile,
             onItemClick = { media ->
               executeMultiSourceSearch(media.title)
             }
           )
+        }
+      }
         }
       }
     }
@@ -807,7 +820,8 @@ fun ClipboxTopSearchBar(
   quickSuggestions: List<String>,
   onSuggestionClick: (String) -> Unit,
   onOpenSources: () -> Unit,
-  focusRequester: FocusRequester
+  focusRequester: FocusRequester,
+  isCompactMobile: Boolean = false
 ) {
   Card(
     shape = RoundedCornerShape(18.dp),
@@ -833,16 +847,16 @@ fun ClipboxTopSearchBar(
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(
-            text = "Asser TV • محرك بحث الأفلام والمسلسلات الشامل",
+            text = if (isCompactMobile) "محرك بحث Asser TV" else "Asser TV • محرك بحث الأفلام والمسلسلات الشامل",
             color = Color.White,
-            fontSize = 13.sp,
+            fontSize = if (isCompactMobile) 13.5.sp else 13.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
         }
 
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(8.dp))
 
         val sourcesInteraction = remember { MutableInteractionSource() }
         val isSourcesFocused by sourcesInteraction.collectIsFocusedAsState()
@@ -892,7 +906,11 @@ fun ClipboxTopSearchBar(
           onValueChange = onQueryChange,
           placeholder = {
             Text(
-              text = "ابحث عن أي فيلم أو مسلسل (عربي، أجنبي، كوري، تركي، أنمي)...",
+              text = if (isCompactMobile) {
+                "ابحث عن فيلم أو مسلسل..."
+              } else {
+                "ابحث عن أي فيلم أو مسلسل (عربي، أجنبي، كوري، تركي، أنمي)..."
+              },
               color = Color.Gray,
               fontSize = 12.sp,
               maxLines = 1,
@@ -938,7 +956,7 @@ fun ClipboxTopSearchBar(
           ),
           border = if (isSearchBtnFocused) BorderStroke(2.5.dp, ClipboxWhite) else null,
           shape = RoundedCornerShape(50),
-          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+          contentPadding = PaddingValues(horizontal = if (isCompactMobile) 14.dp else 16.dp, vertical = 12.dp),
           modifier = Modifier
             .heightIn(min = 48.dp)
             .testTag("btn_dual_search_action")
@@ -950,7 +968,7 @@ fun ClipboxTopSearchBar(
           )
           Spacer(modifier = Modifier.width(4.dp))
           Text(
-            text = "بحث شامل",
+            text = if (isCompactMobile) "بحث" else "بحث شامل",
             fontWeight = FontWeight.ExtraBold,
             fontSize = 12.sp,
             maxLines = 1,
@@ -1224,6 +1242,7 @@ fun ClipboxCatalogRow(
   items: List<CatalogMediaItem>,
   showRankBadge: Boolean,
   badgeLabel: String = "",
+  showMouseScrollArrows: Boolean = true,
   onItemClick: (CatalogMediaItem) -> Unit
 ) {
   val rowListState = rememberLazyListState()
@@ -1240,7 +1259,7 @@ fun ClipboxCatalogRow(
     ) {
       Column(
         modifier = Modifier.weight(1f),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
       ) {
         Row(
           verticalAlignment = Alignment.CenterVertically,
@@ -1277,13 +1296,14 @@ fun ClipboxCatalogRow(
         Text(
           text = subtitle,
           color = Color.Gray,
-          fontSize = 11.sp,
-          maxLines = 1,
+          fontSize = 11.5.sp,
+          lineHeight = 16.sp,
+          maxLines = 2,
           overflow = TextOverflow.Ellipsis
         )
       }
 
-      if (items.size > 2) {
+      if (showMouseScrollArrows && items.size > 2) {
         Spacer(modifier = Modifier.width(8.dp))
         CarouselMouseScrollArrows(
           listState = rowListState,
@@ -2438,7 +2458,7 @@ fun ContinueWatchingSection(
       verticalAlignment = Alignment.CenterVertically
     ) {
       Text(
-        text = "Continue Watching • متابعة المشاهدة",
+        text = "متابعة المشاهدة",
         color = Color.White,
         fontSize = 16.sp,
         fontWeight = FontWeight.ExtraBold,
