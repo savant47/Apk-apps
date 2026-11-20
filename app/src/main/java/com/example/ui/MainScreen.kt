@@ -111,6 +111,7 @@ private data class EpisodeScrapeRequest(
   val portal: StreamingPortal,
   val titleHint: String,
   val selectedSeasonNum: Int,
+  val selectedEpisodeNum: Int = 0,
   val autoLoadBestEmbed: Boolean,
   val nonce: Long
 )
@@ -785,10 +786,11 @@ fun MainScreen(
     portal: StreamingPortal,
     titleHint: String,
     selectedSeasonNum: Int = 1,
+    selectedEpisodeNum: Int = 0,
     autoLoadBestEmbed: Boolean = false,
     force: Boolean = false
   ) {
-    val normalizedKey = "${portal.id}|${targetUrl.trim().trimEnd('/').lowercase()}|s$selectedSeasonNum"
+    val normalizedKey = "${portal.id}|${targetUrl.trim().trimEnd('/').lowercase()}|s${selectedSeasonNum}e${selectedEpisodeNum}"
     if (!force && (inFlightScrapeKeyRef.get() == normalizedKey || lastResolvedScrapeKeyRef.get() == normalizedKey)) {
       AppDiagnosticsLogger.log("ScraperDedup", "Skipped duplicate scrape for $normalizedKey")
       return
@@ -805,12 +807,17 @@ fun MainScreen(
     userManuallyDismissedNativePlayer = false
     failedNativeStreamUrls.clear()
 
+    val pureShowHint = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+      titleHint.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery.ifBlank { pageTitle } } }
+    ).ifBlank { titleHint.ifBlank { lastSearchQuery.ifBlank { pageTitle } } }
+
     activeEpisodeScrapeRequest = EpisodeScrapeRequest(
       requestKey = normalizedKey,
       targetUrl = targetUrl,
       portal = portal,
-      titleHint = titleHint.ifBlank { lastSearchQuery.ifBlank { pageTitle } },
+      titleHint = pureShowHint,
       selectedSeasonNum = selectedSeasonNum,
+      selectedEpisodeNum = selectedEpisodeNum,
       autoLoadBestEmbed = autoLoadBestEmbed,
       nonce = scrapeForceNonce
     )
@@ -832,7 +839,8 @@ fun MainScreen(
         pageUrl = req.targetUrl,
         portal = req.portal,
         titleHint = req.titleHint,
-        selectedSeasonNumber = req.selectedSeasonNum
+        selectedSeasonNumber = req.selectedSeasonNum,
+        selectedEpisodeNumber = req.selectedEpisodeNum
       )
       lastResolvedScrapeKeyRef.set(req.requestKey)
       seriesStructure = scraped
@@ -905,7 +913,8 @@ fun MainScreen(
     title: String? = null,
     isGeneralBrowser: Boolean = false,
     autoScrapeAndLoadEmbed: Boolean = !isGeneralBrowser,
-    selectedSeasonNum: Int = 1
+    selectedSeasonNum: Int = 1,
+    selectedEpisodeNum: Int = 0
   ) {
     val targetPortal = portal ?: activePortal
     val cleanUrl = if (isGeneralBrowser) {
@@ -938,6 +947,17 @@ fun MainScreen(
     detectedVideoHeaders = emptyMap()
     detectedVideoQualities = emptyList()
     playNativeVideoUrl = null
+    // Clear previous episode's subtitle file so it never stays stuck on the new episode
+    if (!isGeneralBrowser) {
+      activeSubtitleItem = null
+      if (selectedEpisodeNum > 0) {
+        seriesStructure = seriesStructure.copy(
+          selectedSeasonNumber = selectedSeasonNum.coerceAtLeast(1),
+          currentSeason = selectedSeasonNum.coerceAtLeast(1),
+          currentEpisodeNumber = selectedEpisodeNum
+        )
+      }
+    }
     if (title != null) pageTitle = title
     if (portal != null) {
       activePortal = portal
@@ -976,11 +996,15 @@ fun MainScreen(
       hardDestroyWebView("Switching to new episode/portal")
       inFlightScrapeKeyRef.set(null)
       lastResolvedScrapeKeyRef.set(null)
+      val pureTitleHint = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+        title ?: seriesStructure.seriesTitle.ifBlank { lastSearchQuery }
+      ).ifBlank { title ?: lastSearchQuery }
       refreshSeriesSeasonsAndEpisodes(
         targetUrl = cleanUrl,
         portal = targetPortal,
-        titleHint = title ?: lastSearchQuery,
+        titleHint = pureTitleHint,
         selectedSeasonNum = selectedSeasonNum,
+        selectedEpisodeNum = selectedEpisodeNum,
         autoLoadBestEmbed = autoScrapeAndLoadEmbed,
         force = true
       )
@@ -995,21 +1019,44 @@ fun MainScreen(
     }
   }
 
+  fun normalizePortalUrlForCompare(raw: String): String {
+    return decodeUrlSafely(raw)
+      .trim()
+      .lowercase()
+      .removeSuffix("/")
+      .removeSuffix("/watch")
+      .removeSuffix("/")
+  }
+
   fun extractEpisodeNumberFromText(raw: String): Int? {
     if (raw.isBlank()) return null
     val decoded = decodeUrlSafely(raw)
-    val tvPathMatch = Regex("/(?:tv|series)/\\d+/(\\d+)/(\\d+)", RegexOption.IGNORE_CASE)
+    val tvPathMatch = Regex("/(?:tv|series)/(?:[^/]+/)?\\d+/(\\d+)/(\\d+)", RegexOption.IGNORE_CASE)
       .find(decoded)
     if (tvPathMatch != null) {
       return tvPathMatch.groupValues[2].toIntOrNull()
     }
-    val arabicMatch = Regex("(?:الحلق[ةه]|حلق[ةه])[\\s\\-_]*(\\d{1,4})")
-      .find(decoded)
+    val seMatch = Regex("\\bS0*\\d{1,2}\\s*E0*(\\d{1,3})\\b", RegexOption.IGNORE_CASE)
+      .findAll(decoded)
+      .lastOrNull()
+    if (seMatch != null) {
+      return seMatch.groupValues[1].toIntOrNull()
+    }
+    val xMatch = Regex("\\b0*\\d{1,2}x0*(\\d{1,3})\\b", RegexOption.IGNORE_CASE)
+      .findAll(decoded)
+      .lastOrNull()
+    if (xMatch != null) {
+      return xMatch.groupValues[1].toIntOrNull()
+    }
+    val arabicMatch = Regex("(?:الحلق[ةه]|حلق[ةه])[\\s\\-:_]*(\\d{1,4})")
+      .findAll(decoded)
+      .lastOrNull()
     if (arabicMatch != null) {
       return arabicMatch.groupValues[1].toIntOrNull()
     }
-    val englishMatch = Regex("(?:^|[\\s\\-_/])(?:episode|ep|halka)[\\s\\-_]*(\\d{1,4})(?:[\\s\\-_/]|$)", RegexOption.IGNORE_CASE)
-      .find(decoded)
+    val englishMatch = Regex("(?:^|[\\s\\-_/])(?:episode|ep|halka)[\\s\\-:_]*(\\d{1,4})(?:[\\s\\-_/]|$)", RegexOption.IGNORE_CASE)
+      .findAll(decoded)
+      .lastOrNull()
     if (englishMatch != null) {
       return englishMatch.groupValues[1].toIntOrNull()
     }
@@ -1019,30 +1066,20 @@ fun MainScreen(
   fun resolveNextEpisode(): ScrapedEpisodeItem? {
     if (isGeneralBrowserSession) return null
     val currentWatchUrl = activeWatchPageUrl.ifBlank { currentUrl }
-    val normalizedCurrent = decodeUrlSafely(currentWatchUrl).trimEnd('/').lowercase()
-    val currentSeason = seriesStructure.selectedSeasonNumber.coerceAtLeast(1)
-    val currentEpNum = extractEpisodeNumberFromText(currentWatchUrl)
+    val normalizedCurrent = normalizePortalUrlForCompare(currentWatchUrl)
+    val currentSeason = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+    val currentEpNum = extractEpisodeNumberFromText(activeEmbedRefererUrl)
+      ?: extractEpisodeNumberFromText(currentWatchUrl)
+      ?: standardizedMediaInfo.episodeNumber
+      ?: seriesStructure.currentEpisodeNumber.takeIf { it > 0 && seriesStructure.isSeries }
       ?: extractEpisodeNumberFromText(pageTitle)
-      ?: if (seriesStructure.isSeries && seriesStructure.currentEpisodeNumber > 0) {
-        seriesStructure.currentEpisodeNumber
-      } else {
-        null
-      }
 
-    // 1. Direct nextEpisode detected by scraper
-    seriesStructure.nextEpisode?.let { directNext ->
-      val normalizedNext = decodeUrlSafely(directNext.url).trimEnd('/').lowercase()
-      if (directNext.url.isNotBlank() && normalizedNext != normalizedCurrent) {
-        return directNext
-      }
-    }
-
-    // 2. Next episode in scraped episode list for current season
+    // 1. Next episode in scraped episode list for current season (highest accuracy)
     val sortedEpisodes = seriesStructure.episodes.sortedBy { it.episodeNumber }
     if (sortedEpisodes.isNotEmpty()) {
       val currentIndex = sortedEpisodes.indexOfFirst { ep ->
-        val normEp = decodeUrlSafely(ep.url).trimEnd('/').lowercase()
-        normEp == normalizedCurrent ||
+        val normEp = normalizePortalUrlForCompare(ep.url)
+        (normEp.isNotBlank() && normEp == normalizedCurrent) ||
           (currentEpNum != null && ep.episodeNumber == currentEpNum)
       }
       if (currentIndex in 0 until sortedEpisodes.lastIndex) {
@@ -1051,6 +1088,17 @@ fun MainScreen(
       if (currentEpNum != null) {
         val nextByNumber = sortedEpisodes.firstOrNull { it.episodeNumber > currentEpNum }
         if (nextByNumber != null) return nextByNumber
+      }
+    }
+
+    // 2. Direct nextEpisode detected by scraper (must differ from current episode)
+    seriesStructure.nextEpisode?.let { directNext ->
+      val normalizedNext = normalizePortalUrlForCompare(directNext.url)
+      if (directNext.url.isNotBlank() &&
+          normalizedNext != normalizedCurrent &&
+          (currentEpNum == null || directNext.episodeNumber > currentEpNum)
+      ) {
+        return directNext
       }
     }
 
@@ -1077,7 +1125,7 @@ fun MainScreen(
     if (sortedEpisodes.isEmpty() && !isMarkedFinalEpisode && currentEpNum != null && currentEpNum > 0) {
       val nextEpNum = currentEpNum + 1
       val decodedUrl = decodeUrlSafely(currentWatchUrl)
-      val tvPathRegex = Regex("(/(?:tv|series)/\\d+/\\d+/)(\\d+)", RegexOption.IGNORE_CASE)
+      val tvPathRegex = Regex("(/(?:tv|series)/(?:[^/]+/)?\\d+/\\d+/)(\\d+)", RegexOption.IGNORE_CASE)
       val tvMatch = tvPathRegex.find(decodedUrl)
       if (tvMatch != null) {
         val synthesizedUrl = decodedUrl.replaceRange(tvMatch.range, "${tvMatch.groupValues[1]}$nextEpNum")
@@ -1119,27 +1167,36 @@ fun MainScreen(
   val nextEpisodeItem = remember(
     seriesStructure,
     activeWatchPageUrl,
+    activeEmbedRefererUrl,
     currentUrl,
     pageTitle,
+    standardizedMediaInfo.seasonNumber,
+    standardizedMediaInfo.episodeNumber,
     isGeneralBrowserSession
   ) {
     resolveNextEpisode()
   }
 
+  fun buildCleanEpisodeNavTitle(seasonNum: Int, episodeNum: Int, fallbackEpTitle: String): String {
+    val pureShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+      standardizedMediaInfo.cleanTitle.ifBlank {
+        seriesStructure.seriesTitle.ifBlank { lastSearchQuery.ifBlank { pageTitle } }
+      }
+    )
+    val s = seasonNum.coerceAtLeast(1).toString().padStart(2, '0')
+    val e = episodeNum.coerceAtLeast(1).toString().padStart(2, '0')
+    return if (pureShow.isNotBlank()) "$pureShow S${s}E${e}" else fallbackEpTitle
+  }
+
   fun playNextEpisodeAutomatically(nextEp: ScrapedEpisodeItem) {
-    val showName = seriesStructure.seriesTitle.ifBlank { lastSearchQuery }
-    val nextTitle = if (showName.isNotBlank() && !nextEp.title.contains(showName, ignoreCase = true)) {
-      "$showName - ${nextEp.title}"
-    } else {
-      nextEp.title
-    }
+    val nextTitle = buildCleanEpisodeNavTitle(nextEp.seasonNumber, nextEp.episodeNumber, nextEp.title)
     AppDiagnosticsLogger.log(
       "AutoNext",
-      "تشغيل الحلقة التالية تلقائياً: $nextTitle | URL=${nextEp.url} | Season=${nextEp.seasonNumber}"
+      "تشغيل الحلقة التالية تلقائياً: $nextTitle | URL=${nextEp.url} | S${nextEp.seasonNumber}E${nextEp.episodeNumber}"
     )
     Toast.makeText(
       context,
-      "جاري تشغيل الحلقة التالية تلقائياً: ${nextEp.title}",
+      "جاري تشغيل الحلقة التالية تلقائياً: $nextTitle",
       Toast.LENGTH_SHORT
     ).show()
     navigateTo(
@@ -1148,7 +1205,8 @@ fun MainScreen(
       title = nextTitle,
       isGeneralBrowser = false,
       autoScrapeAndLoadEmbed = true,
-      selectedSeasonNum = nextEp.seasonNumber
+      selectedSeasonNum = nextEp.seasonNumber,
+      selectedEpisodeNum = nextEp.episodeNumber
     )
   }
 
@@ -1806,12 +1864,7 @@ fun MainScreen(
             repository.setSubtitleStyle(newStyle)
           },
           nextEpisodeTitle = nextEpisodeItem?.let { ep ->
-            val show = seriesStructure.seriesTitle.ifBlank { "" }
-            if (show.isNotBlank() && !ep.title.contains(show, ignoreCase = true)) {
-              "$show • ${ep.title}"
-            } else {
-              ep.title
-            }
+            buildCleanEpisodeNavTitle(ep.seasonNumber, ep.episodeNumber, ep.title)
           },
           isAutoPlayNextEnabled = autoPlayNextEpisode,
           onToggleAutoPlayNext = { enabled ->
@@ -2021,14 +2074,14 @@ fun MainScreen(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // 2. Full Readable Movie/Series Title & Quality Subtitle (Center)
+                // 2. Clean Portal & Show Header (Exact episode tag SxxExx is shown prominently INSIDE the player)
                 Column(
                   modifier = Modifier.weight(1f),
                   horizontalAlignment = Alignment.Start
                 ) {
                   Text(
-                    text = standardizedMediaInfo.displayTitle.ifBlank {
-                      pageTitle.ifBlank { lastSearchQuery.ifBlank { "مشغل Asser TV المباشر" } }
+                    text = standardizedMediaInfo.cleanTitle.ifBlank {
+                      activePortal.displayNameArabic
                     },
                     color = Color.White,
                     fontSize = 12.5.sp,
@@ -2323,23 +2376,28 @@ fun MainScreen(
                 navigateTo(url, portal, portal.displayNameArabic, isGeneralBrowser = false, autoScrapeAndLoadEmbed = false)
               },
               onSelectSeason = { season ->
+                val pureShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+                  standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                )
                 navigateTo(
                   url = season.url,
                   portal = activePortal,
-                  title = "${seriesStructure.seriesTitle} - ${season.title}",
+                  title = if (pureShow.isNotBlank()) "$pureShow - ${season.title}" else season.title,
                   isGeneralBrowser = false,
                   autoScrapeAndLoadEmbed = true,
-                  selectedSeasonNum = season.seasonNumber
+                  selectedSeasonNum = season.seasonNumber,
+                  selectedEpisodeNum = 1
                 )
               },
               onSelectEpisode = { episode ->
                 navigateTo(
                   url = episode.url,
                   portal = activePortal,
-                  title = "${seriesStructure.seriesTitle} - ${episode.title}",
+                  title = buildCleanEpisodeNavTitle(episode.seasonNumber, episode.episodeNumber, episode.title),
                   isGeneralBrowser = false,
                   autoScrapeAndLoadEmbed = true,
-                  selectedSeasonNum = episode.seasonNumber
+                  selectedSeasonNum = episode.seasonNumber,
+                  selectedEpisodeNum = episode.episodeNumber
                 )
               },
               onRescrapePage = {
@@ -2441,23 +2499,28 @@ fun MainScreen(
                 navigateTo(url, portal, portal.displayNameArabic, isGeneralBrowser = false, autoScrapeAndLoadEmbed = false)
               },
               onSelectSeason = { season ->
+                val pureShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+                  standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                )
                 navigateTo(
                   url = season.url,
                   portal = activePortal,
-                  title = "${seriesStructure.seriesTitle} - ${season.title}",
+                  title = if (pureShow.isNotBlank()) "$pureShow - ${season.title}" else season.title,
                   isGeneralBrowser = false,
                   autoScrapeAndLoadEmbed = true,
-                  selectedSeasonNum = season.seasonNumber
+                  selectedSeasonNum = season.seasonNumber,
+                  selectedEpisodeNum = 1
                 )
               },
               onSelectEpisode = { episode ->
                 navigateTo(
                   url = episode.url,
                   portal = activePortal,
-                  title = "${seriesStructure.seriesTitle} - ${episode.title}",
+                  title = buildCleanEpisodeNavTitle(episode.seasonNumber, episode.episodeNumber, episode.title),
                   isGeneralBrowser = false,
                   autoScrapeAndLoadEmbed = true,
-                  selectedSeasonNum = episode.seasonNumber
+                  selectedSeasonNum = episode.seasonNumber,
+                  selectedEpisodeNum = episode.episodeNumber
                 )
               },
               onRescrapePage = {

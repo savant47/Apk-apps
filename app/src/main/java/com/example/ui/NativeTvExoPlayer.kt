@@ -26,6 +26,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -235,11 +236,11 @@ fun NativeTvExoPlayer(
   var lastProgressSaveWallMs by remember(contentKey) { mutableLongStateOf(0L) }
   val resumeButtonFocusRequester = remember { FocusRequester() }
 
-  // Auto-Play Next Episode Countdown State
-  var showNextEpisodeCountdown by remember(videoUrl) { mutableStateOf(false) }
-  var nextEpisodeCountdownSec by remember(videoUrl) { mutableIntStateOf(5) }
-  var userCancelledNextEpisode by remember(videoUrl) { mutableStateOf(false) }
-  var hasTriggeredAutoNext by remember(videoUrl) { mutableStateOf(false) }
+  // Auto-Play Next Episode Countdown State (reset cleanly on every new episode/stream)
+  var showNextEpisodeCountdown by remember(videoUrl, contentKey) { mutableStateOf(false) }
+  var nextEpisodeCountdownSec by remember(videoUrl, contentKey) { mutableIntStateOf(5) }
+  var userCancelledNextEpisode by remember(videoUrl, contentKey) { mutableStateOf(false) }
+  var hasTriggeredAutoNext by remember(videoUrl, contentKey) { mutableStateOf(false) }
 
   // Dedicated OkHttpClient tuned for Xiaomi TV Stick & TopCinema CDNs:
   // - retryOnConnectionFailure(true)
@@ -567,18 +568,19 @@ fun NativeTvExoPlayer(
           latestOnSavePlaybackProgress(pos, dur)
         }
 
-        if (latestNextEpisodeTitle != null &&
+        if (!latestNextEpisodeTitle.isNullOrBlank() &&
             latestIsAutoPlayNextEnabled &&
             !userCancelledNextEpisode &&
             !showNextEpisodeCountdown &&
             !hasTriggeredAutoNext &&
-            dur > 60_000L &&
-            pos > 30_000L
+            dur > 15_000L &&
+            pos > 5_000L
         ) {
           val remainingMs = dur - pos
-          if (remainingMs in 1L..10_000L) {
+          if (remainingMs in 0L..12_000L) {
             nextEpisodeCountdownSec = 5
             showNextEpisodeCountdown = true
+            AppDiagnosticsLogger.log("AutoNext", "بدء العد التنازلي للحلقة التالية (${remainingMs}ms متبقية): $latestNextEpisodeTitle")
           }
         }
       } catch (_: Exception) {
@@ -587,10 +589,10 @@ fun NativeTvExoPlayer(
     }
   }
 
-  // Run 5-second Auto-Play Next Episode countdown when banner is visible
-  LaunchedEffect(showNextEpisodeCountdown, videoUrl) {
+  // Run Auto-Play Next Episode countdown when banner is visible
+  LaunchedEffect(showNextEpisodeCountdown, videoUrl, contentKey) {
     if (showNextEpisodeCountdown && !hasTriggeredAutoNext && !userCancelledNextEpisode) {
-      var remaining = nextEpisodeCountdownSec
+      var remaining = nextEpisodeCountdownSec.coerceIn(1, 5)
       while (remaining > 0 && showNextEpisodeCountdown && !userCancelledNextEpisode) {
         delay(1000L)
         remaining -= 1
@@ -599,7 +601,7 @@ fun NativeTvExoPlayer(
       if (remaining <= 0 && showNextEpisodeCountdown && !userCancelledNextEpisode && !hasTriggeredAutoNext) {
         hasTriggeredAutoNext = true
         showNextEpisodeCountdown = false
-        AppDiagnosticsLogger.log("AutoNext", "تشغيل الحلقة التالية تلقائياً: ${latestNextEpisodeTitle ?: ""}")
+        AppDiagnosticsLogger.log("AutoNext", "تشغيل الحلقة التالية تلقائياً الآن: ${latestNextEpisodeTitle ?: ""}")
         latestOnPlayNextEpisode()
       }
     }
@@ -826,9 +828,21 @@ fun NativeTvExoPlayer(
             val dur = player.duration.coerceAtLeast(1L)
             latestOnSavePlaybackProgress(dur, dur)
           } catch (_: Throwable) {}
-          if (latestNextEpisodeTitle != null && latestIsAutoPlayNextEnabled && !userCancelledNextEpisode && !hasTriggeredAutoNext) {
-            nextEpisodeCountdownSec = 4
-            showNextEpisodeCountdown = true
+          if (!latestNextEpisodeTitle.isNullOrBlank() &&
+              latestIsAutoPlayNextEnabled &&
+              !userCancelledNextEpisode &&
+              !hasTriggeredAutoNext
+          ) {
+            if (!showNextEpisodeCountdown) {
+              nextEpisodeCountdownSec = 3
+              showNextEpisodeCountdown = true
+              AppDiagnosticsLogger.log("AutoNext", "انتهت الحلقة (STATE_ENDED) - الانتقال التلقائي إلى: $latestNextEpisodeTitle")
+            }
+          } else {
+            AppDiagnosticsLogger.log(
+              "AutoNext",
+              "STATE_ENDED without auto-next (next=${latestNextEpisodeTitle ?: "none"}, enabled=$latestIsAutoPlayNextEnabled, cancelled=$userCancelledNextEpisode)"
+            )
           }
         }
       }
@@ -1124,6 +1138,13 @@ fun NativeTvExoPlayer(
         )
         onFallbackToWebPlayer()
       }
+    } else {
+      // Stop and clear previous episode media when transitioning between episodes so STATE_ENDED never leaks
+      try {
+        player.playWhenReady = false
+        player.stop()
+        player.clearMediaItems()
+      } catch (_: Throwable) {}
     }
   }
 
@@ -1556,145 +1577,268 @@ fun NativeTvExoPlayer(
       }
     }
 
-    // Clean, Well-Proportioned Top Overlay inside Player (shows on pause, D-Pad click, or tap)
+    // Clean, Uncrushable Inside-Player Top HUD (shows on pause, D-Pad click, or tap)
     AnimatedVisibility(
       visible = (isControllerVisible || isPlayerPaused || videoUrl.isBlank()) && !showGearSettingsMenu,
       enter = fadeIn(),
       exit = fadeOut(),
-      modifier = Modifier.align(Alignment.TopCenter)
+      modifier = Modifier
+        .align(Alignment.TopCenter)
+        .fillMaxWidth()
     ) {
-      // Physical LTR layout so the standardized episode title (`Silo S01E01`) is ALWAYS in the top-left corner
+      // Physical LTR layout so the standardized episode title (`Silo S01E01`) is ALWAYS inside the player's top-left corner
       CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Row(
+        BoxWithConstraints(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .background(Color(0xD9070A0E), RoundedCornerShape(10.dp))
-            .border(1.dp, CinemaBorder.copy(alpha = 0.75f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          // Top-Left Corner: Prominent Standardized Episode Title (e.g., "Silo S01E01") + live quality tag
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-              .weight(1f)
-              .testTag("exo_top_left_episode_title_container")
-          ) {
-            Box(
-              modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(if (isPlayerPaused) CinemaAccent else CinemaSuccess)
+            .padding(
+              horizontal = if (isFullscreen) 16.dp else 10.dp,
+              vertical = if (isFullscreen) 14.dp else 8.dp
             )
-            Spacer(modifier = Modifier.width(7.dp))
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = title.ifBlank { "Asser TV" },
-                color = Color.White,
-                fontSize = 13.5.sp,
-                fontWeight = FontWeight.ExtraBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.testTag("exo_top_left_episode_title")
-              )
-              Text(
-                text = activeQualityShortBadge,
-                color = CinemaAccent,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-              )
-            }
-          }
+        ) {
+          val isWideHud = maxWidth >= 560.dp
 
-          Spacer(modifier = Modifier.width(8.dp))
-
-          // Top-Right Corner: Compact action buttons (Gear Quality, Next Episode, Subtitles, Diagnostics, WebView, Fullscreen)
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.onFocusChanged { focusState ->
-              isOverlayControlFocused = focusState.hasFocus
-            }
-          ) {
-            // 1. Gear Quality & Settings Button
-            val gearInteraction = remember { MutableInteractionSource() }
-            val isGearFocused by gearInteraction.collectIsFocusedAsState()
-            Surface(
-              onClick = { showGearSettingsMenu = true },
-              interactionSource = gearInteraction,
-              color = if (isGearFocused) CinemaFocusGlow else CinemaSurface,
-              shape = RoundedCornerShape(8.dp),
-              border = BorderStroke(
-                width = if (isGearFocused) 2.dp else 1.dp,
-                color = if (isGearFocused) Color.White else CinemaAccent.copy(alpha = 0.8f)
-              ),
-              modifier = Modifier
-                .heightIn(min = 32.dp)
-                .focusable(interactionSource = gearInteraction)
-                .testTag("exo_quality_gear_button")
+          @Composable
+          fun EpisodeTitleInsidePlayerBadge(badgeModifier: Modifier = Modifier) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = badgeModifier
+                .background(Color(0xE0070A0E), RoundedCornerShape(10.dp))
+                .border(1.dp, CinemaAccent.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .testTag("exo_top_left_episode_title_container")
             ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Settings,
-                  contentDescription = "إعدادات الجودة والمشغل",
-                  tint = if (isGearFocused) Color.Black else CinemaAccent,
-                  modifier = Modifier.size(13.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
+              Box(
+                modifier = Modifier
+                  .size(8.dp)
+                  .clip(CircleShape)
+                  .background(if (isPlayerPaused) CinemaAccent else CinemaSuccess)
+              )
+              Spacer(modifier = Modifier.width(7.dp))
+              Column(modifier = Modifier.weight(1f, fill = false)) {
                 Text(
-                  text = activeQualityShortBadge,
-                  color = if (isGearFocused) Color.Black else Color.White,
-                  fontSize = 9.5.sp,
+                  text = title.ifBlank { "Asser TV" },
+                  color = Color.White,
+                  fontSize = if (isFullscreen) 15.sp else 13.5.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
-                  softWrap = false
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.testTag("exo_top_left_episode_title")
+                )
+                Text(
+                  text = activeQualityShortBadge,
+                  color = CinemaAccent,
+                  fontSize = 10.sp,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
                 )
               }
             }
+          }
 
-            // 1.5 Quick Next Episode Button (shown for series when a next episode is available)
-            if (!nextEpisodeTitle.isNullOrBlank()) {
-              val nextEpInteraction = remember { MutableInteractionSource() }
-              val isNextEpFocused by nextEpInteraction.collectIsFocusedAsState()
+          @Composable
+          fun PlayerHudActionControls(controlsModifier: Modifier = Modifier) {
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(5.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = controlsModifier
+                .background(Color(0xD9070A0E), RoundedCornerShape(10.dp))
+                .border(1.dp, CinemaBorder.copy(alpha = 0.75f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 6.dp, vertical = 5.dp)
+                .onFocusChanged { focusState ->
+                  isOverlayControlFocused = focusState.hasFocus
+                }
+            ) {
+              // 1. Gear Quality & Settings Button
+              val gearInteraction = remember { MutableInteractionSource() }
+              val isGearFocused by gearInteraction.collectIsFocusedAsState()
               Surface(
-                onClick = {
-                  hasTriggeredAutoNext = true
-                  showNextEpisodeCountdown = false
-                  onPlayNextEpisode()
-                },
-                interactionSource = nextEpInteraction,
-                color = if (isNextEpFocused) CinemaFocusGlow else CinemaSuccess.copy(alpha = 0.22f),
+                onClick = { showGearSettingsMenu = true },
+                interactionSource = gearInteraction,
+                color = if (isGearFocused) CinemaFocusGlow else CinemaSurface,
                 shape = RoundedCornerShape(8.dp),
                 border = BorderStroke(
-                  width = if (isNextEpFocused) 2.dp else 1.dp,
-                  color = if (isNextEpFocused) Color.White else CinemaSuccess
+                  width = if (isGearFocused) 2.dp else 1.dp,
+                  color = if (isGearFocused) Color.White else CinemaAccent.copy(alpha = 0.8f)
                 ),
                 modifier = Modifier
                   .heightIn(min = 32.dp)
-                  .focusable(interactionSource = nextEpInteraction)
-                  .testTag("exo_top_next_episode_button")
+                  .focusable(interactionSource = gearInteraction)
+                  .testTag("exo_quality_gear_button")
               ) {
                 Row(
                   modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                   verticalAlignment = Alignment.CenterVertically
                 ) {
                   Icon(
-                    imageVector = Icons.Default.SkipNext,
-                    contentDescription = "تشغيل الحلقة التالية",
-                    tint = if (isNextEpFocused) Color.Black else CinemaSuccess,
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "إعدادات الجودة والمشغل",
+                    tint = if (isGearFocused) Color.Black else CinemaAccent,
+                    modifier = Modifier.size(13.dp)
+                  )
+                  Spacer(modifier = Modifier.width(3.dp))
+                  Text(
+                    text = activeQualityShortBadge,
+                    color = if (isGearFocused) Color.Black else Color.White,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                }
+              }
+
+              // 1.5 Quick Next Episode Button (shown for series when a next episode is available)
+              if (!nextEpisodeTitle.isNullOrBlank()) {
+                val nextEpInteraction = remember { MutableInteractionSource() }
+                val isNextEpFocused by nextEpInteraction.collectIsFocusedAsState()
+                Surface(
+                  onClick = {
+                    hasTriggeredAutoNext = true
+                    showNextEpisodeCountdown = false
+                    onPlayNextEpisode()
+                  },
+                  interactionSource = nextEpInteraction,
+                  color = if (isNextEpFocused) CinemaFocusGlow else CinemaSuccess.copy(alpha = 0.22f),
+                  shape = RoundedCornerShape(8.dp),
+                  border = BorderStroke(
+                    width = if (isNextEpFocused) 2.dp else 1.dp,
+                    color = if (isNextEpFocused) Color.White else CinemaSuccess
+                  ),
+                  modifier = Modifier
+                    .heightIn(min = 32.dp)
+                    .focusable(interactionSource = nextEpInteraction)
+                    .testTag("exo_top_next_episode_button")
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.SkipNext,
+                      contentDescription = "تشغيل الحلقة التالية",
+                      tint = if (isNextEpFocused) Color.Black else CinemaSuccess,
+                      modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text(
+                      text = "التالية",
+                      color = if (isNextEpFocused) Color.Black else Color.White,
+                      fontSize = 9.5.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+              }
+
+              // 2. Subtitles CC Button
+              PlayerCompactSquareBtn(
+                icon = Icons.Default.Subtitles,
+                tint = if (activeSubtitle != null) CinemaSuccess else CinemaAccent,
+                contentDescription = "الترجمة",
+                onClick = onOpenSubtitles,
+                testTag = "exo_subtitles_button"
+              )
+
+              // 3. Real Aspect Ratio Toggle Pill (Fill / Stretch / Fit with live active mode badge)
+              val aspectInteraction = remember { MutableInteractionSource() }
+              val isAspectFocused by aspectInteraction.collectIsFocusedAsState()
+              val isEdgeFillActive = activeResizeMode != TvPreferencesRepository.RESIZE_MODE_FIT
+              Surface(
+                onClick = { cycleResizeMode() },
+                interactionSource = aspectInteraction,
+                color = when {
+                  isAspectFocused -> CinemaFocusGlow
+                  isEdgeFillActive -> CinemaAccent.copy(alpha = 0.22f)
+                  else -> CinemaSurface
+                },
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(
+                  width = if (isAspectFocused) 2.dp else 1.dp,
+                  color = when {
+                    isAspectFocused -> Color.White
+                    isEdgeFillActive -> CinemaAccent
+                    else -> CinemaBorder
+                  }
+                ),
+                modifier = Modifier
+                  .heightIn(min = 32.dp)
+                  .focusable(interactionSource = aspectInteraction)
+                  .testTag("exo_aspect_ratio_button")
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.AspectRatio,
+                    contentDescription = "أبعاد الفيديو: ${resizeModeHudLabel(activeResizeMode)}",
+                    tint = when {
+                      isAspectFocused -> Color.Black
+                      isEdgeFillActive -> CinemaAccent
+                      else -> Color.White
+                    },
+                    modifier = Modifier.size(13.dp)
+                  )
+                  Spacer(modifier = Modifier.width(3.dp))
+                  Text(
+                    text = resizeModeShortLabel(activeResizeMode),
+                    color = if (isAspectFocused) Color.Black else Color.White,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                }
+              }
+
+              // 4. Web Player Fallback Button
+              PlayerCompactSquareBtn(
+                icon = Icons.Default.Web,
+                tint = Color.LightGray,
+                contentDescription = "مشغل السيرفر المدمج",
+                onClick = onFallbackToWebPlayer,
+                testTag = "close_exo_player_button"
+              )
+
+              // 5. Fullscreen Button
+              val fsInteraction = remember { MutableInteractionSource() }
+              val isFsFocused by fsInteraction.collectIsFocusedAsState()
+              Surface(
+                onClick = onToggleFullscreen,
+                interactionSource = fsInteraction,
+                color = when {
+                  isFsFocused -> CinemaFocusGlow
+                  isFullscreen -> ClipboxWhite
+                  else -> CinemaPrimary
+                },
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(
+                  width = if (isFsFocused) 2.dp else 1.dp,
+                  color = if (isFsFocused) Color.White else Color.Transparent
+                ),
+                modifier = Modifier
+                  .heightIn(min = 32.dp)
+                  .focusable(interactionSource = fsInteraction)
+                  .testTag("exo_fullscreen_button")
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Icon(
+                    imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    contentDescription = if (isFullscreen) "تصغير" else "ملء الشاشة",
+                    tint = if (isFullscreen || isFsFocused) Color.Black else Color.White,
                     modifier = Modifier.size(14.dp)
                   )
-                  Spacer(modifier = Modifier.width(2.dp))
+                  Spacer(modifier = Modifier.width(3.dp))
                   Text(
-                    text = "التالية",
-                    color = if (isNextEpFocused) Color.Black else Color.White,
+                    text = if (isFullscreen) "تصغير" else "تكبير",
+                    color = if (isFullscreen || isFsFocused) Color.Black else Color.White,
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
@@ -1703,118 +1847,36 @@ fun NativeTvExoPlayer(
                 }
               }
             }
+          }
 
-            // 2. Subtitles CC Button
-            PlayerCompactSquareBtn(
-              icon = Icons.Default.Subtitles,
-              tint = if (activeSubtitle != null) CinemaSuccess else CinemaAccent,
-              contentDescription = "الترجمة",
-              onClick = onOpenSubtitles,
-              testTag = "exo_subtitles_button"
-            )
-
-            // 3. Real Aspect Ratio Toggle Pill (Fill / Stretch / Fit with live active mode badge)
-            val aspectInteraction = remember { MutableInteractionSource() }
-            val isAspectFocused by aspectInteraction.collectIsFocusedAsState()
-            val isEdgeFillActive = activeResizeMode != TvPreferencesRepository.RESIZE_MODE_FIT
-            Surface(
-              onClick = { cycleResizeMode() },
-              interactionSource = aspectInteraction,
-              color = when {
-                isAspectFocused -> CinemaFocusGlow
-                isEdgeFillActive -> CinemaAccent.copy(alpha = 0.22f)
-                else -> CinemaSurface
-              },
-              shape = RoundedCornerShape(8.dp),
-              border = BorderStroke(
-                width = if (isAspectFocused) 2.dp else 1.dp,
-                color = when {
-                  isAspectFocused -> Color.White
-                  isEdgeFillActive -> CinemaAccent
-                  else -> CinemaBorder
-                }
-              ),
-              modifier = Modifier
-                .heightIn(min = 32.dp)
-                .focusable(interactionSource = aspectInteraction)
-                .testTag("exo_aspect_ratio_button")
+          if (isWideHud) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.Top
             ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-              ) {
-                Icon(
-                  imageVector = Icons.Default.AspectRatio,
-                  contentDescription = "أبعاد الفيديو: ${resizeModeHudLabel(activeResizeMode)}",
-                  tint = when {
-                    isAspectFocused -> Color.Black
-                    isEdgeFillActive -> CinemaAccent
-                    else -> Color.White
-                  },
-                  modifier = Modifier.size(13.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
-                Text(
-                  text = resizeModeShortLabel(activeResizeMode),
-                  color = if (isAspectFocused) Color.Black else Color.White,
-                  fontSize = 9.5.sp,
-                  fontWeight = FontWeight.ExtraBold,
-                  maxLines = 1,
-                  softWrap = false
-                )
-              }
+              EpisodeTitleInsidePlayerBadge(
+                badgeModifier = Modifier
+                  .weight(1f, fill = false)
+                  .widthIn(min = 160.dp, max = 360.dp)
+              )
+              Spacer(modifier = Modifier.width(10.dp))
+              PlayerHudActionControls()
             }
-
-            // 4. Web Player Fallback Button
-            PlayerCompactSquareBtn(
-              icon = Icons.Default.Web,
-              tint = Color.LightGray,
-              contentDescription = "مشغل السيرفر المدمج",
-              onClick = onFallbackToWebPlayer,
-              testTag = "close_exo_player_button"
-            )
-
-            // 5. Fullscreen Button
-            val fsInteraction = remember { MutableInteractionSource() }
-            val isFsFocused by fsInteraction.collectIsFocusedAsState()
-            Surface(
-              onClick = onToggleFullscreen,
-              interactionSource = fsInteraction,
-              color = when {
-                isFsFocused -> CinemaFocusGlow
-                isFullscreen -> ClipboxWhite
-                else -> CinemaPrimary
-              },
-              shape = RoundedCornerShape(8.dp),
-              border = BorderStroke(
-                width = if (isFsFocused) 2.dp else 1.dp,
-                color = if (isFsFocused) Color.White else Color.Transparent
-              ),
-              modifier = Modifier
-                .heightIn(min = 32.dp)
-                .focusable(interactionSource = fsInteraction)
-                .testTag("exo_fullscreen_button")
+          } else {
+            // Compact portrait/split-screen: dedicated uncrushable Episode Title row + scrollable controls row inside the player!
+            Column(
+              modifier = Modifier.fillMaxWidth(),
+              verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-              Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-              ) {
-                Icon(
-                  imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                  contentDescription = if (isFullscreen) "تصغير" else "ملء الشاشة",
-                  tint = if (isFullscreen || isFsFocused) Color.Black else Color.White,
-                  modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
-                Text(
-                  text = if (isFullscreen) "تصغير" else "تكبير",
-                  color = if (isFullscreen || isFsFocused) Color.Black else Color.White,
-                  fontSize = 9.5.sp,
-                  fontWeight = FontWeight.ExtraBold,
-                  maxLines = 1,
-                  softWrap = false
-                )
-              }
+              EpisodeTitleInsidePlayerBadge(
+                badgeModifier = Modifier.fillMaxWidth()
+              )
+              PlayerHudActionControls(
+                controlsModifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState())
+              )
             }
           }
         }

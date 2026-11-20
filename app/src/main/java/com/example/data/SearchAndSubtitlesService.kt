@@ -1075,9 +1075,11 @@ class SearchAndSubtitlesService {
     pageUrl: String,
     portal: StreamingPortal,
     titleHint: String = "",
-    selectedSeasonNumber: Int = 1
+    selectedSeasonNumber: Int = 1,
+    selectedEpisodeNumber: Int = 0
   ): ScrapedSeriesStructure = withContext(Dispatchers.IO) {
     val scrapeStartMs = System.currentTimeMillis()
+    val cleanSeriesTitleHint = stripEpisodeAndSeasonSuffix(titleHint).ifBlank { titleHint.trim() }
     val seasons = mutableListOf<ScrapedSeasonItem>()
     val episodes = mutableListOf<ScrapedEpisodeItem>()
     val watchServers = mutableListOf<ScrapedWatchServer>()
@@ -1108,9 +1110,10 @@ class SearchAndSubtitlesService {
       )
       return@withContext ScrapedSeriesStructure(
         isSeries = false,
-        seriesTitle = titleHint,
+        seriesTitle = cleanSeriesTitleHint,
         currentSeason = selectedSeasonNumber,
         selectedSeasonNumber = selectedSeasonNumber,
+        currentEpisodeNumber = selectedEpisodeNumber.coerceAtLeast(1),
         seasons = emptyList(),
         episodes = emptyList(),
         watchServers = listOf(directSrv),
@@ -1562,13 +1565,24 @@ class SearchAndSubtitlesService {
       }
     }
 
+    val sortedEpisodes = episodes.sortedBy { it.episodeNumber }
+    val detectedEpisodeFromUrl = extractEpisodeNumberFromText(decodedInitialUrl)
+    val effectiveEpisodeNumber = when {
+      selectedEpisodeNumber > 0 -> selectedEpisodeNumber
+      detectedEpisodeFromUrl != null && detectedEpisodeFromUrl > 0 -> detectedEpisodeFromUrl
+      else -> 1
+    }
+    val resolvedNextEpisode = sortedEpisodes.firstOrNull { it.episodeNumber > effectiveEpisodeNumber }
+
     ScrapedSeriesStructure(
-      isSeries = episodes.isNotEmpty() || seasons.isNotEmpty(),
-      seriesTitle = titleHint,
+      isSeries = sortedEpisodes.isNotEmpty() || seasons.isNotEmpty(),
+      seriesTitle = cleanSeriesTitleHint,
       currentSeason = effectiveSeasonNumber,
       selectedSeasonNumber = effectiveSeasonNumber,
+      currentEpisodeNumber = effectiveEpisodeNumber,
       seasons = seasons.sortedBy { it.seasonNumber },
-      episodes = episodes.sortedBy { it.episodeNumber },
+      episodes = sortedEpisodes,
+      nextEpisode = resolvedNextEpisode,
       watchServers = watchServers,
       bestCleanPlayerUrl = bestEmbedUrl,
       directStreamUrl = extractedDirectStream,
@@ -2102,51 +2116,55 @@ class SearchAndSubtitlesService {
   }
 
   private fun extractSeasonNumberFromText(text: String): Int? {
-    val urlPathMatch = Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/[0-9]{1,3}").find(text)
+    val decoded = try { java.net.URLDecoder.decode(text, "UTF-8") } catch (_: Exception) { text }
+    val urlPathMatch = Regex("/(?:tv|series)/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/[0-9]{1,3}", RegexOption.IGNORE_CASE).find(decoded)
     if (urlPathMatch != null) {
       return urlPathMatch.groupValues[1].toIntOrNull()
     }
-    val sMatch = Regex("\\bS([0-9]{1,2})\\s*E[0-9]{1,3}\\b", RegexOption.IGNORE_CASE).find(text)
+    val sMatch = Regex("\\bS0*([0-9]{1,2})\\s*E0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE).findAll(decoded).lastOrNull()
     if (sMatch != null) {
       return sMatch.groupValues[1].toIntOrNull()
     }
-    val xMatch = Regex("\\b([0-9]{1,2})x[0-9]{1,3}\\b", RegexOption.IGNORE_CASE).find(text)
+    val xMatch = Regex("\\b0*([0-9]{1,2})x0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE).findAll(decoded).lastOrNull()
     if (xMatch != null) {
       return xMatch.groupValues[1].toIntOrNull()
     }
-    val digitMatch = Regex("(?:الموسم|موسم|\\bseason|\\bs)\\s*[-:]?\\s*([0-9]{1,2})\\b", RegexOption.IGNORE_CASE).find(text)
+    val digitMatch = Regex("(?:الموسم|موسم|\\bseason)\\s*[-:_]?\\s*([0-9]{1,2})\\b", RegexOption.IGNORE_CASE).findAll(decoded).lastOrNull()
     if (digitMatch != null) {
       return digitMatch.groupValues[1].toIntOrNull()
     }
     return when {
-      text.contains("الموسم الاول") || text.contains("الموسم الأول") -> 1
-      text.contains("الموسم الثاني") || text.contains("الموسم الثانى") -> 2
-      text.contains("الموسم الثالث") -> 3
-      text.contains("الموسم الرابع") -> 4
-      text.contains("الموسم الخامس") -> 5
-      text.contains("الموسم السادس") -> 6
-      text.contains("الموسم السابع") -> 7
-      text.contains("الموسم الثامن") -> 8
-      text.contains("الموسم التاسع") -> 9
-      text.contains("الموسم العاشر") -> 10
+      decoded.contains("الموسم الاول") || decoded.contains("الموسم الأول") || decoded.contains("الموسم-الاول") || decoded.contains("الموسم-الأول") -> 1
+      decoded.contains("الموسم الثاني") || decoded.contains("الموسم الثانى") || decoded.contains("الموسم-الثاني") || decoded.contains("الموسم-الثانى") -> 2
+      decoded.contains("الموسم الثالث") || decoded.contains("الموسم-الثالث") -> 3
+      decoded.contains("الموسم الرابع") || decoded.contains("الموسم-الرابع") -> 4
+      decoded.contains("الموسم الخامس") || decoded.contains("الموسم-الخامس") -> 5
+      decoded.contains("الموسم السادس") || decoded.contains("الموسم-السادس") -> 6
+      decoded.contains("الموسم السابع") || decoded.contains("الموسم-السابع") -> 7
+      decoded.contains("الموسم الثامن") || decoded.contains("الموسم-الثامن") -> 8
+      decoded.contains("الموسم التاسع") || decoded.contains("الموسم-التاسع") -> 9
+      decoded.contains("الموسم العاشر") || decoded.contains("الموسم-العاشر") -> 10
       else -> null
     }
   }
 
   private fun extractEpisodeNumberFromText(text: String): Int? {
-    val urlPathMatch = Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/[0-9]{1,2}/([0-9]{1,3})").find(text)
+    val decoded = try { java.net.URLDecoder.decode(text, "UTF-8") } catch (_: Exception) { text }
+    val urlPathMatch = Regex("/(?:tv|series)/(?:[^/]+/)?[0-9]{2,8}/[0-9]{1,2}/([0-9]{1,3})", RegexOption.IGNORE_CASE).find(decoded)
     if (urlPathMatch != null) {
       return urlPathMatch.groupValues[1].toIntOrNull()
     }
-    val seMatch = Regex("\\bS[0-9]{1,2}\\s*E([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
+    val seMatch = Regex("\\bS0*[0-9]{1,2}\\s*E0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).findAll(decoded).lastOrNull()
     if (seMatch != null) {
       return seMatch.groupValues[1].toIntOrNull()
     }
-    val xMatch = Regex("\\b[0-9]{1,2}x([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
+    val xMatch = Regex("\\b0*[0-9]{1,2}x0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).findAll(decoded).lastOrNull()
     if (xMatch != null) {
       return xMatch.groupValues[1].toIntOrNull()
     }
-    val epMatch = Regex("(?:الحلقة|الحلقه|حلقة|حلقه|\\bepisode|\\bep)\\s*[-:]?\\s*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(text)
+    val epMatch = Regex("(?:الحلقة|الحلقه|حلقة|حلقه|\\bepisode|\\bep)\\s*[-:_]?\\s*([0-9]{1,3})(?:\\b|[^0-9])", RegexOption.IGNORE_CASE)
+      .findAll(decoded)
+      .lastOrNull()
     if (epMatch != null) {
       return epMatch.groupValues[1].toIntOrNull()
     }
@@ -2821,6 +2839,31 @@ class SearchAndSubtitlesService {
     }
 
     /**
+     * Strips any appended episode/season suffixes (e.g. "- الحلقة 6: The Relic - الحلقة 7: The Dive",
+     * "- S01E06", "• Episode 8") so `seriesTitle` NEVER accumulates previous episode names.
+     */
+    fun stripEpisodeAndSeasonSuffix(raw: String): String {
+      if (raw.isBlank()) return ""
+      // First cut off anything after a separator followed by an episode/season marker
+      val cutMatch = Regex(
+        "\\s*[-•|:]\\s*(?:الحلقة|الحلقه|حلقة|حلقه|الموسم|موسم|S0*[0-9]{1,2}\\s*E0*[0-9]{1,3}|[0-9]{1,2}x[0-9]{1,3}|Episode\\s*[0-9]|Ep\\s*[0-9]|Season\\s*[0-9]).*$",
+        RegexOption.IGNORE_CASE
+      ).find(raw)
+      val basePart = if (cutMatch != null && cutMatch.range.first >= 2) {
+        raw.substring(0, cutMatch.range.first)
+      } else {
+        raw
+      }
+      return basePart
+        .replace(Regex("\\bS0*[0-9]{1,2}\\s*E0*[0-9]{1,3}\\b.*$", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("\\b0*[0-9]{1,2}x0*[0-9]{1,3}\\b.*$", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("(?:الموسم|موسم)\\s*(?:الاول|الأول|الثاني|الثانى|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|[0-9]{1,2}).*$"), "")
+        .replace(Regex("(?:الحلقة|الحلقه|حلقة|حلقه)\\s*[0-9]{1,3}.*$"), "")
+        .replace(Regex("\\s+"), " ")
+        .trim(' ', '-', ':', '|', '•')
+    }
+
+    /**
      * Produces standardized display titles and subtitle auto-search queries:
      * - Series episodes: `Silo S01E01`, `Lost S04E15` (strips year parentheses & Arabic filler words)
      * - Movies: `Interstellar (2014)` for display, `Interstellar` for subtitle lookup
@@ -2836,48 +2879,69 @@ class SearchAndSubtitlesService {
       selectedSeasonHint: Int,
       currentEpisodeHint: Int
     ): StandardizedMediaTitleInfo {
-      val combinedContext = listOf(embedUrl, watchPageUrl, serverName, pageTitle, lastSearchQuery)
-        .filter { it.isNotBlank() }
-        .joinToString(" ")
+      val decodedWatchUrl = try { java.net.URLDecoder.decode(watchPageUrl, "UTF-8") } catch (_: Exception) { watchPageUrl }
+      val decodedEmbedUrl = try { java.net.URLDecoder.decode(embedUrl, "UTF-8") } catch (_: Exception) { embedUrl }
 
-      // 1. Extract exact season & episode from highest-confidence sources first (embed path -> SxxExx -> Arabic/URL -> structure)
-      val embedPathMatch = Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/([0-9]{1,3})").find(embedUrl)
-        ?: Regex("/tv/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/([0-9]{1,3})").find(watchPageUrl)
-      val seMatch = Regex("\\bS0*([0-9]{1,2})\\s*E0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(combinedContext)
-      val xMatch = Regex("\\b0*([0-9]{1,2})x0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE).find(combinedContext)
-
-      val parsedSeason = embedPathMatch?.groupValues?.get(1)?.toIntOrNull()
-        ?: seMatch?.groupValues?.get(1)?.toIntOrNull()
-        ?: xMatch?.groupValues?.get(1)?.toIntOrNull()
-        ?: Regex("(?:الموسم|موسم|\\bseason)\\s*[-:]?\\s*([0-9]{1,2})\\b", RegexOption.IGNORE_CASE)
-          .find(combinedContext)?.groupValues?.get(1)?.toIntOrNull()
-        ?: when {
-          combinedContext.contains("الموسم الاول") || combinedContext.contains("الموسم الأول") -> 1
-          combinedContext.contains("الموسم الثاني") || combinedContext.contains("الموسم الثانى") -> 2
-          combinedContext.contains("الموسم الثالث") -> 3
-          combinedContext.contains("الموسم الرابع") -> 4
-          combinedContext.contains("الموسم الخامس") -> 5
-          combinedContext.contains("الموسم السادس") -> 6
-          combinedContext.contains("الموسم السابع") -> 7
-          combinedContext.contains("الموسم الثامن") -> 8
-          combinedContext.contains("الموسم التاسع") -> 9
-          combinedContext.contains("الموسم العاشر") -> 10
+      fun extractSeasonFromSource(src: String): Int? {
+        if (src.isBlank()) return null
+        Regex("/(?:tv|series)/(?:[^/]+/)?[0-9]{2,8}/([0-9]{1,2})/[0-9]{1,3}", RegexOption.IGNORE_CASE)
+          .find(src)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        Regex("\\bS0*([0-9]{1,2})\\s*E0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE)
+          .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        Regex("\\b0*([0-9]{1,2})x0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE)
+          .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        Regex("(?:الموسم|موسم|\\bseason)\\s*[-:_]?\\s*([0-9]{1,2})(?:\\b|[^0-9])", RegexOption.IGNORE_CASE)
+          .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        return when {
+          src.contains("الموسم الاول") || src.contains("الموسم الأول") || src.contains("الموسم-الاول") || src.contains("الموسم-الأول") -> 1
+          src.contains("الموسم الثاني") || src.contains("الموسم الثانى") || src.contains("الموسم-الثاني") || src.contains("الموسم-الثانى") -> 2
+          src.contains("الموسم الثالث") || src.contains("الموسم-الثالث") -> 3
+          src.contains("الموسم الرابع") || src.contains("الموسم-الرابع") -> 4
+          src.contains("الموسم الخامس") || src.contains("الموسم-الخامس") -> 5
+          src.contains("الموسم السادس") || src.contains("الموسم-السادس") -> 6
+          src.contains("الموسم السابع") || src.contains("الموسم-السابع") -> 7
+          src.contains("الموسم الثامن") || src.contains("الموسم-الثامن") -> 8
+          src.contains("الموسم التاسع") || src.contains("الموسم-التاسع") -> 9
+          src.contains("الموسم العاشر") || src.contains("الموسم-العاشر") -> 10
           else -> null
         }
+      }
 
-      val parsedEpisode = embedPathMatch?.groupValues?.get(2)?.toIntOrNull()
-        ?: seMatch?.groupValues?.get(2)?.toIntOrNull()
-        ?: xMatch?.groupValues?.get(2)?.toIntOrNull()
-        ?: Regex("(?:الحلقة|الحلقه|حلقة|حلقه|\\bepisode|\\bep)\\s*[-:]?\\s*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
-          .find(combinedContext)?.groupValues?.get(1)?.toIntOrNull()
+      fun extractEpisodeFromSource(src: String): Int? {
+        if (src.isBlank()) return null
+        Regex("/(?:tv|series)/(?:[^/]+/)?[0-9]{2,8}/[0-9]{1,2}/([0-9]{1,3})", RegexOption.IGNORE_CASE)
+          .find(src)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        Regex("\\bS0*[0-9]{1,2}\\s*E0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
+          .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        Regex("\\b0*[0-9]{1,2}x0*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
+          .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        Regex("(?:الحلقة|الحلقه|حلقة|حلقه|\\bepisode|\\bep)\\s*[-:_]?\\s*([0-9]{1,3})(?:\\b|[^0-9])", RegexOption.IGNORE_CASE)
+          .findAll(src).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        return null
+      }
 
-      val lowerUrls = "$watchPageUrl $embedUrl".lowercase()
+      // 1. Strict priority order so stale text NEVER overrides the currently playing episode:
+      //    embedUrl path -> decodedWatchUrl -> explicit currentEpisodeHint -> serverName -> pageTitle (last match)
+      val parsedSeason = extractSeasonFromSource(decodedEmbedUrl)
+        ?: extractSeasonFromSource(decodedWatchUrl)
+        ?: selectedSeasonHint.takeIf { it > 0 && isSeriesHint }
+        ?: extractSeasonFromSource(serverName)
+        ?: extractSeasonFromSource(pageTitle)
+
+      val parsedEpisode = extractEpisodeFromSource(decodedEmbedUrl)
+        ?: extractEpisodeFromSource(decodedWatchUrl)
+        ?: currentEpisodeHint.takeIf { it > 0 && isSeriesHint }
+        ?: extractEpisodeFromSource(serverName)
+        ?: extractEpisodeFromSource(pageTitle)
+
+      val lowerUrls = "$decodedWatchUrl $decodedEmbedUrl".lowercase()
       val isSeries = isSeriesHint ||
         parsedSeason != null ||
         parsedEpisode != null ||
         lowerUrls.contains("/tv/") ||
         lowerUrls.contains("/series/") ||
-        combinedContext.contains("مسلسل")
+        decodedWatchUrl.contains("مسلسل") ||
+        pageTitle.contains("مسلسل")
 
       val finalSeason = if (isSeries) {
         (parsedSeason ?: selectedSeasonHint.takeIf { it > 0 } ?: 1).coerceAtLeast(1)
@@ -2887,16 +2951,16 @@ class SearchAndSubtitlesService {
         (parsedEpisode ?: currentEpisodeHint.takeIf { it > 0 } ?: 1).coerceAtLeast(1)
       } else null
 
-      // 2. Pick best raw title candidate & capture optional release year
+      // 2. Pick pure base show title (strip all episode suffixes & episode subtitles first!)
       val urlSlugFallback = Regex("/(?:tv|movie|series)/([a-z0-9\\-]+)(?:/|$)", RegexOption.IGNORE_CASE)
-        .find(watchPageUrl)?.groupValues?.get(1)
+        .find(decodedWatchUrl)?.groupValues?.get(1)
         ?.replace("-", " ")
         ?.split(" ")
         ?.filter { it.isNotBlank() }
         ?.joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
         ?: ""
 
-      val rawCandidates = listOf(seriesTitle, pageTitle, lastSearchQuery, urlSlugFallback)
+      val rawCandidates = listOf(seriesTitle, lastSearchQuery, pageTitle, urlSlugFallback)
         .map { it.trim() }
         .filter { it.isNotBlank() && !it.startsWith("http", ignoreCase = true) }
 
@@ -2905,7 +2969,8 @@ class SearchAndSubtitlesService {
       } ?: ""
 
       fun sanitizeTitleCandidate(raw: String): String {
-        val withoutTags = raw
+        val baseOnly = stripEpisodeAndSeasonSuffix(raw).ifBlank { raw }
+        val withoutTags = baseOnly
           .replace(Regex("\\bS0*[0-9]{1,2}\\s*E0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE), " ")
           .replace(Regex("\\b0*[0-9]{1,2}x0*[0-9]{1,3}\\b", RegexOption.IGNORE_CASE), " ")
           .replace(Regex("\\((?:19|20)\\d{2}\\)"), " ")
@@ -2921,7 +2986,7 @@ class SearchAndSubtitlesService {
           .replace(Regex("\\b(?:HD|FHD|UHD|4K|1080p|720p|480p|360p|WEB-DL|WEBRip|BluRay|HDRip|TopCinema|WatchSeries|EgyDead|LaRoza)\\b", RegexOption.IGNORE_CASE), " ")
           .replace(Regex("[()\\[\\]]"), " ")
 
-        // Prefer clean English/Latin show title when available (e.g., "Silo", "Lost", "Mr. Robot")
+        // Prefer clean English/Latin show title when available (e.g., "Silo", "The Gentlemen", "Lost")
         val latinMatch = Regex("[A-Za-z][A-Za-z0-9'&.:\\- ]{1,60}")
           .findAll(withoutTags)
           .map { it.value.trim(' ', '-', ':', '|', '•', '.') }
