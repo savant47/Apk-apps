@@ -90,21 +90,11 @@ fun DisplayModeSelectionDialog(
         horizontalAlignment = Alignment.CenterHorizontally
       ) {
         Text(
-          text = "🎯 اختر منظور العرض المناسب لجهازك",
+          text = "وضع العرض",
           color = Color.White,
-          fontSize = 17.sp,
+          fontSize = 19.sp,
           fontWeight = FontWeight.ExtraBold,
           textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-          text = "يحتوي Asser Browser على منظورين مخصصين لضمان تنسيق مثالي بدون أي فراغات أو تزاحم:",
-          color = Color.LightGray,
-          fontSize = 12.sp,
-          textAlign = TextAlign.Center,
-          lineHeight = 17.sp
         )
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -115,8 +105,8 @@ fun DisplayModeSelectionDialog(
             verticalArrangement = Arrangement.spacedBy(10.dp)
           ) {
             ModeOptionCard(
-              title = "📱 منظور الهاتف المحمول",
-              subtitle = "واجهة رأسية متناسقة 100% مع شاشة الهاتف المحمول، قوائم وأزرار واضحة تعمل باللمس بسرعة فائقة",
+              title = "📱 الهاتف",
+              subtitle = "واجهة رأسية للمس",
               icon = Icons.Default.PhoneAndroid,
               isCurrent = currentMode == AppDisplayMode.MOBILE,
               isSelected = selected == AppDisplayMode.MOBILE,
@@ -130,8 +120,8 @@ fun DisplayModeSelectionDialog(
             )
 
             ModeOptionCard(
-              title = "📺 منظور الشاشة أو التابلت",
-              subtitle = "واجهة أفقية عريضة (16:9) مخصصة لشاشات التلفاز Android TV والرسيفرات والتابلت بالريموت أو الماوس",
+              title = "📺 الشاشة والتابلت",
+              subtitle = "واجهة عريضة للريموت",
               icon = Icons.Default.Tv,
               isCurrent = currentMode == AppDisplayMode.TV,
               isSelected = selected == AppDisplayMode.TV,
@@ -150,8 +140,8 @@ fun DisplayModeSelectionDialog(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
           ) {
             ModeOptionCard(
-              title = "📱 منظور الهاتف المحمول",
-              subtitle = "واجهة رأسية متناسقة 100% مع شاشة الهاتف المحمول، قوائم وأزرار واضحة تعمل باللمس بسرعة فائقة",
+              title = "📱 الهاتف",
+              subtitle = "واجهة رأسية للمس",
               icon = Icons.Default.PhoneAndroid,
               isCurrent = currentMode == AppDisplayMode.MOBILE,
               isSelected = selected == AppDisplayMode.MOBILE,
@@ -165,8 +155,8 @@ fun DisplayModeSelectionDialog(
             )
 
             ModeOptionCard(
-              title = "📺 منظور الشاشة أو التابلت",
-              subtitle = "واجهة أفقية عريضة (16:9) مخصصة لشاشات التلفاز Android TV والرسيفرات والتابلت بالريموت أو الماوس",
+              title = "📺 الشاشة والتابلت",
+              subtitle = "واجهة عريضة للريموت",
               icon = Icons.Default.Tv,
               isCurrent = currentMode == AppDisplayMode.TV,
               isSelected = selected == AppDisplayMode.TV,
@@ -196,12 +186,12 @@ fun DisplayModeSelectionDialog(
           contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
+            .heightIn(min = 50.dp)
             .testTag("confirm_display_mode_btn")
         ) {
           Text(
-            text = "تأكيد وتشغيل ${selected.arabicTitle}",
-            fontSize = 14.sp,
+            text = "تشغيل ${selected.arabicTitle}",
+            fontSize = 15.5.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             softWrap = false,
@@ -267,46 +257,46 @@ private fun ModeOptionCard(
             shape = RoundedCornerShape(6.dp)
           ) {
             Text(
-              text = "المنظور الحالي",
+              text = "الحالي",
               color = Color.White,
-              fontSize = 10.sp,
+              fontSize = 12.sp,
               fontWeight = FontWeight.Bold,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
             )
           }
         } else if (isSelected) {
           Icon(
             imageVector = Icons.Default.CheckCircle,
-            contentDescription = "تم الاختيار",
+            contentDescription = "محدد",
             tint = activeColor,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(22.dp)
           )
         }
       }
 
-      Spacer(modifier = Modifier.height(8.dp))
+      Spacer(modifier = Modifier.height(10.dp))
 
       Text(
         text = title,
         color = Color.White,
-        fontSize = 15.sp,
-        fontWeight = FontWeight.Bold,
+        fontSize = 17.sp,
+        fontWeight = FontWeight.ExtraBold,
         textAlign = TextAlign.Center,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis
       )
 
-      Spacer(modifier = Modifier.height(4.dp))
+      Spacer(modifier = Modifier.height(5.dp))
 
       Text(
         text = subtitle,
         color = Color.LightGray,
-        fontSize = 11.sp,
+        fontSize = 13.5.sp,
         textAlign = TextAlign.Center,
-        lineHeight = 15.sp
+        lineHeight = 19.sp
       )
 
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(12.dp))
 
       Button(
         onClick = onApplyImmediate,
@@ -315,14 +305,14 @@ private fun ModeOptionCard(
           contentColor = Color.White
         ),
         shape = RoundedCornerShape(8.dp),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         modifier = Modifier
           .fillMaxWidth()
-          .heightIn(min = 40.dp)
+          .heightIn(min = 44.dp)
       ) {
         Text(
-          text = if (isCurrent) "مفعّل حالياً ✓" else "تفعيل هذا المنظور فوراً ⚡",
-          fontSize = 12.sp,
+          text = if (isCurrent) "مفعّل ✓" else "تفعيل",
+          fontSize = 14.sp,
           fontWeight = FontWeight.Bold,
           maxLines = 1,
           softWrap = false,

@@ -239,7 +239,10 @@ data class HistoryEntry(
   val title: String,
   val url: String,
   val portal: StreamingPortal,
-  val timestamp: Long = System.currentTimeMillis()
+  val timestamp: Long = System.currentTimeMillis(),
+  val seasonNumber: Int = 0,
+  val episodeNumber: Int = 0,
+  val isSeries: Boolean = false
 )
 
 enum class ControlMode {

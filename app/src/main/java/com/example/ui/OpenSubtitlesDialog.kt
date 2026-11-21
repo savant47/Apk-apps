@@ -80,6 +80,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -88,6 +89,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -289,21 +291,21 @@ fun OpenSubtitlesDialog(
               Spacer(modifier = Modifier.width(10.dp))
               Column {
                 Text(
-                  text = "الترجمة الفورية وإعدادات المظهر (CC)",
+                  text = "الترجمة (CC)",
                   color = Color.White,
-                  fontSize = 15.sp,
+                  fontSize = 18.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
                 Text(
                   text = if (activeSubtitle != null) {
-                    "مفعلة الآن: ${activeSubtitle.releaseName} (${activeSubtitle.parsedCues.size} سطر)"
+                    "المفعلة: ${activeSubtitle.releaseName}"
                   } else {
-                    "الفيديو متوقف مؤقتاً لتسريع البحث • تنقل بأسهم الريموت واضغط OK"
+                    "اختر الترجمة واضغط OK"
                   },
                   color = if (activeSubtitle != null) CinemaSuccess else CinemaAccent,
-                  fontSize = 11.sp,
+                  fontSize = 13.sp,
                   fontWeight = FontWeight.SemiBold,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
@@ -322,7 +324,7 @@ fun OpenSubtitlesDialog(
                   onClick = {
                     cancelPendingJobs()
                     onClearSubtitle()
-                    Toast.makeText(context, "تم إيقاف الترجمة الخارجية", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "تم إيقاف الترجمة", Toast.LENGTH_SHORT).show()
                   },
                   interactionSource = clearInteraction,
                   color = if (isClearFocused) CinemaPrimary else CinemaPrimary.copy(alpha = 0.2f),
@@ -344,13 +346,13 @@ fun OpenSubtitlesDialog(
                       imageVector = Icons.Default.ClosedCaptionDisabled,
                       contentDescription = "إيقاف الترجمة",
                       tint = if (isClearFocused) Color.White else CinemaPrimary,
-                      modifier = Modifier.size(16.dp)
+                      modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(5.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                       text = "إيقاف",
                       color = Color.White,
-                      fontSize = 11.5.sp,
+                      fontSize = 14.sp,
                       fontWeight = FontWeight.ExtraBold
                     )
                   }
@@ -429,9 +431,9 @@ fun OpenSubtitlesDialog(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                  text = "بحث وتحميل الترجمة",
+                  text = "البحث",
                   color = if (selectedDialogTab == 0) Color.Black else Color.White,
-                  fontSize = 12.sp,
+                  fontSize = 15.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   softWrap = false,
@@ -470,13 +472,13 @@ fun OpenSubtitlesDialog(
                   imageVector = Icons.Default.Palette,
                   contentDescription = null,
                   tint = if (selectedDialogTab == 1) Color.Black else CinemaAccent,
-                  modifier = Modifier.size(18.dp)
+                  modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                  text = "إعدادات اللون والخلفية والحجم",
+                  text = "المظهر",
                   color = if (selectedDialogTab == 1) Color.Black else Color.White,
-                  fontSize = 12.sp,
+                  fontSize = 15.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   softWrap = false,
@@ -540,13 +542,14 @@ fun OpenSubtitlesDialog(
                 onValueChange = { searchQuery = it },
                 placeholder = {
                   Text(
-                    "اسم الفيلم أو المسلسل بالإنجليزية (مثال: VisionQuest S01E08)...",
+                    "اسم الفيلم أو المسلسل...",
                     color = Color.Gray,
-                    fontSize = 12.sp,
+                    fontSize = 14.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                   )
                 },
+                textStyle = TextStyle(fontSize = 15.5.sp, color = Color.White, fontWeight = FontWeight.SemiBold),
                 singleLine = true,
                 leadingIcon = {
                   Icon(
@@ -599,27 +602,27 @@ fun OpenSubtitlesDialog(
                 ),
                 modifier = Modifier
                   .height(54.dp)
-                  .widthIn(min = 86.dp)
+                  .widthIn(min = 92.dp)
                   .focusRequester(searchBtnFocusRequester)
                   .scale(if (isSearchBtnFocused) 1.05f else 1f)
                   .testTag("subtitles_search_btn")
               ) {
                 Row(
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                  modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                   horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
                   verticalAlignment = Alignment.CenterVertically
                 ) {
                   Icon(
                     imageVector = Icons.Default.Search,
-                    contentDescription = "بحث عن الترجمة",
+                    contentDescription = "بحث",
                     tint = if (isSearchBtnFocused) Color.Black else Color.White,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                   )
                   Text(
                     text = "بحث",
                     color = if (isSearchBtnFocused) Color.Black else Color.White,
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 13.sp,
+                    fontSize = 15.sp,
                     maxLines = 1,
                     softWrap = false
                   )
@@ -640,7 +643,7 @@ fun OpenSubtitlesDialog(
               Text(
                 text = "اللغة:",
                 color = Color.LightGray,
-                fontSize = 11.5.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold
               )
               languages.forEach { (code, label) ->
@@ -671,9 +674,9 @@ fun OpenSubtitlesDialog(
                   CircularProgressIndicator(color = CinemaAccent)
                   Spacer(modifier = Modifier.height(10.dp))
                   Text(
-                    text = "جاري البحث السريع عن ملفات الترجمة (.SRT / .VTT)...",
+                    text = "جاري البحث عن الترجمة...",
                     color = Color.LightGray,
-                    fontSize = 12.5.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
                   )
                 }
@@ -687,12 +690,12 @@ fun OpenSubtitlesDialog(
               ) {
                 Text(
                   text = if (hasSearchedOnce) {
-                    "لم يتم العثور على ترجمة مطابقة حالياً — عدّل الاسم بالإنجليزية واضغط بحث"
+                    "لا توجد نتائج — جرّب اسماً آخر"
                   } else {
-                    "اكتب اسم الفيلم أو المسلسل باللغة الإنجليزية واضغط بحث لعرض ملفات الترجمة"
+                    "اكتب الاسم بالإنجليزية واضغط بحث"
                   },
-                  color = Color.Gray,
-                  fontSize = 13.sp,
+                  color = Color.LightGray,
+                  fontSize = 15.sp,
                   textAlign = TextAlign.Center
                 )
               }
@@ -761,7 +764,7 @@ fun OpenSubtitlesDialog(
                         Text(
                           text = sub.releaseName,
                           color = Color.White,
-                          fontSize = 13.sp,
+                          fontSize = 15.5.sp,
                           fontWeight = FontWeight.Bold,
                           maxLines = 2,
                           overflow = TextOverflow.Ellipsis
@@ -786,15 +789,15 @@ fun OpenSubtitlesDialog(
                                 isAddic7ed -> CinemaAccent
                                 else -> Color(0xFF90CAF9)
                               },
-                              fontSize = 10.sp,
+                              fontSize = 12.5.sp,
                               fontWeight = FontWeight.Bold,
-                              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                              modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                             )
                           }
                           Text(
                             text = "${sub.languageName} • ${sub.format.uppercase()}",
                             color = CinemaSuccess,
-                            fontSize = 10.5.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                           )
                           Row(verticalAlignment = Alignment.CenterVertically) {
@@ -802,13 +805,13 @@ fun OpenSubtitlesDialog(
                               imageVector = Icons.Default.Star,
                               contentDescription = null,
                               tint = CinemaAccent,
-                              modifier = Modifier.size(12.dp)
+                              modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(2.dp))
                             Text(
                               text = "${sub.rating}",
                               color = Color.LightGray,
-                              fontSize = 10.5.sp
+                              fontSize = 13.sp
                             )
                           }
                         }
@@ -827,20 +830,20 @@ fun OpenSubtitlesDialog(
                         shape = RoundedCornerShape(8.dp)
                       ) {
                         Row(
-                          modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                          modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
                           verticalAlignment = Alignment.CenterVertically
                         ) {
                           if (isDownloadingThis) {
                             CircularProgressIndicator(
                               color = Color.Black,
                               strokeWidth = 2.dp,
-                              modifier = Modifier.size(15.dp)
+                              modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                              text = "جاري السحب...",
+                              text = "تحميل...",
                               color = Color.Black,
-                              fontSize = 11.sp,
+                              fontSize = 13.5.sp,
                               fontWeight = FontWeight.ExtraBold
                             )
                           } else {
@@ -848,13 +851,13 @@ fun OpenSubtitlesDialog(
                               imageVector = if (isCurrentlyActive) Icons.Default.Check else Icons.Default.Download,
                               contentDescription = null,
                               tint = if (isItemFocused && !isCurrentlyActive) Color.Black else Color.White,
-                              modifier = Modifier.size(15.dp)
+                              modifier = Modifier.size(17.dp)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
                               text = if (isCurrentlyActive) "مفعلة" else "تفعيل",
                               color = if (isItemFocused && !isCurrentlyActive) Color.Black else Color.White,
-                              fontSize = 11.5.sp,
+                              fontSize = 13.5.sp,
                               fontWeight = FontWeight.ExtraBold
                             )
                           }
@@ -912,12 +915,12 @@ private fun TvSubtitleSelectablePill(
       }
     ),
     modifier = modifier
-      .heightIn(min = 44.dp)
+      .heightIn(min = 46.dp)
       .bringIntoViewRequester(bringIntoViewRequester)
       .scale(if (isFocused) 1.04f else 1f)
   ) {
     Box(
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+      modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
       contentAlignment = Alignment.Center
     ) {
       Text(
@@ -927,7 +930,7 @@ private fun TvSubtitleSelectablePill(
           isSelected -> selectedContentColor
           else -> Color.LightGray
         },
-        fontSize = 11.5.sp,
+        fontSize = 14.sp,
         fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
         maxLines = 1,
         softWrap = false
@@ -945,35 +948,35 @@ fun SubtitleAppearanceSettingsContent(
 ) {
   val textColors = remember {
     listOf(
-      0xFFFFD700L to "أصفر سينمائي",
-      0xFFFFFFFFL to "أبيض ناصع",
-      0xFF00E5FFL to "سماوي واضح",
-      0xFF4ADE80L to "أخضر مريح",
-      0xFFFB923CL to "برتقالي دافئ"
+      0xFFFFD700L to "أصفر",
+      0xFFFFFFFFL to "أبيض",
+      0xFF00E5FFL to "سماوي",
+      0xFF4ADE80L to "أخضر",
+      0xFFFB923CL to "برتقالي"
     )
   }
 
   val backgroundColors = remember {
     listOf(
-      0xBF000000L to "أسود 75% (افتراضي)",
-      0xF2000000L to "أسود داكن 95%",
-      0x73000000L to "أسود خفيف 45%",
-      0xCC0B1528L to "كحلي سينمائي",
-      0x00000000L to "شفاف بدون خلفية"
+      0xBF000000L to "أسود 75%",
+      0xF2000000L to "أسود 95%",
+      0x73000000L to "أسود 45%",
+      0xCC0B1528L to "كحلي",
+      0x00000000L to "شفاف"
     )
   }
 
   val fontSizes = remember {
     listOf(
-      20f to "20sp",
-      24f to "24sp",
-      28f to "28sp",
-      32f to "32sp",
-      36f to "36sp",
-      42f to "42sp",
-      48f to "48sp",
-      54f to "54sp",
-      60f to "60sp (تلفاز ضخم)"
+      20f to "20",
+      24f to "24",
+      28f to "28",
+      32f to "32",
+      36f to "36",
+      42f to "42",
+      48f to "48",
+      54f to "54",
+      60f to "60"
     )
   }
 
@@ -983,7 +986,11 @@ fun SubtitleAppearanceSettingsContent(
       .verticalScroll(rememberScrollState()),
     verticalArrangement = Arrangement.spacedBy(12.dp)
   ) {
-    // 1. Live Subtitle Preview Card
+    // 1. Live Subtitle Preview Card (unboosted fontScale=1f so preview matches real in-player cue size)
+    val baseDensity = LocalDensity.current
+    val unboostedPreviewDensity = remember(baseDensity.density) {
+      Density(density = baseDensity.density, fontScale = 1f)
+    }
     Surface(
       color = Color(0xFF101722),
       shape = RoundedCornerShape(12.dp),
@@ -999,52 +1006,54 @@ fun SubtitleAppearanceSettingsContent(
       ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
           Text(
-            text = "معاينة حية لمظهر الترجمة داخل المشغل (${style.fontSizeSp.toInt()}sp)",
+            text = "معاينة (${style.fontSizeSp.toInt()}sp)",
             color = Color.LightGray,
-            fontSize = 10.5.sp,
-            fontWeight = FontWeight.Medium
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
           )
           Spacer(modifier = Modifier.height(8.dp))
-          Box(
-            modifier = Modifier
-              .background(
-                color = Color(style.backgroundColorArgb),
-                shape = RoundedCornerShape(8.dp)
+          CompositionLocalProvider(LocalDensity provides unboostedPreviewDensity) {
+            Box(
+              modifier = Modifier
+                .background(
+                  color = Color(style.backgroundColorArgb),
+                  shape = RoundedCornerShape(8.dp)
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+              val previewShadow = when (style.edgeStyle) {
+                SubtitleEdgeStyle.DROP_SHADOW -> Shadow(
+                  color = Color.Black,
+                  offset = Offset(2.5f, 2.5f),
+                  blurRadius = 8f
+                )
+                SubtitleEdgeStyle.OUTLINE -> Shadow(
+                  color = Color.Black,
+                  offset = Offset(0f, 0f),
+                  blurRadius = 14f
+                )
+                SubtitleEdgeStyle.NONE -> Shadow.None
+              }
+              Text(
+                text = "معاينة ترجمة Asser TV",
+                color = Color(style.textColorArgb),
+                fontSize = style.fontSizeSp.coerceIn(14f, 60f).sp,
+                lineHeight = (style.fontSizeSp.coerceIn(14f, 60f) * 1.32f).sp,
+                fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center,
+                style = TextStyle(shadow = previewShadow)
               )
-              .padding(horizontal = 16.dp, vertical = 8.dp)
-          ) {
-            val previewShadow = when (style.edgeStyle) {
-              SubtitleEdgeStyle.DROP_SHADOW -> Shadow(
-                color = Color.Black,
-                offset = Offset(2.5f, 2.5f),
-                blurRadius = 8f
-              )
-              SubtitleEdgeStyle.OUTLINE -> Shadow(
-                color = Color.Black,
-                offset = Offset(0f, 0f),
-                blurRadius = 14f
-              )
-              SubtitleEdgeStyle.NONE -> Shadow.None
             }
-            Text(
-              text = "ترجمة Asser TV الاحترافية • وضوح كامل لشاشات التلفاز",
-              color = Color(style.textColorArgb),
-              fontSize = style.fontSizeSp.coerceIn(14f, 60f).sp,
-              lineHeight = (style.fontSizeSp.coerceIn(14f, 60f) * 1.32f).sp,
-              fontWeight = FontWeight.ExtraBold,
-              textAlign = TextAlign.Center,
-              style = TextStyle(shadow = previewShadow)
-            )
           }
         }
       }
     }
 
-    // 2. Font Color Selection (لون خط الترجمة)
+    // 2. Font Color Selection (لون الخط)
     Text(
-      text = "لون خط الترجمة (Text Color):",
+      text = "لون الخط:",
       color = CinemaAccent,
-      fontSize = 12.sp,
+      fontSize = 15.sp,
       fontWeight = FontWeight.ExtraBold
     )
     Row(
@@ -1096,7 +1105,7 @@ fun SubtitleAppearanceSettingsContent(
             Text(
               text = label,
               color = if (isSelected) Color(argb) else Color.White,
-              fontSize = 11.5.sp,
+              fontSize = 14.sp,
               fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
               maxLines = 1,
               softWrap = false
@@ -1106,11 +1115,11 @@ fun SubtitleAppearanceSettingsContent(
       }
     }
 
-    // 3. Background Color & Opacity Selection (لون وشفافية الخلفية)
+    // 3. Background Color & Opacity Selection (الخلفية)
     Text(
-      text = "لون وشفافية خلفية الترجمة (Background):",
+      text = "الخلفية:",
       color = CinemaAccent,
-      fontSize = 12.sp,
+      fontSize = 15.sp,
       fontWeight = FontWeight.ExtraBold
     )
     Row(
@@ -1142,13 +1151,13 @@ fun SubtitleAppearanceSettingsContent(
             }
           ),
           modifier = Modifier
-            .heightIn(min = 44.dp)
+            .heightIn(min = 46.dp)
             .bringIntoViewRequester(bringIntoView)
             .scale(if (isFocused) 1.04f else 1f)
             .testTag("sub_bg_color_$argb")
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp)
           ) {
@@ -1157,13 +1166,13 @@ fun SubtitleAppearanceSettingsContent(
                 imageVector = Icons.Default.Check,
                 contentDescription = null,
                 tint = Color.Black,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(16.dp)
               )
             }
             Text(
               text = label,
               color = if (isSelected) Color.Black else Color.White,
-              fontSize = 11.5.sp,
+              fontSize = 14.sp,
               fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
               maxLines = 1,
               softWrap = false
@@ -1173,7 +1182,7 @@ fun SubtitleAppearanceSettingsContent(
       }
     }
 
-    // 4. Font Size Selection (حجم خط الترجمة - حتى 60sp للشاشات الكبيرة)
+    // 4. Font Size Selection (حجم الخط)
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
@@ -1187,12 +1196,12 @@ fun SubtitleAppearanceSettingsContent(
           imageVector = Icons.Default.FormatSize,
           contentDescription = null,
           tint = CinemaAccent,
-          modifier = Modifier.size(16.dp)
+          modifier = Modifier.size(18.dp)
         )
         Text(
-          text = "حجم خط الترجمة (16sp حتى 60sp للتلفاز):",
+          text = "حجم الخط:",
           color = CinemaAccent,
-          fontSize = 12.sp,
+          fontSize = 15.sp,
           fontWeight = FontWeight.ExtraBold
         )
       }
@@ -1203,9 +1212,9 @@ fun SubtitleAppearanceSettingsContent(
         Text(
           text = "${style.fontSizeSp.toInt()}sp",
           color = Color.White,
-          fontSize = 11.5.sp,
+          fontSize = 14.sp,
           fontWeight = FontWeight.ExtraBold,
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
         )
       }
     }
@@ -1310,11 +1319,11 @@ fun SubtitleAppearanceSettingsContent(
       }
     }
 
-    // 5. Edge / Shadow Style Selection (نمط حواف وظل النص)
+    // 5. Edge / Shadow Style Selection (الحواف)
     Text(
-      text = "نمط حواف وظل الترجمة (Edge / Shadow):",
+      text = "الحواف والظل:",
       color = CinemaAccent,
-      fontSize = 12.sp,
+      fontSize = 15.sp,
       fontWeight = FontWeight.ExtraBold
     )
     Row(
@@ -1338,20 +1347,20 @@ fun SubtitleAppearanceSettingsContent(
       }
     }
 
-    // 6. Vertical Position Selection (موضع الترجمة الرأسي من الأسفل)
+    // 6. Vertical Position Selection (الموضع)
     val verticalPositions = remember {
       listOf(
-        16 to "أسفل الشاشة (16dp)",
-        28 to "افتراضي (28dp)",
-        52 to "متوسط (52dp)",
-        80 to "مرتفع (80dp)",
-        110 to "أعلى (110dp)"
+        16 to "أسفل",
+        28 to "افتراضي",
+        52 to "متوسط",
+        80 to "مرتفع",
+        110 to "أعلى"
       )
     }
     Text(
-      text = "الموضع الرأسي للترجمة (الحالي: ${style.bottomOffsetDp}dp من الأسفل):",
+      text = "الموضع:",
       color = CinemaAccent,
-      fontSize = 12.sp,
+      fontSize = 15.sp,
       fontWeight = FontWeight.ExtraBold
     )
     Row(
@@ -1375,12 +1384,12 @@ fun SubtitleAppearanceSettingsContent(
       }
     }
 
-    // 7. Subtitle Sync Timing Offset (تقديم وتأخير وقت الترجمة)
+    // 7. Subtitle Sync Timing Offset (التزامن)
     val syncSec = style.syncOffsetMs / 1000.0
     Text(
-      text = "ضبط تزامن وقت الترجمة (الحالي: ${if (syncSec >= 0) "+$syncSec" else "$syncSec"} ثانية):",
+      text = "التزامن (${if (syncSec >= 0) "+$syncSec" else "$syncSec"}ث):",
       color = CinemaAccent,
-      fontSize = 12.sp,
+      fontSize = 15.sp,
       fontWeight = FontWeight.ExtraBold
     )
     Row(
@@ -1392,11 +1401,11 @@ fun SubtitleAppearanceSettingsContent(
     ) {
       val syncButtons = remember {
         listOf(
-          -2000L to "-2.0 ثانية",
-          -500L to "-0.5 ثانية",
-          0L to "ضبط افتراضي (0.0s)",
-          500L to "+0.5 ثانية",
-          2000L to "+2.0 ثانية"
+          -2000L to "-2ث",
+          -500L to "-0.5ث",
+          0L to "0ث",
+          500L to "+0.5ث",
+          2000L to "+2ث"
         )
       }
       syncButtons.forEach { (deltaMs, label) ->

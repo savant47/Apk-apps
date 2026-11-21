@@ -373,20 +373,91 @@ class TvPreferencesRepository(context: Context) {
     return _bookmarksFlow.value
   }
 
-  fun addHistory(title: String, url: String, portal: StreamingPortal) {
+  fun addHistory(
+    title: String,
+    url: String,
+    portal: StreamingPortal,
+    seasonNumber: Int = 0,
+    episodeNumber: Int = 0,
+    isSeries: Boolean = false
+  ) {
     if (url.isBlank() || url.startsWith("about:") || url.startsWith("data:")) return
     // CRITICAL: Never persist third-party embed iframe URLs (vidtube, vidlink, vidsrc, etc.) or raw streams
     // as Watch History entries — Resume Playback must always reopen the canonical Portal Watch Page!
     if (StreamingPortal.isEmbedIframeUrl(url)) return
+    val lowerUrl = url.lowercase()
+    // Skip transient search URLs so Continue Watching only shows real movies & series episodes
+    if (lowerUrl.contains("/search/") ||
+      lowerUrl.contains("/search?") ||
+      lowerUrl.contains("?s=") ||
+      lowerUrl.contains("&s=") ||
+      lowerUrl.contains("search.php")
+    ) return
+
     val canonicalUrl = StreamingPortal.sanitizePortalWatchUrl(url, portal)
-    val current = _historyFlow.value.filterNot { it.url == canonicalUrl }.toMutableList()
-    val cleanTitle = title.ifBlank { canonicalUrl }
-    current.add(0, HistoryEntry(
-      id = UUID.randomUUID().toString(),
-      title = cleanTitle,
-      url = canonicalUrl,
-      portal = portal
-    ))
+    val rawTitle = title.ifBlank { canonicalUrl }
+
+    val parsedInfo = SearchAndSubtitlesService.formatStandardizedEpisodeInfo(
+      seriesTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(rawTitle),
+      pageTitle = rawTitle,
+      lastSearchQuery = "",
+      watchPageUrl = canonicalUrl,
+      embedUrl = "",
+      serverName = "",
+      isSeriesHint = isSeries || seasonNumber > 0 || episodeNumber > 0,
+      selectedSeasonHint = seasonNumber,
+      currentEpisodeHint = episodeNumber
+    )
+
+    val resolvedIsSeries = isSeries || parsedInfo.isSeries || seasonNumber > 0 || episodeNumber > 0
+    val resolvedSeason = when {
+      seasonNumber > 0 -> seasonNumber
+      resolvedIsSeries && (parsedInfo.seasonNumber ?: 0) > 0 -> parsedInfo.seasonNumber ?: 1
+      else -> 0
+    }
+    val resolvedEpisode = when {
+      episodeNumber > 0 -> episodeNumber
+      resolvedIsSeries && (parsedInfo.episodeNumber ?: 0) > 0 -> parsedInfo.episodeNumber ?: 1
+      else -> 0
+    }
+    val cleanDisplayTitle = if (parsedInfo.cleanTitle.isNotBlank() &&
+      !parsedInfo.cleanTitle.equals("Asser TV", ignoreCase = true)
+    ) {
+      parsedInfo.cleanTitle
+    } else {
+      SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(rawTitle).ifBlank { rawTitle }
+    }
+
+    val incomingShowKey = if (resolvedIsSeries) {
+      buildNormalizedContentKey(cleanDisplayTitle, null, null, isSeries = false)
+    } else {
+      ""
+    }
+
+    val current = _historyFlow.value.filterNot { existing ->
+      if (existing.url == canonicalUrl) return@filterNot true
+      if (resolvedIsSeries && existing.portal == portal && incomingShowKey.isNotBlank()) {
+        val existingBase = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(existing.title)
+          .ifBlank { existing.title }
+        val existingKey = buildNormalizedContentKey(existingBase, null, null, isSeries = false)
+        existingKey.isNotBlank() && existingKey == incomingShowKey
+      } else {
+        false
+      }
+    }.toMutableList()
+
+    current.add(
+      0,
+      HistoryEntry(
+        id = UUID.randomUUID().toString(),
+        title = cleanDisplayTitle,
+        url = canonicalUrl,
+        portal = portal,
+        seasonNumber = resolvedSeason,
+        episodeNumber = resolvedEpisode,
+        isSeries = resolvedIsSeries
+      )
+    )
     // Keep last 40 visited entries
     val trimmed = current.take(40)
     saveHistory(trimmed)
@@ -451,6 +522,7 @@ class TvPreferencesRepository(context: Context) {
     }
 
     val list = mutableListOf<HistoryEntry>()
+    val seenSeriesPortalKeys = mutableSetOf<String>()
     try {
       val jsonArray = JSONArray(raw)
       for (i in 0 until jsonArray.length()) {
@@ -458,13 +530,49 @@ class TvPreferencesRepository(context: Context) {
         val portal = StreamingPortal.fromId(obj.getString("portal"))
         val rawUrl = obj.getString("url")
         val sanitizedUrl = StreamingPortal.sanitizePortalWatchUrl(rawUrl, portal)
+        val rawTitle = obj.getString("title")
+        val storedSeason = obj.optInt("seasonNumber", 0)
+        val storedEpisode = obj.optInt("episodeNumber", 0)
+        val storedIsSeries = obj.optBoolean("isSeries", false)
+
+        val parsedInfo = if (storedSeason <= 0 || storedEpisode <= 0) {
+          SearchAndSubtitlesService.formatStandardizedEpisodeInfo(
+            seriesTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(rawTitle),
+            pageTitle = rawTitle,
+            lastSearchQuery = "",
+            watchPageUrl = sanitizedUrl,
+            embedUrl = "",
+            serverName = "",
+            isSeriesHint = storedIsSeries || storedSeason > 0 || storedEpisode > 0,
+            selectedSeasonHint = storedSeason,
+            currentEpisodeHint = storedEpisode
+          )
+        } else {
+          null
+        }
+
+        val resolvedIsSeries = storedIsSeries || (parsedInfo?.isSeries == true) || storedSeason > 0 || storedEpisode > 0
+        val resolvedSeason = if (storedSeason > 0) storedSeason else if (resolvedIsSeries) (parsedInfo?.seasonNumber ?: 0) else 0
+        val resolvedEpisode = if (storedEpisode > 0) storedEpisode else if (resolvedIsSeries) (parsedInfo?.episodeNumber ?: 0) else 0
+        val cleanTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(rawTitle).ifBlank { rawTitle }
+
+        if (resolvedIsSeries) {
+          val showKey = "${portal.id}|${buildNormalizedContentKey(cleanTitle, null, null, isSeries = false)}"
+          if (showKey.endsWith("|").not() && !seenSeriesPortalKeys.add(showKey)) {
+            continue
+          }
+        }
+
         list.add(
           HistoryEntry(
             id = obj.getString("id"),
-            title = obj.getString("title"),
+            title = cleanTitle,
             url = sanitizedUrl,
             portal = portal,
-            timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+            timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+            seasonNumber = resolvedSeason,
+            episodeNumber = resolvedEpisode,
+            isSeries = resolvedIsSeries
           )
         )
       }
@@ -482,6 +590,9 @@ class TvPreferencesRepository(context: Context) {
         put("url", item.url)
         put("portal", item.portal.id)
         put("timestamp", item.timestamp)
+        put("seasonNumber", item.seasonNumber)
+        put("episodeNumber", item.episodeNumber)
+        put("isSeries", item.isSeries)
       }
       jsonArray.put(obj)
     }

@@ -152,8 +152,8 @@ fun WatchSidePanel(
     when {
       activeServerName.isNotBlank() && activeServerName != "تلقائي" -> activeServerName
       currentActiveServer != null -> currentActiveServer.name
-      isScrapingSeries -> "جاري سحب سيرفرات المشاهدة..."
-      else -> "اضغط لاختيار السيرفر"
+      isScrapingSeries -> "جاري جلب السيرفرات..."
+      else -> "اختر السيرفر"
     }
   }
 
@@ -195,7 +195,7 @@ fun WatchSidePanel(
             Text(
               text = if (searchQuery.isNotBlank()) searchQuery else activePortal.displayNameArabic,
               color = Color.White,
-              fontSize = 12.sp,
+              fontSize = 15.sp,
               fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis
@@ -204,7 +204,7 @@ fun WatchSidePanel(
               Spacer(modifier = Modifier.width(6.dp))
               CircularProgressIndicator(
                 color = CinemaAccent,
-                modifier = Modifier.size(13.dp),
+                modifier = Modifier.size(15.dp),
                 strokeWidth = 2.dp
               )
             }
@@ -219,7 +219,7 @@ fun WatchSidePanel(
             // Switch to Primary Native Player (when in WebView fallback mode)
             if (hasDetectedDirectStream && !isNativePlayerActive) {
               SidePanelFocusPill(
-                label = "المشغل الأساسي",
+                label = "الأساسي",
                 icon = Icons.Default.PlayArrow,
                 containerColor = CinemaSuccess,
                 contentColor = Color.Black,
@@ -231,7 +231,7 @@ fun WatchSidePanel(
 
             // Video Fullscreen button
             SidePanelFocusPill(
-              label = "ملء الشاشة",
+              label = "تكبير",
               icon = Icons.Default.Fullscreen,
               containerColor = CinemaPrimary,
               contentColor = Color.White,
@@ -308,27 +308,27 @@ fun WatchSidePanel(
           ) {
             Box(
               modifier = Modifier
-                .size(30.dp)
+                .size(36.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (isServerSelectorFocused) CinemaFocusGlow else CinemaSuccess.copy(alpha = 0.18f)),
               contentAlignment = Alignment.Center
             ) {
               Icon(
                 imageVector = Icons.Default.Dns,
-                contentDescription = "اختيار سيرفر المشاهدة",
+                contentDescription = "اختيار السيرفر",
                 tint = if (isServerSelectorFocused) Color.Black else CinemaSuccess,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(19.dp)
               )
             }
 
             Column(
               modifier = Modifier.weight(1f),
-              verticalArrangement = Arrangement.spacedBy(1.dp)
+              verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
               Text(
-                text = "السيرفر النشط (${serverCount} متاح)",
+                text = "السيرفر ($serverCount)",
                 color = if (isServerSelectorFocused) CinemaFocusGlow else Color.LightGray,
-                fontSize = 9.5.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -336,7 +336,7 @@ fun WatchSidePanel(
               Text(
                 text = displayedServerLabel,
                 color = Color.White,
-                fontSize = 12.sp,
+                fontSize = 14.5.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -352,14 +352,14 @@ fun WatchSidePanel(
               )
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
               ) {
                 Text(
                   text = if (serverCount > 0) "تبديل" else "تحديث",
                   color = if (isServerSelectorFocused) Color.Black else CinemaAccent,
-                  fontSize = 10.5.sp,
+                  fontSize = 13.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   softWrap = false
@@ -368,7 +368,7 @@ fun WatchSidePanel(
                   imageVector = Icons.Default.KeyboardArrowDown,
                   contentDescription = null,
                   tint = if (isServerSelectorFocused) Color.Black else CinemaAccent,
-                  modifier = Modifier.size(14.dp)
+                  modifier = Modifier.size(16.dp)
                 )
               }
             }
@@ -391,13 +391,13 @@ fun WatchSidePanel(
                 imageVector = Icons.Default.HighQuality,
                 contentDescription = null,
                 tint = CinemaSuccess,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(16.dp)
               )
               Spacer(modifier = Modifier.width(5.dp))
               Text(
-                text = "جودات الفيديو المتاحة:",
+                text = "الجودة:",
                 color = Color.White,
-                fontSize = 10.5.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 softWrap = false
@@ -431,18 +431,18 @@ fun WatchSidePanel(
                     }
                   ),
                   modifier = Modifier
-                    .heightIn(min = 34.dp)
+                    .heightIn(min = 38.dp)
                     .focusable(interactionSource = qInteraction)
                     .testTag("quality_chip_${qOption.id}")
                 ) {
                   Box(
                     contentAlignment = Alignment.Center,
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                   ) {
                     Text(
                       text = qOption.label,
                       color = if (selected || isFocused) Color.Black else Color.White,
-                      fontSize = 10.sp,
+                      fontSize = 13.sp,
                       fontWeight = if (selected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis
@@ -459,20 +459,20 @@ fun WatchSidePanel(
               .clip(RoundedCornerShape(8.dp))
               .background(CinemaSurface)
               .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-              .padding(horizontal = 8.dp, vertical = 4.dp),
+              .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
           ) {
             Icon(
               imageVector = Icons.Default.HighQuality,
               contentDescription = null,
               tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
-              modifier = Modifier.size(14.dp)
+              modifier = Modifier.size(16.dp)
             )
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(5.dp))
             Text(
-              text = if (detectedQualities.isNotEmpty()) "جودات الفيديو:" else "الجودة:",
+              text = "الجودة:",
               color = Color.White,
-              fontSize = 10.sp,
+              fontSize = 13.sp,
               fontWeight = FontWeight.Bold,
               maxLines = 1,
               softWrap = false
@@ -507,7 +507,7 @@ fun WatchSidePanel(
                       }
                     ),
                     modifier = Modifier
-                      .heightIn(min = 34.dp)
+                      .heightIn(min = 38.dp)
                       .bringIntoViewRequester(bringIntoViewRequester)
                       .onFocusChanged { state ->
                         if (state.isFocused) {
@@ -519,12 +519,12 @@ fun WatchSidePanel(
                   ) {
                     Box(
                       contentAlignment = Alignment.Center,
-                      modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                     ) {
                       Text(
                         text = qOption.label,
                         color = if (selected || isFocused) Color.Black else Color.White,
-                        fontSize = 10.sp,
+                        fontSize = 13.sp,
                         fontWeight = if (selected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
                         maxLines = 1,
                         softWrap = false
@@ -535,14 +535,14 @@ fun WatchSidePanel(
               }
             } else {
               val savedLabel = when (currentQuality.lowercase()) {
-                "lowest" -> "أقل جودة (توفير الباقة) • جاري رصد الجودات..."
-                "auto" -> "تلقائي Auto • جاري رصد الجودات..."
-                else -> "${currentQuality}p (محفوظة) • جاري رصد الجودات..."
+                "lowest" -> "توفير الباقة • جاري الفحص..."
+                "auto" -> "تلقائي • جاري الفحص..."
+                else -> "${currentQuality}p • جاري الفحص..."
               }
               Text(
                 text = savedLabel,
                 color = CinemaAccent,
-                fontSize = 10.sp,
+                fontSize = 12.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -552,7 +552,7 @@ fun WatchSidePanel(
           }
         }
 
-        // 4. Mode Switcher Tabs: [📺 المواسم والحلقات] vs [🌐 لستة المصادر والنتائج]
+        // 4. Mode Switcher Tabs: [📺 الحلقات] vs [🌐 المصادر]
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -578,12 +578,12 @@ fun WatchSidePanel(
             ),
             modifier = Modifier
               .weight(1f)
-              .heightIn(min = 38.dp)
+              .heightIn(min = 44.dp)
               .focusable(interactionSource = tab0Interaction)
               .testTag("tab_seasons_episodes")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
               horizontalArrangement = Arrangement.Center,
               verticalAlignment = Alignment.CenterVertically
             ) {
@@ -591,13 +591,13 @@ fun WatchSidePanel(
                 imageVector = Icons.Default.VideoLibrary,
                 contentDescription = null,
                 tint = if (activeSubTab == 0 || isTab0Focused) Color.Black else CinemaAccent,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(16.dp)
               )
-              Spacer(modifier = Modifier.width(5.dp))
+              Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "المواسم والحلقات (${seriesStructure.episodes.size})",
+                text = "الحلقات (${seriesStructure.episodes.size})",
                 color = if (activeSubTab == 0 || isTab0Focused) Color.Black else Color.White,
-                fontSize = 11.sp,
+                fontSize = 13.5.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
@@ -626,12 +626,12 @@ fun WatchSidePanel(
             ),
             modifier = Modifier
               .weight(1f)
-              .heightIn(min = 38.dp)
+              .heightIn(min = 44.dp)
               .focusable(interactionSource = tab1Interaction)
               .testTag("tab_alternative_sources")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
               horizontalArrangement = Arrangement.Center,
               verticalAlignment = Alignment.CenterVertically
             ) {
@@ -639,13 +639,13 @@ fun WatchSidePanel(
                 imageVector = Icons.Default.Layers,
                 contentDescription = null,
                 tint = if (activeSubTab == 1 || isTab1Focused) Color.Black else CinemaPrimary,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(16.dp)
               )
-              Spacer(modifier = Modifier.width(5.dp))
+              Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "لستة المصادر والنتائج",
+                text = "المصادر",
                 color = if (activeSubTab == 1 || isTab1Focused) Color.Black else Color.White,
-                fontSize = 11.sp,
+                fontSize = 13.5.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
@@ -678,15 +678,15 @@ fun WatchSidePanel(
                   horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                   Text(
-                    text = "اختر الموسم (${seriesStructure.seasons.size} مواسم):",
+                    text = "المواسم (${seriesStructure.seasons.size})",
                     color = CinemaAccent,
-                    fontSize = 11.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.ExtraBold
                   )
                   Text(
-                    text = "الموسم الحالي: ${seriesStructure.selectedSeasonNumber}",
+                    text = "الموسم ${seriesStructure.selectedSeasonNumber}",
                     color = Color.LightGray,
-                    fontSize = 10.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
                   )
                 }
@@ -730,7 +730,7 @@ fun WatchSidePanel(
                         }
                       ),
                       modifier = Modifier
-                        .heightIn(min = 42.dp)
+                        .heightIn(min = 46.dp)
                         .bringIntoViewRequester(bringIntoView)
                         .onFocusChanged { if (it.isFocused) contentScope.launch { bringIntoView.bringIntoView() } }
                         .focusable(interactionSource = sInteraction)
@@ -738,12 +738,12 @@ fun WatchSidePanel(
                     ) {
                       Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                       ) {
                         Text(
                           text = season.title,
                           color = if (isFocused) Color.Black else Color.White,
-                          fontSize = 12.sp,
+                          fontSize = 14.5.sp,
                           fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
                           maxLines = 1,
                           softWrap = false
@@ -754,7 +754,7 @@ fun WatchSidePanel(
                 }
               }
 
-              // Expanded Multi-Row Episodes Grid (48dp touch/focus targets + crisp D-Pad ring)
+              // Expanded Multi-Row Episodes Grid (50dp touch/focus targets + crisp D-Pad ring)
               if (seriesStructure.episodes.isNotEmpty()) {
                 Row(
                   modifier = Modifier.fillMaxWidth(),
@@ -762,15 +762,15 @@ fun WatchSidePanel(
                   horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                   Text(
-                    text = "اختر الحلقة للتشغيل الفوري (${seriesStructure.episodes.size} حلقة متاحة):",
+                    text = "الحلقات (${seriesStructure.episodes.size})",
                     color = Color.White,
-                    fontSize = 12.sp,
+                    fontSize = 14.5.sp,
                     fontWeight = FontWeight.ExtraBold
                   )
                 }
 
                 LazyVerticalGrid(
-                  columns = GridCells.Adaptive(minSize = 104.dp),
+                  columns = GridCells.Adaptive(minSize = 116.dp),
                   modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -802,7 +802,7 @@ fun WatchSidePanel(
                       ),
                       modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 48.dp)
+                        .heightIn(min = 50.dp)
                         .scale(if (isFocused) 1.03f else 1.0f)
                         .bringIntoViewRequester(bringIntoView)
                         .onFocusChanged { if (it.isFocused) contentScope.launch { bringIntoView.bringIntoView() } }
@@ -824,13 +824,13 @@ fun WatchSidePanel(
                             isCurrentEp -> Color.White
                             else -> CinemaAccent
                           },
-                          modifier = Modifier.size(15.dp)
+                          modifier = Modifier.size(17.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                          text = "الحلقة ${ep.episodeNumber}",
+                          text = "حلقة ${ep.episodeNumber}",
                           color = if (isFocused) Color.Black else Color.White,
-                          fontSize = 12.sp,
+                          fontSize = 14.5.sp,
                           fontWeight = FontWeight.ExtraBold,
                           maxLines = 1,
                           overflow = TextOverflow.Ellipsis,
@@ -849,12 +849,12 @@ fun WatchSidePanel(
                 ) {
                   Text(
                     text = if (isScrapingSeries) {
-                      "جاري استخراج المواسم والحلقات..."
+                      "جاري تحميل الحلقات..."
                     } else {
-                      "هذا العمل فيلم، أو يمكنك اختيار الحلقة من تبويب \"لستة المصادر والنتائج\" بجواره."
+                      "هذا فيلم، أو اختر من تبويب المصادر"
                     },
                     color = Color.LightGray,
-                    fontSize = 12.sp,
+                    fontSize = 14.sp,
                     textAlign = TextAlign.Center
                   )
                 }
@@ -896,7 +896,7 @@ fun WatchSidePanel(
                       }
                     ),
                     modifier = Modifier
-                      .heightIn(min = 38.dp)
+                      .heightIn(min = 42.dp)
                       .bringIntoViewRequester(bringIntoView)
                       .onFocusChanged { if (it.isFocused) sourceScope.launch { bringIntoView.bringIntoView() } }
                       .focusable(interactionSource = pInteraction)
@@ -904,12 +904,12 @@ fun WatchSidePanel(
                   ) {
                     Box(
                       contentAlignment = Alignment.Center,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                      modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                     ) {
                       Text(
                         text = if (count > 0) "${portal.displayNameArabic} ($count)" else portal.displayNameArabic,
                         color = if (isSelected || isFocused) Color.Black else Color.LightGray,
-                        fontSize = 11.sp,
+                        fontSize = 13.5.sp,
                         fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false
@@ -935,7 +935,7 @@ fun WatchSidePanel(
                     Row(
                       modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 48.dp)
+                        .heightIn(min = 52.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(
                           when {
@@ -969,15 +969,15 @@ fun WatchSidePanel(
                         Text(
                           text = resultItem.title,
                           color = Color.White,
-                          fontSize = 11.5.sp,
+                          fontSize = 14.sp,
                           fontWeight = FontWeight.SemiBold,
                           maxLines = 1,
                           overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                          text = "${selectedPortalTab.displayNameArabic} • ${resultItem.type} • ${resultItem.quality}",
+                          text = "${selectedPortalTab.displayNameArabic} • ${resultItem.type}",
                           color = Color.LightGray,
-                          fontSize = 10.sp,
+                          fontSize = 12.5.sp,
                           maxLines = 1,
                           overflow = TextOverflow.Ellipsis
                         )
@@ -993,12 +993,12 @@ fun WatchSidePanel(
                               else -> CinemaPrimary
                             }
                           )
-                          .padding(horizontal = 8.dp, vertical = 5.dp)
+                          .padding(horizontal = 10.dp, vertical = 6.dp)
                       ) {
                         Text(
-                          text = if (isCurrentUrl) "يعمل الآن" else "تشغيل ▶",
+                          text = if (isCurrentUrl) "يعمل" else "تشغيل",
                           color = if (isFocused) Color.Black else Color.White,
-                          fontSize = 10.sp,
+                          fontSize = 12.5.sp,
                           fontWeight = FontWeight.ExtraBold,
                           maxLines = 1,
                           softWrap = false
@@ -1028,7 +1028,7 @@ fun WatchSidePanel(
                       color = if (isSearchBtnFocused) Color.White else CinemaBorder
                     ),
                     shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                     modifier = Modifier
                       .fillMaxWidth()
                       .heightIn(min = 48.dp)
@@ -1036,8 +1036,8 @@ fun WatchSidePanel(
                       .testTag("btn_search_selected_portal")
                   ) {
                     Text(
-                      text = "البحث عن العمل في ${selectedPortalTab.displayNameArabic} 🔍",
-                      fontSize = 11.5.sp,
+                      text = "بحث في ${selectedPortalTab.displayNameArabic}",
+                      fontSize = 14.sp,
                       fontWeight = FontWeight.Bold,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis
@@ -1149,17 +1149,17 @@ private fun ServerSelectorTvModal(
               }
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                  text = "اختيار سيرفر المشاهدة (${servers.size})",
+                  text = "السيرفرات (${servers.size})",
                   color = Color.White,
-                  fontSize = 15.5.sp,
+                  fontSize = 18.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                  text = "تنقل بالأسهم يمين / يسار واضغط OK للتشغيل الفوري",
+                  text = "اختر بالأسهم واضغط OK",
                   color = Color.LightGray,
-                  fontSize = 11.sp,
+                  fontSize = 13.5.sp,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
@@ -1212,9 +1212,9 @@ private fun ServerSelectorTvModal(
                 modifier = Modifier.size(16.dp)
               )
               Text(
-                text = "السيرفر الحالي: $activeServerName",
+                text = "الحالي: $activeServerName",
                 color = Color.White,
-                fontSize = 11.5.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1258,8 +1258,8 @@ private fun ServerSelectorTvModal(
                 ),
                 shadowElevation = if (isFocused) 14.dp else 2.dp,
                 modifier = Modifier
-                  .width(196.dp)
-                  .heightIn(min = 108.dp)
+                  .width(220.dp)
+                  .heightIn(min = 120.dp)
                   .scale(if (isFocused) 1.04f else 1.0f)
                   .bringIntoViewRequester(bringIntoViewRequester)
                   .focusRequester(focusRequesters[index])
@@ -1276,7 +1276,7 @@ private fun ServerSelectorTvModal(
                 Column(
                   modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
+                    .padding(13.dp),
                   verticalArrangement = Arrangement.SpaceBetween
                 ) {
                   Row(
@@ -1295,9 +1295,9 @@ private fun ServerSelectorTvModal(
                       Text(
                         text = "#${index + 1}",
                         color = if (isFocused || isSelected) Color.Black else CinemaAccent,
-                        fontSize = 10.5.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                       )
                     }
 
@@ -1307,18 +1307,18 @@ private fun ServerSelectorTvModal(
                         shape = RoundedCornerShape(6.dp)
                       ) {
                         Text(
-                          text = "يعمل الآن ✓",
+                          text = "يعمل ✓",
                           color = Color.Black,
-                          fontSize = 9.5.sp,
+                          fontSize = 12.sp,
                           fontWeight = FontWeight.ExtraBold,
-                          modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                          modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                         )
                       }
                     } else if (srv.isDirectEmbed) {
                       Text(
                         text = "مباشر ⚡",
                         color = CinemaSuccess,
-                        fontSize = 9.5.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                       )
                     }
@@ -1329,11 +1329,11 @@ private fun ServerSelectorTvModal(
                   Text(
                     text = srv.name,
                     color = Color.White,
-                    fontSize = 12.5.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    lineHeight = 17.sp
+                    lineHeight = 20.sp
                   )
 
                   Spacer(modifier = Modifier.height(8.dp))
@@ -1346,7 +1346,7 @@ private fun ServerSelectorTvModal(
                     Text(
                       text = srv.qualityLabel.ifBlank { "Auto HD" },
                       color = if (isFocused) CinemaFocusGlow else Color.LightGray,
-                      fontSize = 10.sp,
+                      fontSize = 12.5.sp,
                       fontWeight = FontWeight.SemiBold,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis,
@@ -1356,7 +1356,7 @@ private fun ServerSelectorTvModal(
                       imageVector = Icons.Default.PlayArrow,
                       contentDescription = null,
                       tint = if (isFocused) CinemaFocusGlow else CinemaSuccess,
-                      modifier = Modifier.size(18.dp)
+                      modifier = Modifier.size(20.dp)
                     )
                   }
                 }
@@ -1392,25 +1392,25 @@ private fun SidePanelFocusPill(
       color = if (isFocused) Color.White else borderColor
     ),
     modifier = Modifier
-      .heightIn(min = 32.dp)
+      .heightIn(min = 38.dp)
       .focusable(interactionSource = interactionSource)
       .testTag(testTag)
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically
     ) {
       Icon(
         imageVector = icon,
         contentDescription = null,
         tint = if (isFocused) Color.Black else iconTint,
-        modifier = Modifier.size(13.dp)
+        modifier = Modifier.size(16.dp)
       )
-      Spacer(modifier = Modifier.width(3.dp))
+      Spacer(modifier = Modifier.width(4.dp))
       Text(
         text = label,
         color = if (isFocused) Color.Black else contentColor,
-        fontSize = 9.5.sp,
+        fontSize = 12.5.sp,
         fontWeight = FontWeight.ExtraBold,
         maxLines = 1,
         softWrap = false
@@ -1439,7 +1439,7 @@ private fun SidePanelSquareIconBtn(
       color = if (isFocused) Color.White else CinemaBorder
     ),
     modifier = Modifier
-      .size(32.dp)
+      .size(38.dp)
       .focusable(interactionSource = interactionSource)
       .testTag(testTag)
   ) {
@@ -1448,7 +1448,7 @@ private fun SidePanelSquareIconBtn(
         imageVector = icon,
         contentDescription = contentDescription,
         tint = if (isFocused) Color.Black else tint,
-        modifier = Modifier.size(15.dp)
+        modifier = Modifier.size(18.dp)
       )
     }
   }

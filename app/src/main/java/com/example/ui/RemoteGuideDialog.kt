@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -81,14 +82,14 @@ fun RemoteGuideDialog(
             Spacer(modifier = Modifier.width(10.dp))
             Column {
               Text(
-                text = "دليل استخدام ريموت BeoutQ QS285 و Android TV",
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
+                text = "دليل الريموت",
+                fontSize = 19.sp,
+                fontWeight = FontWeight.ExtraBold,
                 color = Color.White
               )
               Text(
-                text = "تحكم سلس وسريع بجميع مزايا العرض وتشغيل الوسائط",
-                fontSize = 12.sp,
+                text = "اختصارات التحكم السريع",
+                fontSize = 14.sp,
                 color = Color.LightGray
               )
             }
@@ -106,7 +107,7 @@ fun RemoteGuideDialog(
           }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         Column(
           modifier = Modifier
@@ -115,56 +116,56 @@ fun RemoteGuideDialog(
           verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
           RemoteKeyInfoRow(
-            keyBadge = "D-Pad الأسهم",
+            keyBadge = "الأسهم",
             badgeColor = CinemaSecondary,
-            title = "التنقل والتمرير / تحريك الماوس",
-            description = "في الوضع الافتراضي تقوم الأسهم بالتمرير لأعلى وأسفل، وفي وضع الماوس تحرك المؤشر بدقة فوق مشغلات الفيديو والأزرار."
+            title = "التنقل / الماوس",
+            description = "تنقل بين القوائم أو حرّك مؤشر الماوس"
           )
 
           RemoteKeyInfoRow(
             keyBadge = "OK / الوسط",
             badgeColor = CinemaAccent,
-            title = "الاختيار والنقر المباشر",
-            description = "يقوم بالنقر على الروابط أو إرسال نقرة حقيقية في المكان الذي يقف عليه مؤشر الماوس لتشغيل السيرفرات."
+            title = "الاختيار والنقر",
+            description = "فتح العنصر المحدد أو النقر بالماوس"
           )
 
           RemoteKeyInfoRow(
-            keyBadge = "Menu القائمة",
+            keyBadge = "Menu",
             badgeColor = CinemaPrimary,
-            title = "إظهار أو إخفاء شريط الأدوات",
-            description = "اضغط زر Menu في أي لحظة لإخفاء الشريط العلوي والتمتع بكامل الشاشة 100%، أو إظهاره للتبديل بين المواقع."
+            title = "شريط الأدوات",
+            description = "إظهار أو إخفاء الشريط العلوي"
           )
 
           RemoteKeyInfoRow(
-            keyBadge = "Back الرجوع",
+            keyBadge = "Back",
             badgeColor = Color(0xFF64748B),
-            title = "الرجوع / خروج ملء الشاشة",
-            description = "يرجعك للصفحة السابقة في المتصفح، أو يخرج من وضع الفيديو بملء الشاشة."
+            title = "الرجوع",
+            description = "رجوع للخلف أو الخروج من ملء الشاشة"
           )
 
           RemoteKeyInfoRow(
             keyBadge = "Play / Pause",
             badgeColor = CinemaSuccess,
-            title = "إيقاف وتشغيل الفيديو",
-            description = "زر التشغيل والإيقاف في الريموت يتحكم مباشرة بمشغل الفيديو في TopCinema و WatchSeries."
+            title = "تشغيل وإيقاف",
+            description = "تحكم مباشر بمشغل الفيديو"
           )
 
           RemoteKeyInfoRow(
-            keyBadge = "الزر الأصفر / الأزرق",
+            keyBadge = "أصفر / أزرق",
             badgeColor = Color(0xFFEAB308),
             title = "اختصارات سريعة",
-            description = "الزر الأصفر يبدل وضع الماوس مباشرة، والزر الأزرق يفعل وضع ملء الشاشة الكامل."
+            description = "الأصفر للماوس والأزرق لملء الشاشة"
           )
 
           RemoteKeyInfoRow(
-            keyBadge = "أيقونة الجودة ⚙️",
+            keyBadge = "الترس ⚙️",
             badgeColor = Color(0xFFFFB300),
-            title = "التحكم بجودة الفيديو (240p - 1080p)",
-            description = "أيقونة HighQuality في الشريط العلوي تتيح لك اختيار الجودة بسهولة، كما تظهر الجودات فوراً داخل مشغل الفيديو عند النقر على الترس."
+            title = "إعدادات المشغل",
+            description = "الجودة والترجمة والسرعة والأبعاد"
           )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         Box(
           modifier = Modifier.fillMaxWidth(),
@@ -173,9 +174,10 @@ fun RemoteGuideDialog(
           Button(
             onClick = onDismiss,
             colors = ButtonDefaults.buttonColors(containerColor = CinemaPrimary),
-            shape = RoundedCornerShape(8.dp)
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.heightIn(min = 48.dp)
           ) {
-            Text(text = "فهمت، ابدأ المشاهدة", color = Color.White, fontWeight = FontWeight.Bold)
+            Text(text = "حسناً", color = Color.White, fontSize = 15.5.sp, fontWeight = FontWeight.ExtraBold)
           }
         }
       }
@@ -201,18 +203,18 @@ fun RemoteKeyInfoRow(
   ) {
     Box(
       modifier = Modifier
-        .width(130.dp)
+        .width(140.dp)
         .clip(RoundedCornerShape(6.dp))
         .background(badgeColor.copy(alpha = 0.2f))
         .border(1.dp, badgeColor, RoundedCornerShape(6.dp))
-        .padding(horizontal = 8.dp, vertical = 6.dp),
+        .padding(horizontal = 8.dp, vertical = 7.dp),
       contentAlignment = Alignment.Center
     ) {
       Text(
         text = keyBadge,
         color = badgeColor,
-        fontWeight = FontWeight.Bold,
-        fontSize = 12.sp
+        fontWeight = FontWeight.ExtraBold,
+        fontSize = 14.sp
       )
     }
 
@@ -222,13 +224,13 @@ fun RemoteKeyInfoRow(
       Text(
         text = title,
         color = Color.White,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 13.sp
+        fontWeight = FontWeight.Bold,
+        fontSize = 15.5.sp
       )
       Text(
         text = description,
         color = Color.LightGray,
-        fontSize = 11.sp
+        fontSize = 13.5.sp
       )
     }
   }

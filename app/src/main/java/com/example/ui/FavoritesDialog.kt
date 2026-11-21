@@ -96,9 +96,9 @@ fun FavoritesDialog(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(
-              text = "قائمة المفضلة المحفوظة",
-              fontSize = 17.sp,
-              fontWeight = FontWeight.Bold,
+              text = "المفضلة",
+              fontSize = 19.sp,
+              fontWeight = FontWeight.ExtraBold,
               color = Color.White,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis
@@ -123,13 +123,14 @@ fun FavoritesDialog(
           Box(
             modifier = Modifier
               .fillMaxWidth()
-              .height(180.dp),
+              .height(160.dp),
             contentAlignment = Alignment.Center
           ) {
             Text(
-              text = "لم تقم بحفظ أي فيلم أو مسلسل في المفضلة بعد.\nاضغط على زر (حفظ) في الشريط العلوي أثناء المشاهدة.",
-              color = Color.Gray,
-              fontSize = 14.sp,
+              text = "لا توجد مفضلة بعد",
+              color = Color.LightGray,
+              fontSize = 16.sp,
+              fontWeight = FontWeight.SemiBold,
               textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
           }
@@ -191,35 +192,35 @@ fun BookmarkItemCard(
         imageVector = if (bookmark.portal == StreamingPortal.TOP_CINEMA) Icons.Default.Movie else Icons.Default.Tv,
         contentDescription = null,
         tint = if (bookmark.portal == StreamingPortal.TOP_CINEMA) CinemaPrimary else CinemaSecondary,
-        modifier = Modifier.size(20.dp)
+        modifier = Modifier.size(22.dp)
       )
       Spacer(modifier = Modifier.width(12.dp))
       Column {
         Text(
           text = bookmark.title,
           color = Color.White,
-          fontSize = 14.sp,
-          fontWeight = FontWeight.SemiBold,
+          fontSize = 16.sp,
+          fontWeight = FontWeight.Bold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
         Text(
-          text = if (bookmark.portal == StreamingPortal.TOP_CINEMA) "توب سينما" else "ووتش سيريز",
-          color = Color.Gray,
-          fontSize = 11.sp
+          text = bookmark.portal.displayNameArabic,
+          color = Color.LightGray,
+          fontSize = 13.5.sp
         )
       }
     }
 
     IconButton(
       onClick = onDelete,
-      modifier = Modifier.size(36.dp)
+      modifier = Modifier.size(42.dp)
     ) {
       Icon(
         imageVector = Icons.Default.Delete,
         contentDescription = "حذف",
-        tint = Color(0xFFEF4444).copy(alpha = 0.8f),
-        modifier = Modifier.size(18.dp)
+        tint = Color(0xFFEF4444).copy(alpha = 0.85f),
+        modifier = Modifier.size(20.dp)
       )
     }
   }

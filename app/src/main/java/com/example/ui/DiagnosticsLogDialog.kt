@@ -209,15 +209,15 @@ fun DiagnosticsLogDialog(
               }
               Column {
                 Text(
-                  text = "سجل الأعطال وتشخيص المشغل (Log)",
+                  text = "سجل الأعطال",
                   color = Color.White,
-                  fontSize = 15.sp,
+                  fontSize = 18.sp,
                   fontWeight = FontWeight.ExtraBold
                 )
                 Text(
-                  text = "انسخ التقرير أو أرسله لهاتفك عبر Send Files to TV أو كود QR",
+                  text = "نسخ أو إرسال اللوج عبر QR",
                   color = Color.LightGray,
-                  fontSize = 10.5.sp
+                  fontSize = 13.sp
                 )
               }
             }
@@ -225,7 +225,7 @@ fun DiagnosticsLogDialog(
             IconButton(
               onClick = onDismiss,
               modifier = Modifier
-                .size(38.dp)
+                .size(42.dp)
                 .clip(CircleShape)
                 .background(CinemaSurface)
                 .testTag("btn_close_diagnostics_dialog")
@@ -234,7 +234,7 @@ fun DiagnosticsLogDialog(
                 imageVector = Icons.Default.Close,
                 contentDescription = "إغلاق",
                 tint = Color.LightGray,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(20.dp)
               )
             }
           }
@@ -271,9 +271,9 @@ fun DiagnosticsLogDialog(
                       modifier = Modifier.size(18.dp)
                     )
                     Text(
-                      text = "⚠️ تقرير آخر انهيار مفاجئ محفوظ (Last Crash Log)",
+                      text = "⚠️ آخر انهيار محفوظ",
                       color = Color(0xFFFF6961),
-                      fontSize = 11.5.sp,
+                      fontSize = 14.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis
@@ -284,30 +284,30 @@ fun DiagnosticsLogDialog(
                     onClick = {
                       AppDiagnosticsLogger.clearLastCrashLog(context)
                       lastCrashLog = null
-                      Toast.makeText(context, "تم مسح سجل الانهيار المحفوظ", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(context, "تم مسح سجل الانهيار", Toast.LENGTH_SHORT).show()
                     },
                     color = Color(0x33FF453A),
                     shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.dp, Color(0xFFFF453A)),
                     modifier = Modifier
-                      .heightIn(min = 32.dp)
+                      .heightIn(min = 38.dp)
                       .testTag("btn_clear_last_crash_log")
                   ) {
                     Row(
-                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                       verticalAlignment = Alignment.CenterVertically,
                       horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                       Icon(
                         imageVector = Icons.Default.DeleteForever,
-                        contentDescription = "مسح سجل الانهيار",
+                        contentDescription = "مسح",
                         tint = Color(0xFFFF8A80),
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(16.dp)
                       )
                       Text(
-                        text = "مسح الانهيار",
+                        text = "مسح",
                         color = Color.White,
-                        fontSize = 10.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold
                       )
                     }
@@ -327,9 +327,9 @@ fun DiagnosticsLogDialog(
                     Text(
                       text = crashText,
                       color = Color(0xFFFFB4AB),
-                      fontSize = 9.5.sp,
+                      fontSize = 11.5.sp,
                       fontFamily = FontFamily.Monospace,
-                      lineHeight = 13.sp
+                      lineHeight = 16.sp
                     )
                   }
                 }
@@ -358,9 +358,9 @@ fun DiagnosticsLogDialog(
                   verticalAlignment = Alignment.CenterVertically
                 ) {
                   Text(
-                    text = "🧭 آخر خطوات التشغيل المحفوظة (SIGKILL Breadcrumbs)",
+                    text = "🧭 آخر خطوات التشغيل",
                     color = CinemaAccent,
-                    fontSize = 11.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -371,30 +371,30 @@ fun DiagnosticsLogDialog(
                     onClick = {
                       AppDiagnosticsLogger.clearLastBreadcrumbs(context)
                       lastBreadcrumbs = null
-                      Toast.makeText(context, "تم مسح سجل الخطوات المحفوظ", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(context, "تم المسح", Toast.LENGTH_SHORT).show()
                     },
                     color = CinemaAccent.copy(alpha = 0.16f),
                     shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f)),
                     modifier = Modifier
-                      .heightIn(min = 30.dp)
+                      .heightIn(min = 36.dp)
                       .testTag("btn_clear_breadcrumbs")
                   ) {
                     Row(
-                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                       verticalAlignment = Alignment.CenterVertically,
                       horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                       Icon(
                         imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = "مسح الخطوات",
+                        contentDescription = "مسح",
                         tint = CinemaAccent,
-                        modifier = Modifier.size(13.dp)
+                        modifier = Modifier.size(15.dp)
                       )
                       Text(
                         text = "مسح",
                         color = Color.White,
-                        fontSize = 10.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold
                       )
                     }
@@ -414,9 +414,9 @@ fun DiagnosticsLogDialog(
                     Text(
                       text = breadcrumbText,
                       color = Color(0xFFFFE0A3),
-                      fontSize = 9.sp,
+                      fontSize = 11.sp,
                       fontFamily = FontFamily.Monospace,
-                      lineHeight = 12.5.sp
+                      lineHeight = 15.sp
                     )
                   }
                 }
@@ -439,20 +439,20 @@ fun DiagnosticsLogDialog(
               contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_copy_diagnostics_log")
             ) {
               Icon(
                 imageVector = Icons.Default.ContentCopy,
                 contentDescription = null,
                 tint = Color.Black,
-                modifier = Modifier.size(17.dp)
+                modifier = Modifier.size(19.dp)
               )
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "نسخ اللوج بالكامل",
+                text = "نسخ اللوج",
                 color = Color.Black,
-                fontSize = 12.sp,
+                fontSize = 14.5.sp,
                 fontWeight = FontWeight.ExtraBold
               )
             }
@@ -462,22 +462,22 @@ fun DiagnosticsLogDialog(
               border = BorderStroke(1.dp, CinemaBorder),
               colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.LightGray),
               shape = RoundedCornerShape(10.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
               modifier = Modifier
-                .heightIn(min = 44.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_clear_diagnostics_log")
             ) {
               Icon(
                 imageVector = Icons.Default.DeleteSweep,
                 contentDescription = null,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(18.dp)
               )
-              Spacer(modifier = Modifier.width(4.dp))
-              Text("مسح", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+              Spacer(modifier = Modifier.width(5.dp))
+              Text("مسح", fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
           }
 
-          // 4. Android TV Easy Export Row: Share Log File (Send Files to TV) + Upload & Show QR Code
+          // 4. Android TV Easy Export Row: Share Log File + Upload & Show QR Code
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -489,23 +489,23 @@ fun DiagnosticsLogDialog(
                 contentColor = Color.Black
               ),
               shape = RoundedCornerShape(10.dp),
-              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_share_log_file")
             ) {
               Icon(
                 imageVector = Icons.Default.Share,
-                contentDescription = "مشاركة ملف اللوج",
+                contentDescription = "مشاركة ملف",
                 tint = Color.Black,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(18.dp)
               )
-              Spacer(modifier = Modifier.width(5.dp))
+              Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "مشاركة ملف (Send Files to TV)",
+                text = "مشاركة ملف",
                 color = Color.Black,
-                fontSize = 10.5.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -520,31 +520,31 @@ fun DiagnosticsLogDialog(
                 contentColor = Color.Black
               ),
               shape = RoundedCornerShape(10.dp),
-              contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_upload_qr_log")
             ) {
               if (isUploadingQr) {
                 CircularProgressIndicator(
                   color = Color.Black,
                   strokeWidth = 2.dp,
-                  modifier = Modifier.size(15.dp)
+                  modifier = Modifier.size(17.dp)
                 )
               } else {
                 Icon(
                   imageVector = Icons.Default.QrCode2,
-                  contentDescription = "رفع وعرض كود QR",
+                  contentDescription = "رفع QR",
                   tint = Color.Black,
-                  modifier = Modifier.size(17.dp)
+                  modifier = Modifier.size(19.dp)
                 )
               }
-              Spacer(modifier = Modifier.width(5.dp))
+              Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = if (isUploadingQr) "جاري الرفع..." else "رفع وعرض كود QR",
+                text = if (isUploadingQr) "جاري الرفع..." else "رفع QR",
                 color = Color.Black,
-                fontSize = 11.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -601,9 +601,9 @@ fun DiagnosticsLogDialog(
                   verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                   Text(
-                    text = "📱 امسح الكود بكاميرا هاتفك لنسخ اللوج فوراً:",
+                    text = "📱 امسح الكود بهاتفك:",
                     color = CinemaSuccess,
-                    fontSize = 11.5.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.ExtraBold
                   )
                   Surface(
@@ -615,7 +615,7 @@ fun DiagnosticsLogDialog(
                       Text(
                         text = shortUrl,
                         color = CinemaAccent,
-                        fontSize = 13.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.ExtraBold,
                         fontFamily = FontFamily.Monospace,
                         textAlign = TextAlign.Center,
@@ -632,23 +632,23 @@ fun DiagnosticsLogDialog(
                       onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         clipboard?.setPrimaryClip(ClipData.newPlainText("AsserTV Paste URL", shortUrl))
-                        Toast.makeText(context, "تم نسخ الرابط المختصر: $shortUrl", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "تم نسخ الرابط", Toast.LENGTH_SHORT).show()
                       },
                       border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f)),
                       colors = ButtonDefaults.outlinedButtonColors(contentColor = CinemaAccent),
-                      contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                      modifier = Modifier.heightIn(min = 34.dp)
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                      modifier = Modifier.heightIn(min = 40.dp)
                     ) {
-                      Text("نسخ الرابط", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                      Text("نسخ", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                     OutlinedButton(
                       onClick = { uploadedPasteUrl = null },
                       border = BorderStroke(1.dp, CinemaBorder),
                       colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.LightGray),
-                      contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                      modifier = Modifier.heightIn(min = 34.dp)
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                      modifier = Modifier.heightIn(min = 40.dp)
                     ) {
-                      Text("إخفاء QR", fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                      Text("إخفاء", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                   }
                 }
@@ -658,7 +658,7 @@ fun DiagnosticsLogDialog(
             Text(
               text = "⚠️ $uploadQrError",
               color = Color(0xFFFF8A80),
-              fontSize = 10.5.sp,
+              fontSize = 13.sp,
               fontWeight = FontWeight.Bold
             )
           }
@@ -675,38 +675,38 @@ fun DiagnosticsLogDialog(
               verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
               Text(
-                text = "المشغل الحالي: ${AppDiagnosticsLogger.activePlayerMode}",
+                text = "المشغل: ${AppDiagnosticsLogger.activePlayerMode}",
                 color = CinemaSuccess,
-                fontSize = 11.sp,
+                fontSize = 13.5.sp,
                 fontWeight = FontWeight.ExtraBold
               )
               Text(
-                text = "السيرفر: ${AppDiagnosticsLogger.activeServerName.ifBlank { "افتراضي" }} • أبعاد البث: ${AppDiagnosticsLogger.actualPlayingResolution}",
+                text = "السيرفر: ${AppDiagnosticsLogger.activeServerName.ifBlank { "افتراضي" }} • الدقة: ${AppDiagnosticsLogger.actualPlayingResolution}",
                 color = Color.White,
-                fontSize = 10.5.sp,
+                fontSize = 13.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
               Text(
-                text = "الجودات الملتقطة: ${AppDiagnosticsLogger.detectedQualitiesSummary}",
+                text = "الجودات: ${AppDiagnosticsLogger.detectedQualitiesSummary}",
                 color = CinemaAccent,
-                fontSize = 10.5.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
               Text(
-                text = "رابط البث المسحوب: ${AppDiagnosticsLogger.extractedStreamUrl.ifBlank { "لم يُسحب رابط مباشر بعد" }}",
+                text = "البث: ${AppDiagnosticsLogger.extractedStreamUrl.ifBlank { "—" }}",
                 color = Color.LightGray,
-                fontSize = 10.sp,
+                fontSize = 12.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
               if (AppDiagnosticsLogger.lastPlayerError != "لا توجد أخطاء") {
                 Text(
-                  text = "آخر خطأ: ${AppDiagnosticsLogger.lastPlayerError}",
+                  text = "الخطأ: ${AppDiagnosticsLogger.lastPlayerError}",
                   color = Color(0xFFFF6B6B),
-                  fontSize = 10.5.sp,
+                  fontSize = 13.sp,
                   fontWeight = FontWeight.Bold,
                   maxLines = 2,
                   overflow = TextOverflow.Ellipsis
@@ -730,9 +730,9 @@ fun DiagnosticsLogDialog(
                 contentAlignment = Alignment.Center
               ) {
                 Text(
-                  text = "لا توجد أحداث مسجلة حالياً. قم بتشغيل أي فيلم أو مسلسل وسيظهر التشخيص هنا تلقائياً.",
-                  color = Color.Gray,
-                  fontSize = 11.sp,
+                  text = "لا توجد أحداث بعد",
+                  color = Color.LightGray,
+                  fontSize = 14.sp,
                   modifier = Modifier.padding(16.dp)
                 )
               }
@@ -754,7 +754,7 @@ fun DiagnosticsLogDialog(
                     Text(
                       text = "${entry.timestamp} [${entry.tag}] ${entry.message}",
                       color = if (entry.isError) Color(0xFFFF8A80) else ClipboxWhite,
-                      fontSize = 10.sp,
+                      fontSize = 12.sp,
                       fontFamily = FontFamily.Monospace
                     )
                   }

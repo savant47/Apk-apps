@@ -76,7 +76,7 @@ fun TvNavBar(
   Box(
     modifier = modifier
       .fillMaxWidth()
-      .heightIn(min = 54.dp)
+      .heightIn(min = 58.dp)
       .background(CinemaDarkBackground)
       .border(width = 1.dp, color = CinemaSurfaceVariant)
       .padding(vertical = 6.dp),
@@ -88,13 +88,13 @@ fun TvNavBar(
         .fillMaxWidth()
         .focusGroup(),
       contentPadding = PaddingValues(horizontal = 8.dp),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      horizontalArrangement = Arrangement.spacedBy(7.dp),
       verticalAlignment = Alignment.CenterVertically
     ) {
       // 1. Asser Browser (Google Search) Button
       item {
         TvNavUtilityButton(
-          label = "بحث جوجل",
+          label = "جوجل",
           icon = Icons.Default.Public,
           isActive = isHomeActive && selectedMainTab == AppMainTab.BROWSER,
           activeColor = Color(0xFF38BDF8),
@@ -163,7 +163,7 @@ fun TvNavBar(
 
       item {
         TvNavUtilityButton(
-          label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس: نشط" else "الماوس",
+          label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس ✓" else "الماوس",
           icon = Icons.Default.Mouse,
           isActive = controlMode == ControlMode.VIRTUAL_MOUSE,
           activeColor = CinemaAccent,
@@ -174,7 +174,7 @@ fun TvNavBar(
 
       item {
         TvNavUtilityButton(
-          label = if (currentDisplayMode == AppDisplayMode.TV) "منظور شاشة" else "منظور هاتف",
+          label = if (currentDisplayMode == AppDisplayMode.TV) "شاشة" else "هاتف",
           icon = if (currentDisplayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
           isActive = true,
           activeColor = Color(0xFF38BDF8),
@@ -205,7 +205,7 @@ private fun TvNavActionButton(
 
   Box(
     modifier = Modifier
-      .heightIn(min = 40.dp)
+      .heightIn(min = 44.dp)
       .graphicsLayer {
         scaleX = scale
         scaleY = scale
@@ -225,7 +225,7 @@ private fun TvNavActionButton(
       )
       // Single focus target via clickable(interactionSource) — no duplicate .focusable() stop!
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-      .padding(horizontal = 10.dp, vertical = 6.dp)
+      .padding(horizontal = 12.dp, vertical = 7.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
   ) {
@@ -238,9 +238,9 @@ private fun TvNavActionButton(
           isSelected -> activeColor
           else -> Color.LightGray
         },
-        modifier = Modifier.size(16.dp)
+        modifier = Modifier.size(18.dp)
       )
-      Spacer(modifier = Modifier.width(5.dp))
+      Spacer(modifier = Modifier.width(6.dp))
       Text(
         text = label,
         color = when {
@@ -248,8 +248,8 @@ private fun TvNavActionButton(
           isSelected -> Color.White
           else -> Color.LightGray
         },
-        fontSize = 11.sp,
-        fontWeight = if (isFocused || isSelected) FontWeight.ExtraBold else FontWeight.Normal,
+        fontSize = 14.sp,
+        fontWeight = if (isFocused || isSelected) FontWeight.ExtraBold else FontWeight.Bold,
         maxLines = 1,
         softWrap = false
       )
@@ -276,7 +276,7 @@ private fun TvNavUtilityButton(
 
   Box(
     modifier = Modifier
-      .heightIn(min = 40.dp)
+      .heightIn(min = 44.dp)
       .graphicsLayer {
         scaleX = scale
         scaleY = scale
@@ -296,7 +296,7 @@ private fun TvNavUtilityButton(
       )
       // Single focus target via clickable(interactionSource) — no duplicate .focusable() stop!
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
-      .padding(horizontal = 10.dp, vertical = 6.dp)
+      .padding(horizontal = 12.dp, vertical = 7.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
   ) {
@@ -309,9 +309,9 @@ private fun TvNavUtilityButton(
           isActive -> activeColor
           else -> Color.LightGray
         },
-        modifier = Modifier.size(16.dp)
+        modifier = Modifier.size(18.dp)
       )
-      Spacer(modifier = Modifier.width(4.dp))
+      Spacer(modifier = Modifier.width(5.dp))
       Text(
         text = label,
         color = when {
@@ -319,8 +319,8 @@ private fun TvNavUtilityButton(
           isActive -> Color.White
           else -> Color.LightGray
         },
-        fontSize = 11.sp,
-        fontWeight = if (isFocused || isActive) FontWeight.ExtraBold else FontWeight.Normal,
+        fontSize = 14.sp,
+        fontWeight = if (isFocused || isActive) FontWeight.ExtraBold else FontWeight.Bold,
         maxLines = 1,
         softWrap = false
       )

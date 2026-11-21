@@ -72,6 +72,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -141,7 +142,7 @@ fun AppMainTabSwitcherBar(
           Text(
             text = "Asser TV",
             color = Color.White,
-            fontSize = 14.5.sp,
+            fontSize = 17.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             softWrap = false
@@ -161,24 +162,24 @@ fun AppMainTabSwitcherBar(
             shape = RoundedCornerShape(8.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
             modifier = Modifier
-              .heightIn(min = 30.dp)
+              .heightIn(min = 34.dp)
               .testTag("top_chip_display_mode")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(3.dp)
+              horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
               Icon(
                 imageVector = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
                 contentDescription = null,
                 tint = Color(0xFF38BDF8),
-                modifier = Modifier.size(13.dp)
+                modifier = Modifier.size(15.dp)
               )
               Text(
                 text = if (displayMode == AppDisplayMode.TV) "شاشة" else "هاتف",
                 color = Color.White,
-                fontSize = 10.5.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
@@ -277,15 +278,15 @@ fun AppMainTabSwitcherBar(
         Text(
           text = "Asser TV",
           color = Color.White,
-          fontSize = 14.sp,
+          fontSize = 17.sp,
           fontWeight = FontWeight.ExtraBold,
           maxLines = 1,
           softWrap = false
         )
 
         MainModeTabItem(
-          title = "Asser Browser",
-          subtitle = "بحث جوجل وتصفح",
+          title = "المتصفح",
+          subtitle = "تصفح وجوجل",
           icon = Icons.Default.Public,
           isSelected = selectedTab == AppMainTab.BROWSER,
           activeColor = Color(0xFF38BDF8),
@@ -314,28 +315,28 @@ fun AppMainTabSwitcherBar(
           .horizontalScroll(rememberScrollState())
       ) {
         QuickTopUtilityChip(
-          label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس: نشط" else "الماوس",
+          label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس ✓" else "الماوس",
           icon = Icons.Default.Mouse,
           tint = if (controlMode == ControlMode.VIRTUAL_MOUSE) CinemaAccent else Color.LightGray,
           onClick = onToggleControlMode,
           testTag = "top_chip_mouse"
         )
         QuickTopUtilityChip(
-          label = if (displayMode == AppDisplayMode.TV) "وضع شاشة/تابلت" else "وضع هاتف",
+          label = if (displayMode == AppDisplayMode.TV) "شاشة" else "هاتف",
           icon = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
           tint = Color(0xFF38BDF8),
           onClick = onOpenDisplayMode,
           testTag = "top_chip_display_mode"
         )
         QuickTopUtilityChip(
-          label = "تحديث جيت هب",
+          label = "تحديث",
           icon = Icons.Default.SystemUpdate,
           tint = CinemaSuccess,
           onClick = onOpenUpdate,
           testTag = "top_chip_update"
         )
         QuickTopUtilityChip(
-          label = "لوج الأعطال",
+          label = "الأعطال",
           icon = Icons.Default.BugReport,
           tint = CinemaAccent,
           onClick = onOpenDiagnostics,
@@ -444,23 +445,23 @@ private fun MainModeTabItem(
         imageVector = icon,
         contentDescription = title,
         tint = if (isSelected) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
-        modifier = Modifier.size(18.dp)
+        modifier = Modifier.size(20.dp)
       )
       Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
           text = title,
           color = Color.White,
-          fontSize = 13.sp,
-          lineHeight = 16.sp,
-          fontWeight = FontWeight.Bold,
+          fontSize = 15.sp,
+          lineHeight = 19.sp,
+          fontWeight = FontWeight.ExtraBold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
         Text(
           text = subtitle,
           color = if (isSelected) activeColor else Color.LightGray,
-          fontSize = 11.sp,
-          lineHeight = 14.sp,
+          fontSize = 12.5.sp,
+          lineHeight = 15.sp,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
@@ -482,7 +483,7 @@ private fun QuickTopUtilityChip(
 
   Box(
     modifier = Modifier
-      .heightIn(min = 40.dp)
+      .heightIn(min = 44.dp)
       .clip(RoundedCornerShape(8.dp))
       .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.25f) else CinemaSurface)
       .border(
@@ -492,7 +493,7 @@ private fun QuickTopUtilityChip(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 10.dp, vertical = 6.dp)
+      .padding(horizontal = 12.dp, vertical = 7.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
   ) {
@@ -504,13 +505,13 @@ private fun QuickTopUtilityChip(
         imageVector = icon,
         contentDescription = label,
         tint = if (isFocused) CinemaFocusGlow else tint,
-        modifier = Modifier.size(15.dp)
+        modifier = Modifier.size(17.dp)
       )
       Text(
         text = label,
         color = if (isFocused) CinemaFocusGlow else Color.White,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
+        fontSize = 13.5.sp,
+        fontWeight = FontWeight.Bold,
         maxLines = 1,
         softWrap = false
       )
@@ -616,28 +617,12 @@ fun BrowserHomeScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-              text = "محرك بحث Google والمتصفح",
+              text = "متصفح Google",
               color = Color.White,
-              fontSize = if (isMobileLayout) 16.sp else 19.sp,
+              fontSize = if (isMobileLayout) 18.sp else 20.sp,
               fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis
-            )
-          }
-
-          Box(
-            modifier = Modifier
-              .clip(RoundedCornerShape(6.dp))
-              .background(Color(0xFF38BDF8).copy(alpha = 0.18f))
-              .padding(horizontal = 8.dp, vertical = 4.dp)
-          ) {
-            Text(
-              text = "سريع وخفيف ⚡",
-              color = Color(0xFF38BDF8),
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
-              maxLines = 1,
-              softWrap = false
             )
           }
         }
@@ -647,11 +632,12 @@ fun BrowserHomeScreen(
         OutlinedTextField(
           value = omniboxInput,
           onValueChange = { omniboxInput = it },
+          textStyle = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium),
           placeholder = {
             Text(
-              text = "ابحث في Google أو اكتب رابط موقع...",
+              text = "ابحث أو اكتب رابطاً...",
               color = Color.Gray,
-              fontSize = 13.sp,
+              fontSize = 15.sp,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis
             )
@@ -659,8 +645,9 @@ fun BrowserHomeScreen(
           leadingIcon = {
             Icon(
               imageVector = Icons.Default.Search,
-              contentDescription = "بحث جوجل أو رابط",
-              tint = Color(0xFF38BDF8)
+              contentDescription = "بحث",
+              tint = Color(0xFF38BDF8),
+              modifier = Modifier.size(22.dp)
             )
           },
           trailingIcon = {
@@ -668,7 +655,7 @@ fun BrowserHomeScreen(
               IconButton(onClick = { omniboxInput = "" }) {
                 Icon(
                   imageVector = Icons.Default.Clear,
-                  contentDescription = "مسح النص",
+                  contentDescription = "مسح",
                   tint = Color.LightGray
                 )
               }
@@ -706,19 +693,19 @@ fun BrowserHomeScreen(
                 onClick = { submitOmnibox(forceGoogleSearch = true) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4)),
                 shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier
                   .weight(1f)
-                  .heightIn(min = 44.dp)
+                  .heightIn(min = 48.dp)
                   .testTag("btn_google_search_submit")
               ) {
-                Icon(Icons.Default.Search, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Search, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                  text = "بحث Google",
+                  text = "جوجل",
                   color = Color.White,
-                  fontWeight = FontWeight.Bold,
-                  fontSize = 13.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  fontSize = 15.sp,
                   maxLines = 1,
                   softWrap = false,
                   overflow = TextOverflow.Ellipsis
@@ -729,19 +716,19 @@ fun BrowserHomeScreen(
                 onClick = { submitOmnibox(forceGoogleSearch = false) },
                 colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
                 shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier
                   .weight(1f)
-                  .heightIn(min = 44.dp)
+                  .heightIn(min = 48.dp)
                   .testTag("btn_omnibox_go")
               ) {
-                Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                   text = "فتح الرابط",
                   color = Color.Black,
-                  fontWeight = FontWeight.Bold,
-                  fontSize = 13.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  fontSize = 15.sp,
                   maxLines = 1,
                   softWrap = false,
                   overflow = TextOverflow.Ellipsis
@@ -753,19 +740,19 @@ fun BrowserHomeScreen(
               onClick = onSwitchToAsserTv,
               colors = ButtonDefaults.buttonColors(containerColor = CinemaPrimary),
               shape = RoundedCornerShape(8.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
               modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 44.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_hero_switch_assertv")
             ) {
-              Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+              Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "🎬 قسم الأفلام والمسلسلات (Asser TV)",
+                text = "Asser TV • أفلام ومسلسلات",
                 color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 15.sp,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis
@@ -782,45 +769,45 @@ fun BrowserHomeScreen(
               onClick = { submitOmnibox(forceGoogleSearch = true) },
               colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4)),
               shape = RoundedCornerShape(8.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 46.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_google_search_submit")
             ) {
-              Icon(Icons.Default.Search, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+              Icon(Icons.Default.Search, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("بحث Google", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, softWrap = false)
+              Text("جوجل", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, maxLines = 1, softWrap = false)
             }
 
             Button(
               onClick = { submitOmnibox(forceGoogleSearch = false) },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
               shape = RoundedCornerShape(8.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 46.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_omnibox_go")
             ) {
-              Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+              Icon(Icons.Default.OpenInBrowser, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("تصفح / فتح الرابط", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, softWrap = false)
+              Text("فتح الرابط", color = Color.Black, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, maxLines = 1, softWrap = false)
             }
 
             Button(
               onClick = onSwitchToAsserTv,
               colors = ButtonDefaults.buttonColors(containerColor = CinemaPrimary),
               shape = RoundedCornerShape(8.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 46.dp)
+                .heightIn(min = 48.dp)
                 .testTag("btn_hero_switch_assertv")
             ) {
-              Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+              Icon(Icons.Default.LiveTv, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("قسم Asser TV 🎬", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, softWrap = false)
+              Text("Asser TV 🎬", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, maxLines = 1, softWrap = false)
             }
           }
         }
@@ -836,7 +823,7 @@ fun BrowserHomeScreen(
             val isFocused by interactionSource.collectIsFocusedAsState()
             Box(
               modifier = Modifier
-                .heightIn(min = 36.dp)
+                .heightIn(min = 40.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.25f) else CinemaSurfaceVariant)
                 .border(
@@ -849,13 +836,14 @@ fun BrowserHomeScreen(
                   submitOmnibox(forceGoogleSearch = true)
                 }
                 .focusable(interactionSource = interactionSource)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 12.dp, vertical = 7.dp),
               contentAlignment = Alignment.Center
             ) {
               Text(
-                text = "🔍 $chip",
+                text = chip,
                 color = if (isFocused) CinemaFocusGlow else Color.White,
-                fontSize = 11.sp,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 softWrap = false
               )
@@ -865,17 +853,17 @@ fun BrowserHomeScreen(
       }
     }
 
-    // 2. Quick Web Sites Grid (2 columns on Mobile so titles are 100% clear, 4 columns on TV/Tablet)
+    // 2. Quick Web Sites Grid
     item {
       Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         Text(
-          text = "🌐 مواقع التصفح السريع",
+          text = "مواقع سريعة",
           color = Color.White,
-          fontSize = 14.sp,
-          fontWeight = FontWeight.Bold,
+          fontSize = 17.sp,
+          fontWeight = FontWeight.ExtraBold,
           maxLines = 1
         )
 
@@ -922,14 +910,14 @@ fun BrowserHomeScreen(
               Icons.Default.PlayCircleFilled,
               contentDescription = null,
               tint = CinemaPrimary,
-              modifier = Modifier.size(18.dp)
+              modifier = Modifier.size(20.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-              text = "🎬 بوابات Asser TV للمشاهدة المباشرة",
+              text = "بوابات Asser TV",
               color = Color.White,
-              fontSize = 13.sp,
-              fontWeight = FontWeight.Bold,
+              fontSize = 16.sp,
+              fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis
             )
@@ -941,17 +929,20 @@ fun BrowserHomeScreen(
             onClick = onSwitchToAsserTv,
             color = CinemaPrimary.copy(alpha = 0.22f),
             shape = RoundedCornerShape(8.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaPrimary)
+            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaPrimary),
+            modifier = Modifier.heightIn(min = 38.dp)
           ) {
-            Text(
-              text = "البحث الموحد ⬅",
-              color = Color.White,
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
-              maxLines = 1,
-              softWrap = false,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-            )
+            Box(contentAlignment = Alignment.Center) {
+              Text(
+                text = "بحث موحد ⬅",
+                color = Color.White,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+              )
+            }
           }
         }
 
@@ -964,7 +955,7 @@ fun BrowserHomeScreen(
             val isFocused by interactionSource.collectIsFocusedAsState()
             Box(
               modifier = Modifier
-                .heightIn(min = 42.dp)
+                .heightIn(min = 44.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(if (isFocused) CinemaPrimary.copy(alpha = 0.3f) else CinemaSurfaceVariant)
                 .border(
@@ -976,18 +967,18 @@ fun BrowserHomeScreen(
                   onOpenWebUrl(portal.homeUrl, portal.displayNameArabic)
                 }
                 .focusable(interactionSource = interactionSource)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .padding(horizontal = 14.dp, vertical = 8.dp)
                 .testTag("browser_quick_portal_${portal.id}"),
               contentAlignment = Alignment.Center
             ) {
               Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LiveTv, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(15.dp))
+                Icon(Icons.Default.LiveTv, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(17.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                  text = "${portal.displayNameArabic} (${portal.displayNameEnglish})",
+                  text = portal.displayNameArabic,
                   color = Color.White,
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.Bold,
+                  fontSize = 14.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   softWrap = false
                 )
@@ -1016,10 +1007,10 @@ fun BrowserHomeScreen(
             verticalAlignment = Alignment.CenterVertically
           ) {
             Text(
-              text = "🕒 آخر الزيارات",
+              text = "آخر الزيارات",
               color = Color.White,
-              fontSize = 13.sp,
-              fontWeight = FontWeight.Bold,
+              fontSize = 16.sp,
+              fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
               modifier = Modifier.weight(1f)
@@ -1028,29 +1019,34 @@ fun BrowserHomeScreen(
               Surface(
                 onClick = onOpenBookmarks,
                 color = CinemaSurfaceVariant,
-                shape = RoundedCornerShape(6.dp)
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.heightIn(min = 36.dp)
               ) {
-                Text(
-                  text = "المفضلة (${bookmarks.size})",
-                  color = CinemaAccent,
-                  fontSize = 11.sp,
-                  maxLines = 1,
-                  softWrap = false,
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
+                Box(contentAlignment = Alignment.Center) {
+                  Text(
+                    text = "المفضلة (${bookmarks.size})",
+                    color = CinemaAccent,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                  )
+                }
               }
               Surface(
                 onClick = { repository.clearHistory() },
                 color = CinemaSurfaceVariant,
-                shape = RoundedCornerShape(6.dp)
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.heightIn(min = 36.dp)
               ) {
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
-                  Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(13.dp))
+                  Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(15.dp))
                   Spacer(modifier = Modifier.width(4.dp))
-                  Text("مسح", color = Color.LightGray, fontSize = 11.sp, maxLines = 1, softWrap = false)
+                  Text("مسح", color = Color.LightGray, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
                 }
               }
             }
@@ -1062,7 +1058,7 @@ fun BrowserHomeScreen(
             Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 46.dp)
+                .heightIn(min = 50.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (isFocused) CinemaSurfaceVariant else Color(0xFF0B0F17))
                 .border(
@@ -1074,7 +1070,7 @@ fun BrowserHomeScreen(
                   onOpenWebUrl(item.url, item.title)
                 }
                 .focusable(interactionSource = interactionSource)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1082,15 +1078,15 @@ fun BrowserHomeScreen(
                 Text(
                   text = item.title.ifBlank { item.url },
                   color = Color.White,
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.Medium,
+                  fontSize = 14.5.sp,
+                  fontWeight = FontWeight.Bold,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
                 Text(
                   text = item.url,
                   color = Color.Gray,
-                  fontSize = 10.sp,
+                  fontSize = 12.sp,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
@@ -1100,7 +1096,7 @@ fun BrowserHomeScreen(
                 imageVector = Icons.Default.OpenInBrowser,
                 contentDescription = "فتح",
                 tint = Color(0xFF38BDF8),
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(18.dp)
               )
             }
           }
@@ -1130,7 +1126,7 @@ private fun QuickWebTileCard(
 
   Box(
     modifier = modifier
-      .heightIn(min = 64.dp)
+      .heightIn(min = 68.dp)
       .clip(RoundedCornerShape(10.dp))
       .background(if (isFocused) accentColor.copy(alpha = 0.22f) else CinemaSurface)
       .border(
@@ -1140,18 +1136,18 @@ private fun QuickWebTileCard(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 10.dp, vertical = 8.dp)
+      .padding(horizontal = 12.dp, vertical = 10.dp)
       .testTag("quick_tile_${site.id}"),
     contentAlignment = Alignment.CenterStart
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
       modifier = Modifier.fillMaxWidth()
     ) {
       Box(
         modifier = Modifier
-          .size(34.dp)
+          .size(38.dp)
           .clip(CircleShape)
           .background(accentColor.copy(alpha = 0.2f)),
         contentAlignment = Alignment.Center
@@ -1160,7 +1156,7 @@ private fun QuickWebTileCard(
           imageVector = icon,
           contentDescription = site.titleArabic,
           tint = accentColor,
-          modifier = Modifier.size(18.dp)
+          modifier = Modifier.size(20.dp)
         )
       }
       Column(
@@ -1170,17 +1166,17 @@ private fun QuickWebTileCard(
         Text(
           text = site.titleArabic,
           color = Color.White,
-          fontSize = 13.sp,
-          lineHeight = 16.sp,
-          fontWeight = FontWeight.Bold,
+          fontSize = 15.sp,
+          lineHeight = 19.sp,
+          fontWeight = FontWeight.ExtraBold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
         Text(
           text = site.titleEnglish,
           color = Color.Gray,
-          fontSize = 10.sp,
-          lineHeight = 13.sp,
+          fontSize = 12.sp,
+          lineHeight = 15.sp,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )

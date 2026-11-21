@@ -211,9 +211,9 @@ fun TvTopBar(
                   ) {
                     if (searchQuery.isEmpty()) {
                       Text(
-                        text = pageTitle.ifBlank { "ابحث في جوجل أو اكتب رابطاً..." },
+                        text = pageTitle.ifBlank { "ابحث أو اكتب رابطاً..." },
                         color = Color.LightGray,
-                        fontSize = 12.sp,
+                        fontSize = 14.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                       )
@@ -224,7 +224,7 @@ fun TvTopBar(
                       singleLine = true,
                       textStyle = TextStyle(
                         color = Color.White,
-                        fontSize = 13.sp
+                        fontSize = 15.sp
                       ),
                       cursorBrush = SolidColor(Color(0xFF38BDF8)),
                       keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -285,7 +285,7 @@ fun TvTopBar(
             ) {
               item {
                 MobileToolPill(
-                  label = "بحث جوجل",
+                  label = "جوجل",
                   icon = Icons.Default.Public,
                   color = Color(0xFF0284C7),
                   onClick = { executeGoogleOrUrlOmnibox() }
@@ -301,7 +301,7 @@ fun TvTopBar(
                   else -> CinemaSurfaceVariant
                 }
                 MobileToolPill(
-                  label = "بحث ${portal.displayNameArabic}",
+                  label = portal.displayNameArabic,
                   icon = Icons.Default.LiveTv,
                   color = btnColor,
                   onClick = { executePortalSearch(portal) },
@@ -311,7 +311,7 @@ fun TvTopBar(
 
               item {
                 MobileToolPill(
-                  label = "حماية AdGuard",
+                  label = "AdGuard",
                   icon = Icons.Default.Shield,
                   color = CinemaSuccess,
                   onClick = onOpenAdBlockSettings,
@@ -329,7 +329,7 @@ fun TvTopBar(
               }
               item {
                 MobileToolPill(
-                  label = "الجودة 480p",
+                  label = "الجودة",
                   icon = Icons.Default.HighQuality,
                   color = Color(0xFF38BDF8),
                   onClick = onOpenQuality,
@@ -338,7 +338,7 @@ fun TvTopBar(
               }
               item {
                 MobileToolPill(
-                  label = "ملء الشاشة",
+                  label = "تكبير",
                   icon = Icons.Default.Fullscreen,
                   color = Color.LightGray,
                   onClick = onToggleFullscreen,
@@ -426,9 +426,9 @@ fun TvTopBar(
                     ) {
                       if (searchQuery.isEmpty()) {
                         Text(
-                          text = "ابحث في جوجل، اكتب رابط موقع، أو اسم فيلم...",
+                          text = "ابحث أو اكتب رابطاً...",
                           color = Color.Gray,
-                          fontSize = 12.sp,
+                          fontSize = 14.sp,
                           maxLines = 1,
                           overflow = TextOverflow.Ellipsis
                         )
@@ -439,7 +439,7 @@ fun TvTopBar(
                         singleLine = true,
                         textStyle = TextStyle(
                           color = Color.White,
-                          fontSize = 13.sp
+                          fontSize = 15.sp
                         ),
                         cursorBrush = SolidColor(Color(0xFF38BDF8)),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -455,13 +455,13 @@ fun TvTopBar(
                     if (searchQuery.isNotEmpty()) {
                       IconButton(
                         onClick = { searchQuery = "" },
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(24.dp)
                       ) {
                         Icon(
                           imageVector = Icons.Default.Clear,
                           contentDescription = "مسح",
                           tint = Color.LightGray,
-                          modifier = Modifier.size(14.dp)
+                          modifier = Modifier.size(16.dp)
                         )
                       }
                     }
@@ -472,14 +472,14 @@ fun TvTopBar(
                   onClick = { executeGoogleOrUrlOmnibox() },
                   colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
                   shape = RoundedCornerShape(6.dp),
-                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                   modifier = Modifier
-                    .heightIn(min = 38.dp)
+                    .heightIn(min = 42.dp)
                     .testTag("topbar_btn_search_google")
                 ) {
-                  Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("جوجل / رابط", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
+                  Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                  Spacer(modifier = Modifier.width(5.dp))
+                  Text("جوجل", fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, maxLines = 1, softWrap = false)
                 }
 
                 StreamingPortal.values().filter { it.isEnabled }.take(2).forEach { portal ->
@@ -494,14 +494,14 @@ fun TvTopBar(
                     onClick = { executePortalSearch(portal) },
                     colors = ButtonDefaults.buttonColors(containerColor = btnColor),
                     shape = RoundedCornerShape(6.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                     modifier = Modifier
-                      .heightIn(min = 38.dp)
+                      .heightIn(min = 42.dp)
                       .testTag("topbar_btn_search_${portal.id}")
                   ) {
-                    Icon(icon, contentDescription = null, modifier = Modifier.size(13.dp), tint = Color.White)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(portal.displayNameArabic, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
+                    Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(portal.displayNameArabic, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, maxLines = 1, softWrap = false)
                   }
                 }
               }
@@ -581,9 +581,9 @@ fun TvTopBar(
                     .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                   Text(
-                    text = if (isGeneralBrowserMode) "Asser Browser" else activePortal.displayNameArabic,
+                    text = if (isGeneralBrowserMode) "المتصفح" else activePortal.displayNameArabic,
                     color = Color.White,
-                    fontSize = 10.sp,
+                    fontSize = 12.5.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     softWrap = false
@@ -593,14 +593,14 @@ fun TvTopBar(
                 Text(
                   text = pageTitle.ifBlank { currentUrl },
                   color = Color.LightGray,
-                  fontSize = 11.sp,
+                  fontSize = 13.5.sp,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
               }
 
               LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
                 modifier = Modifier.weight(0.55f)
               ) {
                 items(quickSuggestions) { suggestion ->
@@ -609,21 +609,22 @@ fun TvTopBar(
 
                   Box(
                     modifier = Modifier
-                      .clip(RoundedCornerShape(4.dp))
+                      .clip(RoundedCornerShape(6.dp))
                       .background(if (isFocused) CinemaFocusGlow.copy(alpha = 0.3f) else CinemaSurfaceVariant)
-                      .border(1.dp, if (isFocused) CinemaFocusGlow else Color.Transparent, RoundedCornerShape(4.dp))
+                      .border(1.dp, if (isFocused) CinemaFocusGlow else Color.Transparent, RoundedCornerShape(6.dp))
                       .clickable(interactionSource = interactionSource, indication = null) {
                         searchQuery = suggestion
                         if (suggestion.contains(".")) executeGoogleOrUrlOmnibox()
                         else executePortalSearch(activePortal)
                       }
                       .focusable(interactionSource = interactionSource)
-                      .padding(horizontal = 6.dp, vertical = 2.dp)
+                      .padding(horizontal = 8.dp, vertical = 3.dp)
                   ) {
                     Text(
                       text = suggestion,
                       color = if (isFocused) CinemaFocusGlow else Color.White,
-                      fontSize = 10.sp,
+                      fontSize = 12.5.sp,
+                      fontWeight = FontWeight.Medium,
                       maxLines = 1,
                       softWrap = false
                     )
@@ -688,21 +689,21 @@ private fun MobileToolPill(
     modifier = if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(4.dp)
+      horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
       Icon(
         imageVector = icon,
         contentDescription = null,
         tint = Color.White,
-        modifier = Modifier.size(13.dp)
+        modifier = Modifier.size(15.dp)
       )
       Text(
         text = label,
         color = Color.White,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
+        fontSize = 13.5.sp,
+        fontWeight = FontWeight.ExtraBold,
         maxLines = 1,
         softWrap = false
       )

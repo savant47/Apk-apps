@@ -86,56 +86,56 @@ fun VideoQualityDialog(
     listOf(
       VideoQualityOption(
         id = TvPreferencesRepository.QUALITY_LOWEST,
-        title = "أقل جودة (توفير الباقة)",
-        subtitle = "يختار تلقائياً أقل دقة متاحة (240p - 480p) لمنع استهلاك الباقة قبل بدء البث",
-        badge = "توفير الباقة",
+        title = "توفير الباقة",
+        subtitle = "أقل دقة متاحة (240p - 480p)",
+        badge = "توفير",
         icon = Icons.Default.Speed,
         color = CinemaSuccess
       ),
       VideoQualityOption(
         id = TvPreferencesRepository.QUALITY_AUTO,
-        title = "تلقائي (Auto)",
-        subtitle = "ضبط ديناميكي حسب سرعة الإنترنت المتوفرة (قد يختار 1080p على الشبكات السريعة)",
+        title = "تلقائي",
+        subtitle = "حسب سرعة الإنترنت",
         badge = "Auto",
         icon = Icons.Default.AutoMode,
         color = CinemaAccent
       ),
       VideoQualityOption(
         id = "1080",
-        title = "جودة فائقة 1080p (FHD)",
-        subtitle = "أعلى نقاء وتفاصيل واضحة جداً للسرعات العالية وشبكات الألياف",
+        title = "1080p فائقة",
+        subtitle = "أعلى وضوح",
         badge = "FHD",
         icon = Icons.Default.Hd,
         color = Color(0xFF38BDF8)
       ),
       VideoQualityOption(
         id = "720",
-        title = "جودة عالية 720p (HD)",
-        subtitle = "توازن مثالي بين وضوح الصورة العالي وسرعة التحميل للشاشات",
+        title = "720p عالية",
+        subtitle = "وضوح وسرعة متوازنة",
         badge = "HD",
         icon = Icons.Default.HighQuality,
         color = CinemaSuccess
       ),
       VideoQualityOption(
         id = "480",
-        title = "جودة متوسطة 480p (SD)",
-        subtitle = "تعمل بسلاسة فائقة وتمنع التقطيع مع سرعات الإنترنت المتوسطة",
-        badge = "480p",
+        title = "480p متوسطة",
+        subtitle = "تشغيل سلس بدون تقطيع",
+        badge = "SD",
         icon = Icons.Default.NetworkCheck,
         color = Color(0xFFFFB300)
       ),
       VideoQualityOption(
         id = "360",
-        title = "جودة موفرة 360p (Data Saver)",
-        subtitle = "توفير عالي لباقة الإنترنت مع صورة واضحة وتشغيل فوري بدون انتظار",
+        title = "360p موفرة",
+        subtitle = "استهلاك بيانات قليل",
         badge = "360p",
         icon = Icons.Default.Speed,
         color = Color(0xFF4CAF50)
       ),
       VideoQualityOption(
         id = "240",
-        title = "جودة اقتصادية 240p (Low)",
-        subtitle = "أسرع تحميل وموفرة جداً لبيانات الإنترنت والشبكات الضعيفة",
+        title = "240p اقتصادية",
+        subtitle = "للشبكات الضعيفة",
         badge = "240p",
         icon = Icons.Default.Speed,
         color = Color(0xFFFF7043)
@@ -188,17 +188,17 @@ fun VideoQualityDialog(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "جودة الفيديو (Video Quality)",
+                text = "جودة الفيديو",
                 color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
               Text(
-                text = "اختر الجودة المناسبة لسرعة اتصالك",
+                text = "اختر الجودة المناسبة",
                 color = Color.LightGray,
-                fontSize = 11.sp,
+                fontSize = 13.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
@@ -276,28 +276,28 @@ fun VideoQualityDialog(
                       Text(
                         text = opt.title,
                         color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.ExtraBold
                       )
                       Spacer(modifier = Modifier.width(8.dp))
                       Box(
                         modifier = Modifier
-                          .background(opt.color.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                          .padding(horizontal = 6.dp, vertical = 2.dp)
+                          .background(opt.color.copy(alpha = 0.2f), RoundedCornerShape(5.dp))
+                          .padding(horizontal = 7.dp, vertical = 2.dp)
                       ) {
                         Text(
                           text = opt.badge,
                           color = opt.color,
-                          fontSize = 10.sp,
+                          fontSize = 12.sp,
                           fontWeight = FontWeight.Bold
                         )
                       }
                     }
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                       text = opt.subtitle,
                       color = Color.LightGray,
-                      fontSize = 11.sp
+                      fontSize = 13.5.sp
                     )
                   }
                 }
@@ -305,7 +305,7 @@ fun VideoQualityDialog(
                 if (isSelected) {
                   Box(
                     modifier = Modifier
-                      .size(24.dp)
+                      .size(26.dp)
                       .background(opt.color, CircleShape),
                     contentAlignment = Alignment.Center
                   ) {
@@ -313,7 +313,7 @@ fun VideoQualityDialog(
                       imageVector = Icons.Default.Check,
                       contentDescription = "محدد",
                       tint = Color.Black,
-                      modifier = Modifier.size(16.dp)
+                      modifier = Modifier.size(18.dp)
                     )
                   }
                 }
@@ -322,7 +322,7 @@ fun VideoQualityDialog(
           }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Info Tip
         Surface(
@@ -332,9 +332,9 @@ fun VideoQualityDialog(
           modifier = Modifier.fillMaxWidth()
         ) {
           Text(
-            text = "💡 نصيحة: يمكنك أيضاً النقر مباشرة على أيقونة الترس ⚙️ في مشغل الفيديو بالأسفل؛ حيث تم تحسين المشغل لعرض الجودات (240p - 720p) بأزرار كبيرة واضحة للشاشات.",
-            color = Color.Gray,
-            fontSize = 11.sp,
+            text = "يمكن تغيير الجودة من الترس ⚙️ داخل المشغل",
+            color = Color.LightGray,
+            fontSize = 13.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(10.dp)
           )
@@ -346,12 +346,12 @@ fun VideoQualityDialog(
           onClick = onDismiss,
           colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
           shape = RoundedCornerShape(8.dp),
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 46.dp)
+            .heightIn(min = 48.dp)
         ) {
-          Text("إغلاق النافذة", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+          Text("إغلاق", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
         }
       }
     }

@@ -104,17 +104,17 @@ fun HistoryDialog(
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "سجل التصفح والمشاهدة",
+                text = "السجل",
                 color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
               Text(
-                text = "${history.size} صفحة تمت زيارتها",
-                color = Color.Gray,
-                fontSize = 11.sp,
+                text = "${history.size} عنصر",
+                color = Color.LightGray,
+                fontSize = 13.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
@@ -129,18 +129,18 @@ fun HistoryDialog(
                 onClick = onClearHistory,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B0000)),
                 shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 modifier = Modifier
-                  .heightIn(min = 38.dp)
+                  .heightIn(min = 44.dp)
                   .testTag("clear_history_btn")
               ) {
                 Icon(
                   imageVector = Icons.Default.DeleteSweep,
                   contentDescription = null,
-                  modifier = Modifier.size(16.dp)
+                  modifier = Modifier.size(18.dp)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("مسح الكل", fontSize = 11.sp, color = Color.White, maxLines = 1, softWrap = false)
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("مسح الكل", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
               }
               Spacer(modifier = Modifier.width(6.dp))
             }
@@ -148,7 +148,7 @@ fun HistoryDialog(
             IconButton(
               onClick = onDismiss,
               modifier = Modifier
-                .size(36.dp)
+                .size(42.dp)
                 .testTag("close_history_btn")
             ) {
               Icon(
@@ -166,7 +166,7 @@ fun HistoryDialog(
           Box(
             modifier = Modifier
               .fillMaxWidth()
-              .height(180.dp),
+              .height(160.dp),
             contentAlignment = Alignment.Center
           ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -176,16 +176,12 @@ fun HistoryDialog(
                 tint = Color.Gray.copy(alpha = 0.5f),
                 modifier = Modifier.size(48.dp)
               )
-              Spacer(modifier = Modifier.height(8.dp))
+              Spacer(modifier = Modifier.height(10.dp))
               Text(
-                text = "لا يوجد سجل زيارات حتى الآن",
-                color = Color.Gray,
-                fontSize = 14.sp
-              )
-              Text(
-                text = "الصفحات والحلقات التي تتصفحها ستظهر هنا لاستئنافها سريعاً",
-                color = Color.DarkGray,
-                fontSize = 11.sp
+                text = "لا يوجد سجل بعد",
+                color = Color.LightGray,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold
               )
             }
           }
@@ -244,7 +240,7 @@ private fun HistoryItemRow(
     ) {
       Box(
         modifier = Modifier
-          .size(34.dp)
+          .size(38.dp)
           .clip(CircleShape)
           .background(portalColor.copy(alpha = 0.2f)),
         contentAlignment = Alignment.Center
@@ -253,7 +249,7 @@ private fun HistoryItemRow(
           imageVector = if (entry.portal == StreamingPortal.TOP_CINEMA) Icons.Default.Movie else Icons.Default.LiveTv,
           contentDescription = null,
           tint = portalColor,
-          modifier = Modifier.size(18.dp)
+          modifier = Modifier.size(20.dp)
         )
       }
 
@@ -263,16 +259,25 @@ private fun HistoryItemRow(
         Text(
           text = entry.title,
           color = Color.White,
-          fontSize = 13.sp,
-          fontWeight = FontWeight.Medium,
+          fontSize = 15.5.sp,
+          fontWeight = FontWeight.Bold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(3.dp))
+        val subtitleText = if (entry.isSeries && entry.seasonNumber > 0 && entry.episodeNumber > 0) {
+          val code = "S${entry.seasonNumber.toString().padStart(2, '0')}E${entry.episodeNumber.toString().padStart(2, '0')}"
+          "الموسم ${entry.seasonNumber} • الحلقة ${entry.episodeNumber} ($code) • ${entry.portal.displayNameArabic}"
+        } else if (entry.isSeries && entry.seasonNumber > 0) {
+          "الموسم ${entry.seasonNumber} • ${entry.portal.displayNameArabic}"
+        } else {
+          entry.portal.displayNameArabic
+        }
         Text(
-          text = entry.url,
-          color = Color.Gray,
-          fontSize = 10.sp,
+          text = subtitleText,
+          color = if (entry.isSeries && entry.seasonNumber > 0) CinemaAccent else Color.LightGray,
+          fontSize = 13.5.sp,
+          fontWeight = if (entry.isSeries && entry.seasonNumber > 0) FontWeight.Bold else FontWeight.Normal,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
@@ -282,25 +287,25 @@ private fun HistoryItemRow(
     Row(verticalAlignment = Alignment.CenterVertically) {
       IconButton(
         onClick = onClick,
-        modifier = Modifier.size(32.dp)
+        modifier = Modifier.size(40.dp)
       ) {
         Icon(
           imageVector = Icons.Default.OpenInBrowser,
-          contentDescription = "فتح في المتصفح",
+          contentDescription = "فتح",
           tint = CinemaAccent,
-          modifier = Modifier.size(18.dp)
+          modifier = Modifier.size(20.dp)
         )
       }
 
       IconButton(
         onClick = onRemove,
-        modifier = Modifier.size(32.dp)
+        modifier = Modifier.size(40.dp)
       ) {
         Icon(
           imageVector = Icons.Default.Delete,
-          contentDescription = "حذف من السجل",
+          contentDescription = "حذف",
           tint = Color.Gray,
-          modifier = Modifier.size(16.dp)
+          modifier = Modifier.size(19.dp)
         )
       }
     }

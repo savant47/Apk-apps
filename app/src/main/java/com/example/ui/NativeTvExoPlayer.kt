@@ -95,12 +95,14 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -744,13 +746,13 @@ fun NativeTvExoPlayer(
           val options = mutableListOf(
             VideoQualityOption(
               id = TvPreferencesRepository.QUALITY_LOWEST,
-              label = "أقل جودة (توفير الباقة • ${lowestHeight}p)",
+              label = "توفير ${lowestHeight}p",
               height = 0,
               isAuto = false
             ),
             VideoQualityOption(
               id = TvPreferencesRepository.QUALITY_AUTO,
-              label = "تلقائي Auto (${sorted.first()}p)",
+              label = "تلقائي ${sorted.first()}p",
               height = 0,
               isAuto = true
             )
@@ -1167,24 +1169,24 @@ fun NativeTvExoPlayer(
         listOf(
           VideoQualityOption(
             id = TvPreferencesRepository.QUALITY_LOWEST,
-            label = "أقل جودة (توفير الباقة)",
+            label = "توفير الباقة",
             height = 0,
             isAuto = false
           )
         ) + availableQualities
       }
     } else {
-      val resSuffix = if (actualVideoResolution.isNotBlank()) " ($actualVideoResolution)" else ""
+      val resSuffix = if (actualVideoResolution.isNotBlank()) " $actualVideoResolution" else ""
       listOf(
         VideoQualityOption(
           id = TvPreferencesRepository.QUALITY_LOWEST,
-          label = "أقل جودة (توفير الباقة)$resSuffix",
+          label = "توفير$resSuffix",
           height = 0,
           isAuto = false
         ),
         VideoQualityOption(
           id = TvPreferencesRepository.QUALITY_AUTO,
-          label = "تلقائي Auto$resSuffix",
+          label = "تلقائي$resSuffix",
           height = 0,
           isAuto = true
         )
@@ -1452,12 +1454,12 @@ fun NativeTvExoPlayer(
             border = BorderStroke(1.5.dp, CinemaAccent),
             shadowElevation = 18.dp,
             modifier = Modifier
-              .widthIn(min = 240.dp, max = 330.dp)
+              .widthIn(min = 270.dp, max = 370.dp)
               .testTag("exo_next_episode_countdown_card")
           ) {
             Column(
-              modifier = Modifier.padding(12.dp),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
+              modifier = Modifier.padding(14.dp),
+              verticalArrangement = Arrangement.spacedBy(9.dp)
             ) {
               Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1467,12 +1469,12 @@ fun NativeTvExoPlayer(
                   imageVector = Icons.Default.SkipNext,
                   contentDescription = null,
                   tint = CinemaAccent,
-                  modifier = Modifier.size(18.dp)
+                  modifier = Modifier.size(20.dp)
                 )
                 Text(
-                  text = "الحلقة التالية تلقائياً خلال ${nextEpisodeCountdownSec}ث",
+                  text = "التالية خلال ${nextEpisodeCountdownSec}ث",
                   color = CinemaAccent,
-                  fontSize = 11.5.sp,
+                  fontSize = 14.sp,
                   fontWeight = FontWeight.ExtraBold
                 )
               }
@@ -1480,7 +1482,7 @@ fun NativeTvExoPlayer(
               Text(
                 text = nextEpisodeTitle ?: "الحلقة التالية",
                 color = Color.White,
-                fontSize = 12.5.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -1492,7 +1494,7 @@ fun NativeTvExoPlayer(
                 trackColor = CinemaSurfaceVariant,
                 modifier = Modifier
                   .fillMaxWidth()
-                  .height(4.dp)
+                  .height(5.dp)
                   .clip(RoundedCornerShape(4.dp))
               )
 
@@ -1511,19 +1513,19 @@ fun NativeTvExoPlayer(
                     contentColor = Color.White
                   ),
                   shape = RoundedCornerShape(8.dp),
-                  contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                   modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 38.dp)
+                    .heightIn(min = 44.dp)
                     .testTag("btn_play_next_episode_now")
                 ) {
                   Icon(
                     imageVector = Icons.Default.SkipNext,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                   )
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("تشغيل الآن", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+                  Spacer(modifier = Modifier.width(5.dp))
+                  Text("تشغيل", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
                 }
 
                 Surface(
@@ -1535,14 +1537,14 @@ fun NativeTvExoPlayer(
                   shape = RoundedCornerShape(8.dp),
                   border = BorderStroke(1.dp, CinemaBorder),
                   modifier = Modifier
-                    .heightIn(min = 38.dp)
+                    .heightIn(min = 44.dp)
                     .testTag("btn_cancel_next_episode_countdown")
                 ) {
                   Box(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                     contentAlignment = Alignment.Center
                   ) {
-                    Text("إلغاء", color = Color.LightGray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("إلغاء", color = Color.LightGray, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                   }
                 }
               }
@@ -1562,24 +1564,24 @@ fun NativeTvExoPlayer(
         CircularProgressIndicator(
           color = CinemaPrimary,
           strokeWidth = 3.dp,
-          modifier = Modifier.size(40.dp)
+          modifier = Modifier.size(44.dp)
         )
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
         Text(
-          text = "جاري سحب البث المباشر إلى المشغل الأساسي...",
+          text = "جاري تشغيل البث...",
           color = Color.White,
-          fontSize = 13.sp,
+          fontSize = 16.sp,
           fontWeight = FontWeight.ExtraBold
         )
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(5.dp))
         Text(
-          text = title.ifBlank { "مشغل Asser TV الأساسي" },
+          text = title.ifBlank { "Asser TV" },
           color = CinemaAccent,
-          fontSize = 11.sp,
+          fontSize = 14.sp,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
         )
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(16.dp))
         Button(
           onClick = onFallbackToWebPlayer,
           colors = ButtonDefaults.buttonColors(
@@ -1588,18 +1590,19 @@ fun NativeTvExoPlayer(
           ),
           border = BorderStroke(1.dp, CinemaBorder),
           shape = RoundedCornerShape(50),
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp)
+          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 9.dp),
+          modifier = Modifier.heightIn(min = 44.dp)
         ) {
           Icon(
             imageVector = Icons.Default.Web,
             contentDescription = null,
             tint = CinemaAccent,
-            modifier = Modifier.size(15.dp)
+            modifier = Modifier.size(18.dp)
           )
           Spacer(modifier = Modifier.width(6.dp))
           Text(
-            text = "التبديل لمشغل السيرفر المدمج",
-            fontSize = 11.sp,
+            text = "مشغل السيرفر",
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold
           )
         }
@@ -1628,23 +1631,23 @@ fun NativeTvExoPlayer(
               horizontal = if (isFullscreen) 16.dp else 10.dp,
               vertical = if (isFullscreen) 14.dp else 8.dp
             )
-            .widthIn(max = if (isFullscreen) 360.dp else 240.dp)
+            .widthIn(max = if (isFullscreen) 420.dp else 280.dp)
             .background(Color(0xB8070A0E), RoundedCornerShape(10.dp))
             .border(1.dp, CinemaAccent.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
             .testTag("exo_top_left_episode_title_container")
         ) {
           Box(
             modifier = Modifier
-              .size(7.dp)
+              .size(8.dp)
               .clip(CircleShape)
               .background(if (isPlayerPaused) CinemaAccent else CinemaSuccess)
           )
-          Spacer(modifier = Modifier.width(7.dp))
+          Spacer(modifier = Modifier.width(8.dp))
           Text(
             text = cleanDisplayTitle,
             color = Color.White,
-            fontSize = if (isFullscreen) 14.5.sp else 12.5.sp,
+            fontSize = if (isFullscreen) 17.sp else 15.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1669,7 +1672,7 @@ fun NativeTvExoPlayer(
         modifier = Modifier.testTag("exo_resize_mode_hud_pill")
       ) {
         Row(
-          modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+          modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -1677,12 +1680,12 @@ fun NativeTvExoPlayer(
             imageVector = Icons.Default.AspectRatio,
             contentDescription = null,
             tint = CinemaAccent,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(22.dp)
           )
           Text(
             text = resizeHudMessage ?: "",
             color = Color.White,
-            fontSize = 14.sp,
+            fontSize = 16.5.sp,
             fontWeight = FontWeight.ExtraBold
           )
         }
@@ -1709,21 +1712,21 @@ fun NativeTvExoPlayer(
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
           Surface(
             color = CinemaDarkBackground.copy(alpha = 0.98f),
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(16.dp),
             border = BorderStroke(1.5.dp, CinemaAccent.copy(alpha = 0.7f)),
             shadowElevation = 18.dp,
             modifier = Modifier
-              .fillMaxWidth(0.92f)
-              .widthIn(max = 430.dp)
+              .fillMaxWidth(0.94f)
+              .widthIn(max = 490.dp)
               .padding(8.dp)
               .clickable(enabled = false) {}
               .testTag("exo_gear_settings_sheet")
           ) {
             Column(
               modifier = Modifier
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
                 .verticalScroll(rememberScrollState()),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
+              verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
               // Sheet Header
               Row(
@@ -1733,26 +1736,26 @@ fun NativeTvExoPlayer(
               ) {
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                  horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                   Icon(
                     imageVector = Icons.Default.Settings,
                     contentDescription = null,
                     tint = CinemaAccent,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                   )
                   Column {
                     Text(
-                      text = "إعدادات المشغل والجودة والترجمة",
+                      text = "إعدادات المشغل",
                       color = Color.White,
-                      fontSize = 12.5.sp,
+                      fontSize = 16.5.sp,
                       fontWeight = FontWeight.ExtraBold
                     )
                     if (actualVideoResolution.isNotBlank()) {
                       Text(
-                        text = "الأبعاد الفعلية للبث الآن: ${AppDiagnosticsLogger.actualPlayingResolution}",
+                        text = "الدقة: ${AppDiagnosticsLogger.actualPlayingResolution}",
                         color = CinemaSuccess,
-                        fontSize = 9.5.sp,
+                        fontSize = 12.5.sp,
                         fontWeight = FontWeight.Bold
                       )
                     }
@@ -1771,18 +1774,18 @@ fun NativeTvExoPlayer(
               // 1. Extracted Video Qualities Section
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 Icon(
                   imageVector = Icons.Default.HighQuality,
                   contentDescription = null,
                   tint = CinemaAccent,
-                  modifier = Modifier.size(15.dp)
+                  modifier = Modifier.size(17.dp)
                 )
                 Text(
-                  text = "جودة الفيديو المستخرجة من السيرفر (${effectiveQualityList.size}):",
+                  text = "الجودة (${effectiveQualityList.size}):",
                   color = CinemaAccent,
-                  fontSize = 11.sp,
+                  fontSize = 14.sp,
                   fontWeight = FontWeight.ExtraBold
                 )
               }
@@ -1791,7 +1794,7 @@ fun NativeTvExoPlayer(
                 modifier = Modifier
                   .fillMaxWidth()
                   .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 effectiveQualityList.forEachIndexed { qIdx, qOpt ->
@@ -1822,27 +1825,27 @@ fun NativeTvExoPlayer(
                       }
                     ),
                     modifier = Modifier
-                      .heightIn(min = 38.dp)
+                      .heightIn(min = 42.dp)
                       .then(if (qIdx == 0) Modifier.focusRequester(gearMenuFirstItemFocusRequester) else Modifier)
                       .testTag("exo_gear_quality_${qOpt.id}")
                   ) {
                     Row(
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                      modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                       verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(4.dp)
+                      horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                       if (isSelected) {
                         Icon(
                           imageVector = Icons.Default.Check,
                           contentDescription = null,
                           tint = Color.Black,
-                          modifier = Modifier.size(13.dp)
+                          modifier = Modifier.size(15.dp)
                         )
                       }
                       Text(
                         text = qOpt.label,
                         color = if (isSelected || isQFocused) Color.Black else Color.White,
-                        fontSize = 11.sp,
+                        fontSize = 13.5.sp,
                         fontWeight = if (isSelected || isQFocused) FontWeight.ExtraBold else FontWeight.Bold,
                         maxLines = 1,
                         softWrap = false
@@ -1852,21 +1855,21 @@ fun NativeTvExoPlayer(
                 }
               }
 
-              // 2. Quick Subtitle Style Controls (Color, Background, Font Size)
+              // 2. Quick Subtitle Style Controls (Color, Size)
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 Icon(
                   imageVector = Icons.Default.Palette,
                   contentDescription = null,
                   tint = CinemaAccent,
-                  modifier = Modifier.size(15.dp)
+                  modifier = Modifier.size(17.dp)
                 )
                 Text(
-                  text = "مظهر الترجمة السريع (اللون • الحجم • الخلفية):",
+                  text = "الترجمة:",
                   color = CinemaAccent,
-                  fontSize = 10.5.sp,
+                  fontSize = 14.sp,
                   fontWeight = FontWeight.ExtraBold
                 )
               }
@@ -1875,7 +1878,7 @@ fun NativeTvExoPlayer(
                 modifier = Modifier
                   .fillMaxWidth()
                   .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 val quickColors = listOf(
@@ -1891,23 +1894,23 @@ fun NativeTvExoPlayer(
                     color = if (isSelected) CinemaPrimary.copy(alpha = 0.3f) else CinemaSurfaceVariant,
                     shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.dp, if (isSelected) Color(argb) else CinemaBorder),
-                    modifier = Modifier.heightIn(min = 28.dp)
+                    modifier = Modifier.heightIn(min = 36.dp)
                   ) {
                     Row(
-                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                       verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(4.dp)
+                      horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                       Box(
                         modifier = Modifier
-                          .size(11.dp)
+                          .size(12.dp)
                           .clip(CircleShape)
                           .background(Color(argb))
                       )
                       Text(
                         text = label,
                         color = Color(argb),
-                        fontSize = 10.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                       )
                     }
@@ -1915,11 +1918,11 @@ fun NativeTvExoPlayer(
                 }
 
                 val quickSizes = listOf(
-                  20f to "20sp",
-                  28f to "28sp",
-                  36f to "36sp",
-                  48f to "48sp",
-                  60f to "60sp"
+                  20f to "20",
+                  28f to "28",
+                  36f to "36",
+                  48f to "48",
+                  60f to "60"
                 )
                 quickSizes.forEach { (sz, lbl) ->
                   val isSelected = subtitleStyle.fontSizeSp.toInt() == sz.toInt()
@@ -1929,15 +1932,15 @@ fun NativeTvExoPlayer(
                     shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.dp, if (isSelected) ClipboxWhite else CinemaBorder),
                     modifier = Modifier
-                      .heightIn(min = 28.dp)
+                      .heightIn(min = 36.dp)
                       .testTag("exo_gear_sub_size_${sz.toInt()}")
                   ) {
                     Text(
                       text = lbl,
                       color = if (isSelected) Color.Black else Color.White,
-                      fontSize = 10.sp,
+                      fontSize = 13.sp,
                       fontWeight = FontWeight.Bold,
-                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                   }
                 }
@@ -1959,36 +1962,36 @@ fun NativeTvExoPlayer(
                 Row(
                   modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically
                 ) {
                   Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                   ) {
                     Icon(
                       imageVector = Icons.Default.Autorenew,
                       contentDescription = null,
                       tint = if (isAutoPlayNextEnabled) CinemaSuccess else Color.Gray,
-                      modifier = Modifier.size(16.dp)
+                      modifier = Modifier.size(18.dp)
                     )
                     Column {
                       Text(
-                        text = "تشغيل الحلقة التالية تلقائياً (مسلسلات)",
+                        text = "الحلقة التالية تلقائياً",
                         color = Color.White,
-                        fontSize = 11.sp,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.ExtraBold
                       )
                       Text(
                         text = if (!nextEpisodeTitle.isNullOrBlank()) {
-                          "الحلقة القادمة: $nextEpisodeTitle"
+                          "القادمة: $nextEpisodeTitle"
                         } else {
-                          "يسحب روابط الحلقة التالية ويشغلها أوتوماتيكياً عند النهاية"
+                          "تشغيل تلقائي عند النهاية"
                         },
                         color = if (isAutoPlayNextEnabled) CinemaSuccess else Color.Gray,
-                        fontSize = 9.5.sp,
+                        fontSize = 12.5.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                       )
@@ -1999,11 +2002,11 @@ fun NativeTvExoPlayer(
                     shape = RoundedCornerShape(50)
                   ) {
                     Text(
-                      text = if (isAutoPlayNextEnabled) "مُفعّل" else "متوقف",
+                      text = if (isAutoPlayNextEnabled) "مفعّل" else "متوقف",
                       color = if (isAutoPlayNextEnabled) Color.Black else Color.LightGray,
-                      fontSize = 10.sp,
+                      fontSize = 12.5.sp,
                       fontWeight = FontWeight.ExtraBold,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                      modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
                     )
                   }
                 }
@@ -2012,18 +2015,18 @@ fun NativeTvExoPlayer(
               // 3. Playback Speed Section
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 Icon(
                   imageVector = Icons.Default.Speed,
                   contentDescription = null,
                   tint = Color.LightGray,
-                  modifier = Modifier.size(15.dp)
+                  modifier = Modifier.size(17.dp)
                 )
                 Text(
-                  text = "سرعة التشغيل (Speed):",
+                  text = "السرعة:",
                   color = Color.LightGray,
-                  fontSize = 10.5.sp,
+                  fontSize = 14.sp,
                   fontWeight = FontWeight.Bold
                 )
               }
@@ -2033,11 +2036,11 @@ fun NativeTvExoPlayer(
                 modifier = Modifier
                   .fillMaxWidth()
                   .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
               ) {
                 speeds.forEach { spd ->
                   val isSpdSelected = currentPlaybackSpeed == spd
-                  val spdLabel = if (spd == 1.0f) "1.0x (عادي)" else "${spd}x"
+                  val spdLabel = if (spd == 1.0f) "1.0x" else "${spd}x"
                   Surface(
                     onClick = {
                       currentPlaybackSpeed = spd
@@ -2050,14 +2053,14 @@ fun NativeTvExoPlayer(
                       1.dp,
                       if (isSpdSelected) ClipboxWhite else CinemaBorder
                     ),
-                    modifier = Modifier.heightIn(min = 28.dp)
+                    modifier = Modifier.heightIn(min = 36.dp)
                   ) {
                     Text(
                       text = spdLabel,
                       color = Color.White,
-                      fontSize = 10.sp,
+                      fontSize = 13.sp,
                       fontWeight = if (isSpdSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                      modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
                       maxLines = 1,
                       softWrap = false
                     )
@@ -2068,18 +2071,18 @@ fun NativeTvExoPlayer(
               // 4. Aspect Ratio & Screen Edges Mode Selector (Fill / Stretch / Fit)
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 Icon(
                   imageVector = Icons.Default.AspectRatio,
                   contentDescription = null,
                   tint = CinemaAccent,
-                  modifier = Modifier.size(15.dp)
+                  modifier = Modifier.size(17.dp)
                 )
                 Text(
-                  text = "أبعاد الشاشة وتمديد الأطراف:",
+                  text = "الأبعاد:",
                   color = CinemaAccent,
-                  fontSize = 10.5.sp,
+                  fontSize = 14.sp,
                   fontWeight = FontWeight.ExtraBold
                 )
               }
@@ -2089,11 +2092,11 @@ fun NativeTvExoPlayer(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
               ) {
                 val resizeOptions = listOf(
-                  Triple(TvPreferencesRepository.RESIZE_MODE_FILL, "ملء الشاشة", "Fill"),
-                  Triple(TvPreferencesRepository.RESIZE_MODE_STRETCH, "تمديد للحدود", "Stretch"),
-                  Triple(TvPreferencesRepository.RESIZE_MODE_FIT, "أصلي", "Fit")
+                  TvPreferencesRepository.RESIZE_MODE_FILL to "ملء",
+                  TvPreferencesRepository.RESIZE_MODE_STRETCH to "تمديد",
+                  TvPreferencesRepository.RESIZE_MODE_FIT to "أصلي"
                 )
-                resizeOptions.forEach { (modeId, arLabel, enLabel) ->
+                resizeOptions.forEach { (modeId, arLabel) ->
                   val isSelected = activeResizeMode == modeId
                   val rInteraction = remember { MutableInteractionSource() }
                   val isRFocused by rInteraction.collectIsFocusedAsState()
@@ -2118,11 +2121,11 @@ fun NativeTvExoPlayer(
                     ),
                     modifier = Modifier
                       .weight(1f)
-                      .heightIn(min = 38.dp)
+                      .heightIn(min = 44.dp)
                       .testTag("exo_gear_resize_$modeId")
                   ) {
                     Row(
-                      modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                       horizontalArrangement = Arrangement.Center,
                       verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -2131,14 +2134,14 @@ fun NativeTvExoPlayer(
                           imageVector = Icons.Default.Check,
                           contentDescription = null,
                           tint = Color.Black,
-                          modifier = Modifier.size(12.dp)
+                          modifier = Modifier.size(15.dp)
                         )
-                        Spacer(modifier = Modifier.width(3.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                       }
                       Text(
-                        text = "$arLabel ($enLabel)",
+                        text = arLabel,
                         color = if (isSelected || isRFocused) Color.Black else Color.White,
-                        fontSize = 9.5.sp,
+                        fontSize = 13.5.sp,
                         fontWeight = if (isSelected || isRFocused) FontWeight.ExtraBold else FontWeight.Bold,
                         maxLines = 1,
                         softWrap = false,
@@ -2166,11 +2169,11 @@ fun NativeTvExoPlayer(
                 ),
                 modifier = Modifier
                   .fillMaxWidth()
-                  .heightIn(min = 38.dp)
+                  .heightIn(min = 44.dp)
                   .testTag("exo_subtitles_button")
               ) {
                 Row(
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                   horizontalArrangement = Arrangement.Center,
                   verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2178,13 +2181,13 @@ fun NativeTvExoPlayer(
                     imageVector = Icons.Default.Subtitles,
                     contentDescription = null,
                     tint = if (isCcFocused) Color.Black else if (activeSubtitle != null) CinemaSuccess else CinemaAccent,
-                    modifier = Modifier.size(15.dp)
+                    modifier = Modifier.size(18.dp)
                   )
-                  Spacer(modifier = Modifier.width(6.dp))
+                  Spacer(modifier = Modifier.width(7.dp))
                   Text(
-                    text = "بحث وإعدادات الترجمة (CC)",
+                    text = "الترجمة (CC)",
                     color = if (isCcFocused) Color.Black else Color.White,
-                    fontSize = 11.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.ExtraBold
                   )
                 }
@@ -2192,7 +2195,7 @@ fun NativeTvExoPlayer(
 
               Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
               ) {
                 // Fullscreen / Exit Fullscreen
                 val fsBtnInteraction = remember { MutableInteractionSource() }
@@ -2215,11 +2218,11 @@ fun NativeTvExoPlayer(
                   ),
                   modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 38.dp)
+                    .heightIn(min = 44.dp)
                     .testTag("exo_fullscreen_button")
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
@@ -2227,13 +2230,13 @@ fun NativeTvExoPlayer(
                       imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
                       contentDescription = null,
                       tint = if (isFullscreen || isFsBtnFocused) Color.Black else Color.White,
-                      modifier = Modifier.size(15.dp)
+                      modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                      text = if (isFullscreen) "تصغير الشاشة" else "ملء الشاشة",
+                      text = if (isFullscreen) "تصغير" else "تكبير",
                       color = if (isFullscreen || isFsBtnFocused) Color.Black else Color.White,
-                      fontSize = 10.5.sp,
+                      fontSize = 14.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
                       softWrap = false
@@ -2258,11 +2261,11 @@ fun NativeTvExoPlayer(
                   ),
                   modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 38.dp)
+                    .heightIn(min = 44.dp)
                     .testTag("close_exo_player_button")
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
@@ -2270,13 +2273,13 @@ fun NativeTvExoPlayer(
                       imageVector = Icons.Default.Web,
                       contentDescription = null,
                       tint = if (isWebBtnFocused) Color.Black else Color.LightGray,
-                      modifier = Modifier.size(15.dp)
+                      modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
                       text = "مشغل السيرفر",
                       color = if (isWebBtnFocused) Color.Black else Color.White,
-                      fontSize = 10.5.sp,
+                      fontSize = 14.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
                       softWrap = false
@@ -2305,11 +2308,11 @@ fun NativeTvExoPlayer(
                   ),
                   modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 38.dp)
+                    .heightIn(min = 44.dp)
                     .testTag("exo_gear_next_episode_button")
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
@@ -2317,13 +2320,13 @@ fun NativeTvExoPlayer(
                       imageVector = Icons.Default.SkipNext,
                       contentDescription = null,
                       tint = if (isNextBtnFocused) Color.Black else CinemaSuccess,
-                      modifier = Modifier.size(16.dp)
+                      modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                      text = "تشغيل الحلقة التالية: $nextEpisodeTitle",
+                      text = "التالية: $nextEpisodeTitle",
                       color = if (isNextBtnFocused) Color.Black else Color.White,
-                      fontSize = 10.5.sp,
+                      fontSize = 14.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis
@@ -2377,15 +2380,15 @@ fun NativeTvExoPlayer(
             border = BorderStroke(1.5.dp, CinemaAccent),
             shadowElevation = 22.dp,
             modifier = Modifier
-              .fillMaxWidth(0.90f)
-              .widthIn(max = 460.dp)
+              .fillMaxWidth(0.92f)
+              .widthIn(max = 490.dp)
               .padding(12.dp)
               .testTag("resume_playback_prompt_card")
           ) {
             Column(
-              modifier = Modifier.padding(18.dp),
+              modifier = Modifier.padding(20.dp),
               horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.spacedBy(12.dp)
+              verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
               Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -2395,21 +2398,21 @@ fun NativeTvExoPlayer(
                   imageVector = Icons.Default.History,
                   contentDescription = null,
                   tint = CinemaAccent,
-                  modifier = Modifier.size(22.dp)
+                  modifier = Modifier.size(24.dp)
                 )
                 Text(
                   text = "استكمال المشاهدة",
                   color = CinemaAccent,
-                  fontSize = 15.sp,
+                  fontSize = 18.sp,
                   fontWeight = FontWeight.ExtraBold
                 )
               }
 
               Text(
-                text = "تم التوقف عند الدقيقة [$formattedTime] — هل تريد الاستكمال من حيث توقفت أم البدء من البداية؟",
+                text = "توقفت عند $formattedTime",
                 color = Color.White,
-                fontSize = 13.5.sp,
-                lineHeight = 20.sp,
+                fontSize = 16.sp,
+                lineHeight = 23.sp,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center
               )
@@ -2445,27 +2448,27 @@ fun NativeTvExoPlayer(
                   ),
                   modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 48.dp)
+                    .heightIn(min = 50.dp)
                     .focusRequester(resumeButtonFocusRequester)
                     .focusable(interactionSource = resumeInteraction)
                     .testTag("btn_resume_playback")
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
                     Icon(
                       imageVector = Icons.Default.PlayArrow,
-                      contentDescription = "استكمال المشاهدة",
+                      contentDescription = "استكمال",
                       tint = Color.Black,
-                      modifier = Modifier.size(18.dp)
+                      modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.width(5.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                      text = "استكمال المشاهدة",
+                      text = "استكمال",
                       color = Color.Black,
-                      fontSize = 12.5.sp,
+                      fontSize = 15.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
                       softWrap = false
@@ -2496,26 +2499,26 @@ fun NativeTvExoPlayer(
                   ),
                   modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 48.dp)
+                    .heightIn(min = 50.dp)
                     .focusable(interactionSource = startOverInteraction)
                     .testTag("btn_start_over_playback")
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
                     Icon(
                       imageVector = Icons.Default.Replay,
-                      contentDescription = "البدء من البداية",
+                      contentDescription = "من البداية",
                       tint = if (isStartOverFocused) Color.Black else Color.White,
-                      modifier = Modifier.size(16.dp)
+                      modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(5.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                      text = "البدء من البداية",
+                      text = "من البداية",
                       color = if (isStartOverFocused) Color.Black else Color.White,
-                      fontSize = 12.5.sp,
+                      fontSize = 15.sp,
                       fontWeight = FontWeight.Bold,
                       maxLines = 1,
                       softWrap = false
@@ -2561,7 +2564,14 @@ fun ActiveSubtitleCueOverlay(
     } else {
       (subtitleStyle.bottomOffsetDp + extraBottomSafeMargin).dp
     }
-    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    val baseDensity = LocalDensity.current
+    val unboostedSubtitleDensity = remember(baseDensity.density) {
+      Density(density = baseDensity.density, fontScale = 1f)
+    }
+    CompositionLocalProvider(
+      LocalLayoutDirection provides LayoutDirection.Rtl,
+      LocalDensity provides unboostedSubtitleDensity
+    ) {
       Box(
         modifier = modifier
           .fillMaxWidth()
@@ -2628,7 +2638,7 @@ private fun PlayerCompactSquareBtn(
       color = if (isFocused) Color.White else CinemaBorder
     ),
     modifier = Modifier
-      .size(32.dp)
+      .size(38.dp)
       .focusable(interactionSource = interactionSource)
       .testTag(testTag)
   ) {
@@ -2637,7 +2647,7 @@ private fun PlayerCompactSquareBtn(
         imageVector = icon,
         contentDescription = contentDescription,
         tint = if (isFocused) Color.Black else tint,
-        modifier = Modifier.size(15.dp)
+        modifier = Modifier.size(18.dp)
       )
     }
   }

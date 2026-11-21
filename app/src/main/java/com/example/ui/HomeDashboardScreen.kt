@@ -111,6 +111,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -169,6 +170,7 @@ fun HomeDashboardScreen(
   onOpenDisplayMode: () -> Unit,
   onOpenAdBlockSettings: () -> Unit = {},
   onOpenUpdate: () -> Unit = {},
+  onResumeHistory: ((HistoryEntry) -> Unit)? = null,
   modifier: Modifier = Modifier,
   searchService: SearchAndSubtitlesService = remember { SearchAndSubtitlesService() }
 ) {
@@ -318,7 +320,7 @@ fun HomeDashboardScreen(
             )
           }
 
-      // Multi-Source Search Results Section (Divided by Website: TopCinema, LaRoza, WatchSeries, EgyDead, Flixer)
+      // Multi-Source Search Results Section
       if (isSearching) {
         item {
           Box(
@@ -330,19 +332,20 @@ fun HomeDashboardScreen(
             contentAlignment = Alignment.Center
           ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-              CircularProgressIndicator(color = CinemaAccent, modifier = Modifier.size(36.dp))
-              Spacer(modifier = Modifier.height(10.dp))
+              CircularProgressIndicator(color = CinemaAccent, modifier = Modifier.size(38.dp))
+              Spacer(modifier = Modifier.height(12.dp))
               Text(
-                text = "جاري البحث عن \"$searchQuery\" في جميع المواقع المصادر...",
+                text = "جاري البحث عن \"$searchQuery\"...",
                 color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold
               )
-              Spacer(modifier = Modifier.height(4.dp))
+              Spacer(modifier = Modifier.height(5.dp))
               Text(
                 text = "توب سينما • لاروزا • ووتش سيريز • إيجي ديد • فليكسر",
                 color = CinemaAccent,
-                fontSize = 11.sp
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
               )
             }
           }
@@ -355,9 +358,9 @@ fun HomeDashboardScreen(
             verticalAlignment = Alignment.CenterVertically
           ) {
             Text(
-              text = "نتائج البحث في المصادر لـ \"$searchQuery\":",
+              text = "نتائج \"$searchQuery\"",
               color = Color.White,
-              fontSize = 15.sp,
+              fontSize = 18.sp,
               fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
@@ -367,17 +370,20 @@ fun HomeDashboardScreen(
               onClick = { hasSearched = false },
               color = CinemaSurfaceVariant,
               shape = RoundedCornerShape(50),
-              border = BorderStroke(1.dp, CinemaBorder)
+              border = BorderStroke(1.dp, CinemaBorder),
+              modifier = Modifier.heightIn(min = 38.dp)
             ) {
-              Text(
-                text = "إخفاء النتائج ✕",
-                color = Color.LightGray,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                maxLines = 1,
-                softWrap = false
-              )
+              Box(contentAlignment = Alignment.Center) {
+                Text(
+                  text = "إغلاق ✕",
+                  color = Color.LightGray,
+                  fontSize = 13.5.sp,
+                  fontWeight = FontWeight.Bold,
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
             }
           }
         }
@@ -417,19 +423,24 @@ fun HomeDashboardScreen(
         }
       }
 
-      // Continue Watching Row (متابعة المشاهدة) with Clipbox Red Progress Bar
+      // Continue Watching Row (متابعة المشاهدة) with Clipbox Red Progress Bar & Clear Season/Episode Indicator
       if (history.isNotEmpty()) {
         item {
           ContinueWatchingSection(
             history = history,
+            repository = repository,
             onResumeItem = { entry ->
-              onLaunchResultWithSources(
-                entry.url,
-                entry.portal,
-                entry.title,
-                entry.title,
-                portalResultsMap
-              )
+              if (onResumeHistory != null) {
+                onResumeHistory(entry)
+              } else {
+                onLaunchResultWithSources(
+                  entry.url,
+                  entry.portal,
+                  entry.title,
+                  entry.title,
+                  portalResultsMap
+                )
+              }
             },
             onDeleteItem = { entry ->
               repository.removeHistoryEntry(entry.id)
@@ -466,53 +477,39 @@ fun HomeDashboardScreen(
           ) {
             Row(
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(7.dp)
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
               Box(
                 modifier = Modifier
-                  .size(8.dp)
+                  .size(9.dp)
                   .clip(CircleShape)
                   .background(if (isLoadingCatalog) CinemaAccent else CinemaSuccess)
               )
               Surface(
                 color = CinemaAccent,
-                shape = RoundedCornerShape(5.dp)
+                shape = RoundedCornerShape(6.dp)
               ) {
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                   Text(
                     text = "IMDb",
                     color = Color.Black,
-                    fontSize = 10.sp,
+                    fontSize = 12.5.sp,
                     fontWeight = FontWeight.Black,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                     maxLines = 1,
                     softWrap = false
                   )
                 }
               }
               Text(
-                text = if (isLoadingCatalog) "جاري تحديث القوائم المباشرة..." else "القوائم اليومية المباشرة",
+                text = if (isLoadingCatalog) "جاري التحديث..." else "قوائم اليوم",
                 color = Color.White,
-                fontSize = 12.sp,
+                fontSize = 15.5.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
-            }
-
-            if (!isLoadingCatalog) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-              ) {
-                Text(
-                  text = "محدّثة يومياً",
-                  color = Color.LightGray,
-                  fontSize = 10.5.sp,
-                  fontWeight = FontWeight.Medium,
-                  maxLines = 1,
-                  softWrap = false
-                )
+              if (!isLoadingCatalog) {
                 Surface(
                   color = CinemaDarkBackground,
                   shape = RoundedCornerShape(6.dp),
@@ -522,9 +519,9 @@ fun HomeDashboardScreen(
                     Text(
                       text = todayDateLabel,
                       color = CinemaAccent,
-                      fontSize = 10.5.sp,
+                      fontSize = 12.5.sp,
                       fontWeight = FontWeight.ExtraBold,
-                      modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                       maxLines = 1,
                       softWrap = false
                     )
@@ -550,17 +547,17 @@ fun HomeDashboardScreen(
                 scaleX = refreshScale
                 scaleY = refreshScale
               }
-              .heightIn(min = 36.dp)
+              .heightIn(min = 40.dp)
               .testTag("btn_refresh_imdb_catalog")
           ) {
             Box(
               contentAlignment = Alignment.Center,
-              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+              modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
             ) {
               Text(
-                text = "تحديث الآن ⟳",
+                text = "تحديث ⟳",
                 color = if (isRefreshFocused) Color.Black else CinemaAccent,
-                fontSize = 11.sp,
+                fontSize = 13.5.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
@@ -575,8 +572,8 @@ fun HomeDashboardScreen(
         item {
           ClipboxCatalogRow(
             title = "الرائج اليوم",
-            badgeLabel = "IMDb Trending",
-            subtitle = "الأعمال الأكثر رواجاً وبحثاً اليوم — اضغط للبحث في جميع المصادر",
+            badgeLabel = "IMDb",
+            subtitle = "",
             items = trendingItems,
             showRankBadge = false,
             showMouseScrollArrows = !isCompactMobile,
@@ -587,13 +584,13 @@ fun HomeDashboardScreen(
         }
       }
 
-      // Top 10 Movies Today (أفضل 10 أفلام اليوم على IMDb)
+      // Top 10 Movies Today (أفضل 10 أفلام اليوم)
       if (activeSection == ClipboxRailSection.HOME || activeSection == ClipboxRailSection.MOVIES || activeSection == ClipboxRailSection.SEARCH) {
         item {
           ClipboxCatalogRow(
-            title = "أفضل 10 أفلام اليوم",
-            badgeLabel = "IMDb Top 10",
-            subtitle = "ترتيب الأفلام الأكثر شعبية ومشاهدة اليوم",
+            title = "أفضل 10 أفلام",
+            badgeLabel = "Top 10",
+            subtitle = "",
             items = top10Movies,
             showRankBadge = true,
             showMouseScrollArrows = !isCompactMobile,
@@ -604,13 +601,13 @@ fun HomeDashboardScreen(
         }
       }
 
-      // Top 10 TV Series Today (أفضل 10 مسلسلات اليوم على IMDb)
+      // Top 10 TV Series Today (أفضل 10 مسلسلات اليوم)
       if (activeSection == ClipboxRailSection.HOME || activeSection == ClipboxRailSection.TV_SHOWS || activeSection == ClipboxRailSection.SEARCH) {
         item {
           ClipboxCatalogRow(
-            title = "أفضل 10 مسلسلات اليوم",
-            badgeLabel = "IMDb Top 10",
-            subtitle = "ترتيب المسلسلات الأكثر شعبية ومشاهدة اليوم",
+            title = "أفضل 10 مسلسلات",
+            badgeLabel = "Top 10",
+            subtitle = "",
             items = top10TvSeries,
             showRankBadge = true,
             showMouseScrollArrows = !isCompactMobile,
@@ -843,13 +840,13 @@ fun ClipboxTopSearchBar(
             imageVector = Icons.Default.LiveTv,
             contentDescription = null,
             tint = CinemaPrimary,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(22.dp)
           )
-          Spacer(modifier = Modifier.width(6.dp))
+          Spacer(modifier = Modifier.width(7.dp))
           Text(
-            text = if (isCompactMobile) "محرك بحث Asser TV" else "Asser TV • محرك بحث الأفلام والمسلسلات الشامل",
+            text = "بحث Asser TV",
             color = Color.White,
-            fontSize = if (isCompactMobile) 13.5.sp else 13.sp,
+            fontSize = 16.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -869,24 +866,26 @@ fun ClipboxTopSearchBar(
             width = if (isSourcesFocused) 2.dp else 1.dp,
             color = if (isSourcesFocused) ClipboxWhite else CinemaBorder
           ),
-          modifier = Modifier.testTag("btn_dashboard_sources")
+          modifier = Modifier
+            .heightIn(min = 38.dp)
+            .testTag("btn_dashboard_sources")
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
           ) {
             Icon(
               imageVector = Icons.Default.Settings,
               contentDescription = "المصادر",
               tint = if (isSourcesFocused) Color.Black else CinemaAccent,
-              modifier = Modifier.size(13.dp)
+              modifier = Modifier.size(16.dp)
             )
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(5.dp))
             Text(
-              text = "المصادر (5)",
+              text = "المصادر",
               color = if (isSourcesFocused) Color.Black else Color.White,
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
+              fontSize = 13.5.sp,
+              fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               softWrap = false
             )
@@ -894,7 +893,7 @@ fun ClipboxTopSearchBar(
         }
       }
 
-      Spacer(modifier = Modifier.height(8.dp))
+      Spacer(modifier = Modifier.height(10.dp))
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -904,21 +903,18 @@ fun ClipboxTopSearchBar(
         OutlinedTextField(
           value = searchQuery,
           onValueChange = onQueryChange,
+          textStyle = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium),
           placeholder = {
             Text(
-              text = if (isCompactMobile) {
-                "ابحث عن فيلم أو مسلسل..."
-              } else {
-                "ابحث عن أي فيلم أو مسلسل (عربي، أجنبي، كوري، تركي، أنمي)..."
-              },
+              text = "ابحث عن فيلم أو مسلسل...",
               color = Color.Gray,
-              fontSize = 12.sp,
+              fontSize = 14.5.sp,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis
             )
           },
           leadingIcon = {
-            Icon(Icons.Default.Search, contentDescription = null, tint = ClipboxWhite)
+            Icon(Icons.Default.Search, contentDescription = null, tint = ClipboxWhite, modifier = Modifier.size(22.dp))
           },
           trailingIcon = {
             if (searchQuery.isNotEmpty()) {
@@ -956,28 +952,28 @@ fun ClipboxTopSearchBar(
           ),
           border = if (isSearchBtnFocused) BorderStroke(2.5.dp, ClipboxWhite) else null,
           shape = RoundedCornerShape(50),
-          contentPadding = PaddingValues(horizontal = if (isCompactMobile) 14.dp else 16.dp, vertical = 12.dp),
+          contentPadding = PaddingValues(horizontal = if (isCompactMobile) 16.dp else 20.dp, vertical = 12.dp),
           modifier = Modifier
-            .heightIn(min = 48.dp)
+            .heightIn(min = 52.dp)
             .testTag("btn_dual_search_action")
         ) {
           Icon(
             imageVector = Icons.Default.Search,
             contentDescription = null,
-            modifier = Modifier.size(17.dp)
+            modifier = Modifier.size(20.dp)
           )
-          Spacer(modifier = Modifier.width(4.dp))
+          Spacer(modifier = Modifier.width(5.dp))
           Text(
-            text = if (isCompactMobile) "بحث" else "بحث شامل",
+            text = "بحث",
             fontWeight = FontWeight.ExtraBold,
-            fontSize = 12.sp,
+            fontSize = 15.sp,
             maxLines = 1,
             softWrap = false
           )
         }
       }
 
-      Spacer(modifier = Modifier.height(8.dp))
+      Spacer(modifier = Modifier.height(10.dp))
 
       // Quick Suggestions Row (supports mouse drag left/right + touch + crisp D-Pad focus)
       val suggestionsListState = rememberLazyListState()
@@ -987,7 +983,7 @@ fun ClipboxTopSearchBar(
       LazyRow(
         state = suggestionsListState,
         contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
           .fillMaxWidth()
           .focusGroup()
@@ -1009,8 +1005,8 @@ fun ClipboxTopSearchBar(
             label = {
               Text(
                 text = suggestion.trim(),
-                fontSize = 11.sp,
-                fontWeight = if (isChipFocused || selected) FontWeight.ExtraBold else FontWeight.Medium,
+                fontSize = 13.5.sp,
+                fontWeight = if (isChipFocused || selected) FontWeight.ExtraBold else FontWeight.SemiBold,
                 maxLines = 1,
                 softWrap = false
               )
@@ -1029,7 +1025,7 @@ fun ClipboxTopSearchBar(
               selectedBorderWidth = if (isChipFocused) 2.dp else 1.dp
             ),
             modifier = Modifier
-              .heightIn(min = 32.dp)
+              .heightIn(min = 38.dp)
               .onFocusChanged { fs ->
                 if (fs.isFocused) {
                   suggestionsScope.launch {
@@ -1268,7 +1264,7 @@ fun ClipboxCatalogRow(
           Text(
             text = title,
             color = Color.White,
-            fontSize = 16.sp,
+            fontSize = 19.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -1283,9 +1279,9 @@ fun ClipboxCatalogRow(
                 Text(
                   text = badgeLabel,
                   color = CinemaAccent,
-                  fontSize = 9.5.sp,
+                  fontSize = 12.sp,
                   fontWeight = FontWeight.ExtraBold,
-                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                  modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                   maxLines = 1,
                   softWrap = false
                 )
@@ -1293,14 +1289,16 @@ fun ClipboxCatalogRow(
             }
           }
         }
-        Text(
-          text = subtitle,
-          color = Color.Gray,
-          fontSize = 11.5.sp,
-          lineHeight = 16.sp,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis
-        )
+        if (subtitle.isNotBlank()) {
+          Text(
+            text = subtitle,
+            color = Color.Gray,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+          )
+        }
       }
 
       if (showMouseScrollArrows && items.size > 2) {
@@ -1619,7 +1617,7 @@ fun ClipboxPosterCard(
 
   Column(
     modifier = Modifier
-      .width(138.dp)
+      .width(152.dp)
       .graphicsLayer {
         scaleX = scale
         scaleY = scale
@@ -1638,7 +1636,7 @@ fun ClipboxPosterCard(
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .height(196.dp)
+        .height(214.dp)
         .clip(RoundedCornerShape(14.dp))
         .background(CinemaSurface)
         .border(
@@ -1670,12 +1668,12 @@ fun ClipboxPosterCard(
             .padding(8.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(CinemaPrimary)
-            .padding(horizontal = 7.dp, vertical = 3.dp)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
         ) {
           Text(
             text = "#$rankNumber",
             color = Color.White,
-            fontSize = 11.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             softWrap = false
@@ -1683,7 +1681,7 @@ fun ClipboxPosterCard(
         }
       }
 
-      // Bottom Dark Gradient Bar with ★ Rating on Left and Year on Right (Exact Clipbox Card Style)
+      // Bottom Dark Gradient Bar with ★ Rating on Left and Year on Right
       Box(
         modifier = Modifier
           .align(Alignment.BottomCenter)
@@ -1707,15 +1705,15 @@ fun ClipboxPosterCard(
           Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
               text = "★",
-              color = Color.White,
-              fontSize = 11.sp,
+              color = CinemaAccent,
+              fontSize = 13.5.sp,
               fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.width(3.dp))
             Text(
               text = item.rating,
               color = Color.White,
-              fontSize = 11.sp,
+              fontSize = 13.5.sp,
               fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               softWrap = false
@@ -1725,8 +1723,8 @@ fun ClipboxPosterCard(
           Text(
             text = item.year,
             color = Color.LightGray,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             softWrap = false
           )
@@ -1734,13 +1732,13 @@ fun ClipboxPosterCard(
       }
     }
 
-    Spacer(modifier = Modifier.height(6.dp))
+    Spacer(modifier = Modifier.height(7.dp))
 
     Text(
       text = item.title,
       color = if (isFocused) CinemaFocusGlow else Color.White,
-      fontSize = 12.sp,
-      fontWeight = if (isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
+      fontSize = 14.5.sp,
+      fontWeight = if (isFocused) FontWeight.ExtraBold else FontWeight.Bold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.fillMaxWidth()
@@ -1787,19 +1785,10 @@ fun SourcesManagementDialog(
       ) {
         if (selectedPortalForEdit == null) {
           Text(
-            text = "⚙️ إدارة وبوابات مصادر الفيديو",
+            text = "إدارة المصادر",
             color = Color.White,
-            fontSize = 16.sp,
+            fontSize = 19.sp,
             fontWeight = FontWeight.ExtraBold,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Start
-          )
-          Spacer(modifier = Modifier.height(4.dp))
-          Text(
-            text = "جميع المواقع الـ 5 المعتمدة للبحث والمشاهدة المباشرة داخل المشغل:",
-            color = Color.LightGray,
-            fontSize = 11.sp,
-            lineHeight = 16.sp,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Start
           )
@@ -1833,15 +1822,15 @@ fun SourcesManagementDialog(
                     ) {
                       Box(
                         modifier = Modifier
-                          .size(9.dp)
+                          .size(10.dp)
                           .clip(CircleShape)
                           .background(if (portal.isEnabled) CinemaAccent else Color.Gray)
                       )
                       Spacer(modifier = Modifier.width(8.dp))
                       Text(
-                        text = "${portal.displayNameArabic} (${portal.displayNameEnglish})",
+                        text = portal.displayNameArabic,
                         color = Color.White,
-                        fontSize = 13.sp,
+                        fontSize = 15.5.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -1861,16 +1850,16 @@ fun SourcesManagementDialog(
                       },
                       colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
                       shape = RoundedCornerShape(8.dp),
-                      contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
-                      modifier = Modifier.heightIn(min = 34.dp)
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                      modifier = Modifier.heightIn(min = 40.dp)
                     ) {
-                      Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(12.dp), tint = Color.White)
-                      Spacer(modifier = Modifier.width(4.dp))
-                      Text("تعديل", fontSize = 11.sp, color = Color.White, maxLines = 1, softWrap = false)
+                      Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
+                      Spacer(modifier = Modifier.width(5.dp))
+                      Text("تعديل", fontSize = 13.5.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
                     }
                   }
 
-                  Spacer(modifier = Modifier.height(4.dp))
+                  Spacer(modifier = Modifier.height(5.dp))
 
                   Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1878,9 +1867,9 @@ fun SourcesManagementDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                   ) {
                     Text(
-                      text = if (portal.homeUrl.isNotBlank()) portal.homeUrl else "غير مهيأ بعد (مغلق)",
+                      text = if (portal.homeUrl.isNotBlank()) portal.homeUrl else "غير مفعل",
                       color = if (portal.isEnabled) CinemaAccent else Color.Gray,
-                      fontSize = 11.sp,
+                      fontSize = 13.sp,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis,
                       modifier = Modifier.weight(1f)
@@ -1909,7 +1898,7 @@ fun SourcesManagementDialog(
                         Text(
                           text = if (portal.isEnabled) "مفعل" else "مغلق",
                           color = Color.LightGray,
-                          fontSize = 10.sp,
+                          fontSize = 13.sp,
                           maxLines = 1,
                           softWrap = false
                         )
@@ -1932,11 +1921,11 @@ fun SourcesManagementDialog(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
             modifier = Modifier
               .fillMaxWidth()
-              .heightIn(min = 46.dp)
+              .heightIn(min = 48.dp)
           ) {
             Text(
               text = "إغلاق",
-              fontSize = 14.sp,
+              fontSize = 15.5.sp,
               fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               softWrap = false
@@ -1947,78 +1936,82 @@ fun SourcesManagementDialog(
           val isCustom = portal == StreamingPortal.PORTAL_5
 
           Text(
-            text = "✏️ تعديل مصدر: ${portal.displayNameArabic}",
+            text = "تعديل ${portal.displayNameArabic}",
             color = Color.White,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.ExtraBold,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Start
           )
           Spacer(modifier = Modifier.height(14.dp))
 
           if (isCustom) {
-            Text("اسم الموقع بالعربية:", color = Color.LightGray, fontSize = 11.sp)
+            Text("الاسم بالعربية:", color = Color.LightGray, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
             OutlinedTextField(
               value = editNameAr,
               onValueChange = { editNameAr = it },
               singleLine = true,
+              textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
               colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
                 focusedBorderColor = CinemaAccent
               ),
               modifier = Modifier.fillMaxWidth(),
-              placeholder = { Text("مثال: أكوام", fontSize = 11.sp, color = Color.Gray) }
+              placeholder = { Text("مثال: أكوام", fontSize = 14.sp, color = Color.Gray) }
             )
             Spacer(modifier = Modifier.height(10.dp))
 
-            Text("اسم الموقع بالإنجليزية:", color = Color.LightGray, fontSize = 11.sp)
+            Text("الاسم بالإنجليزية:", color = Color.LightGray, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
             OutlinedTextField(
               value = editNameEn,
               onValueChange = { editNameEn = it },
               singleLine = true,
+              textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
               colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
                 focusedBorderColor = CinemaAccent
               ),
               modifier = Modifier.fillMaxWidth(),
-              placeholder = { Text("Example: Akoam", fontSize = 11.sp, color = Color.Gray) }
+              placeholder = { Text("Akoam", fontSize = 14.sp, color = Color.Gray) }
             )
             Spacer(modifier = Modifier.height(10.dp))
           }
 
-          Text("الرابط الرئيسي (Home URL):", color = Color.LightGray, fontSize = 11.sp)
+          Text("الرابط الرئيسي:", color = Color.LightGray, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
           Spacer(modifier = Modifier.height(4.dp))
           OutlinedTextField(
             value = editHomeUrl,
             onValueChange = { editHomeUrl = it },
             singleLine = true,
+            textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
             colors = OutlinedTextFieldDefaults.colors(
               focusedTextColor = Color.White,
               unfocusedTextColor = Color.White,
               focusedBorderColor = CinemaAccent
             ),
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("https://example.com/", fontSize = 11.sp, color = Color.Gray) }
+            placeholder = { Text("https://example.com/", fontSize = 14.sp, color = Color.Gray) }
           )
           Spacer(modifier = Modifier.height(10.dp))
 
-          Text("رابط البحث (Search URL):", color = Color.LightGray, fontSize = 11.sp)
+          Text("رابط البحث:", color = Color.LightGray, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
           Spacer(modifier = Modifier.height(4.dp))
           OutlinedTextField(
             value = editSearchUrl,
             onValueChange = { editSearchUrl = it },
             singleLine = true,
+            textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
             colors = OutlinedTextFieldDefaults.colors(
               focusedTextColor = Color.White,
               unfocusedTextColor = Color.White,
               focusedBorderColor = CinemaAccent
             ),
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("https://example.com/search/%s", fontSize = 11.sp, color = Color.Gray) }
+            placeholder = { Text("https://example.com/search/%s", fontSize = 14.sp, color = Color.Gray) }
           )
           Spacer(modifier = Modifier.height(14.dp))
 
@@ -2037,7 +2030,7 @@ fun SourcesManagementDialog(
                 )
               )
               Spacer(modifier = Modifier.width(6.dp))
-              Text("تفعيل هذا المصدر المخصص وعرضه في القوائم والبحث", color = Color.White, fontSize = 12.sp)
+              Text("تفعيل المصدر", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(16.dp))
           }
@@ -2050,12 +2043,12 @@ fun SourcesManagementDialog(
               onClick = { selectedPortalForEdit = null },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
               shape = RoundedCornerShape(8.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp)
+                .heightIn(min = 48.dp)
             ) {
-              Text("إلغاء", fontSize = 13.sp, color = Color.White, maxLines = 1, softWrap = false)
+              Text("إلغاء", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1, softWrap = false)
             }
 
             Button(
@@ -2074,12 +2067,12 @@ fun SourcesManagementDialog(
               },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
               shape = RoundedCornerShape(8.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp)
+                .heightIn(min = 48.dp)
             ) {
-              Text("حفظ 💾", fontSize = 13.sp, color = Color.Black, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+              Text("حفظ", fontSize = 15.sp, color = Color.Black, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
             }
           }
         }
@@ -2125,9 +2118,9 @@ fun PortalResultsSection(
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-          text = "موقع ${portal.displayNameArabic} (${portal.displayNameEnglish})",
+          text = portal.displayNameArabic,
           color = Color.White,
-          fontSize = 14.sp,
+          fontSize = 17.sp,
           fontWeight = FontWeight.ExtraBold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis
@@ -2136,8 +2129,8 @@ fun PortalResultsSection(
       Text(
         text = "${results.size} نتيجة",
         color = CinemaAccent,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
+        fontSize = 13.5.sp,
+        fontWeight = FontWeight.ExtraBold,
         maxLines = 1,
         softWrap = false
       )
@@ -2157,24 +2150,24 @@ fun PortalResultsSection(
           horizontalAlignment = Alignment.CenterHorizontally
         ) {
           Text(
-            text = "لا توجد نتائج مفهرسة حالياً في ${portal.displayNameArabic} لـ \"$query\"",
+            text = "لا توجد نتائج في ${portal.displayNameArabic}",
             color = Color.LightGray,
-            fontSize = 12.sp,
+            fontSize = 14.5.sp,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
           )
-          Spacer(modifier = Modifier.height(6.dp))
+          Spacer(modifier = Modifier.height(8.dp))
 
           if (spellingSuggestion != null && onSearchSuggestion != null) {
             Button(
               onClick = { onSearchSuggestion(spellingSuggestion) },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent, contentColor = Color.Black),
               shape = RoundedCornerShape(50),
-              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-              modifier = Modifier.heightIn(min = 36.dp)
+              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+              modifier = Modifier.heightIn(min = 42.dp)
             ) {
-              Text(text = "هل تقصد: $spellingSuggestion ؟", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+              Text(text = "بحث عن: $spellingSuggestion", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
             }
             Spacer(modifier = Modifier.height(8.dp))
           }
@@ -2184,10 +2177,10 @@ fun PortalResultsSection(
               onClick = { onLaunchManualUrl(portal.buildSearchUrl(query)) },
               colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
               shape = RoundedCornerShape(50),
-              contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-              modifier = Modifier.heightIn(min = 36.dp)
+              contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+              modifier = Modifier.heightIn(min = 42.dp)
             ) {
-              Text("فتح بحث ${portal.displayNameArabic} مباشرة في المشغل 🔍", fontSize = 11.sp, color = Color.White, maxLines = 1)
+              Text("فتح ${portal.displayNameArabic} 🔍", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
             }
           }
         }
@@ -2237,7 +2230,7 @@ fun SearchResultCard(
 
   Column(
     modifier = Modifier
-      .width(142.dp)
+      .width(154.dp)
       .graphicsLayer {
         scaleX = scale
         scaleY = scale
@@ -2253,7 +2246,7 @@ fun SearchResultCard(
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .height(190.dp)
+        .height(206.dp)
         .clip(RoundedCornerShape(14.dp))
         .background(CinemaSurface)
         .border(
@@ -2279,7 +2272,7 @@ fun SearchResultCard(
         )
       } else {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-          Icon(Icons.Default.Movie, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(38.dp))
+          Icon(Icons.Default.Movie, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(40.dp))
         }
       }
 
@@ -2290,12 +2283,12 @@ fun SearchResultCard(
           .padding(6.dp)
           .clip(RoundedCornerShape(6.dp))
           .background(Color.Black.copy(alpha = 0.78f))
-          .padding(horizontal = 6.dp, vertical = 2.dp)
+          .padding(horizontal = 7.dp, vertical = 2.5.dp)
       ) {
         Text(
           text = item.quality,
           color = CinemaAccent,
-          fontSize = 9.sp,
+          fontSize = 11.5.sp,
           fontWeight = FontWeight.ExtraBold,
           maxLines = 1,
           softWrap = false
@@ -2309,19 +2302,19 @@ fun SearchResultCard(
           .padding(6.dp)
           .clip(RoundedCornerShape(6.dp))
           .background(badgeColor.copy(alpha = 0.9f))
-          .padding(horizontal = 6.dp, vertical = 2.dp)
+          .padding(horizontal = 7.dp, vertical = 2.5.dp)
       ) {
         Text(
           text = item.type,
           color = Color.White,
-          fontSize = 9.sp,
+          fontSize = 11.5.sp,
           fontWeight = FontWeight.Bold,
           maxLines = 1,
           softWrap = false
         )
       }
 
-      // Bottom Clipbox Overlay (Rating + Year)
+      // Bottom Overlay (Rating + Year)
       Box(
         modifier = Modifier
           .align(Alignment.BottomCenter)
@@ -2345,15 +2338,16 @@ fun SearchResultCard(
           Text(
             text = "★ ${item.rating}",
             color = Color.White,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.ExtraBold,
             maxLines = 1,
             softWrap = false
           )
           Text(
             text = item.year.ifBlank { "HD" },
             color = Color.LightGray,
-            fontSize = 10.sp,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             softWrap = false
           )
@@ -2361,13 +2355,13 @@ fun SearchResultCard(
       }
     }
 
-    Spacer(modifier = Modifier.height(6.dp))
+    Spacer(modifier = Modifier.height(7.dp))
 
     Text(
       text = item.title,
       color = Color.White,
-      fontSize = 12.sp,
-      fontWeight = FontWeight.SemiBold,
+      fontSize = 14.5.sp,
+      fontWeight = FontWeight.Bold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis
     )
@@ -2378,6 +2372,7 @@ fun SearchResultCard(
 @Composable
 fun ContinueWatchingSection(
   history: List<HistoryEntry>,
+  repository: TvPreferencesRepository? = null,
   onResumeItem: (HistoryEntry) -> Unit,
   onDeleteItem: (HistoryEntry) -> Unit,
   onClearAll: () -> Unit
@@ -2405,16 +2400,16 @@ fun ContinueWatchingSection(
           )
           Spacer(modifier = Modifier.height(10.dp))
           Text(
-            text = "مسح سجل المشاهدة بالكامل",
+            text = "مسح سجل المشاهدة؟",
             color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
+            fontSize = 18.sp,
+            fontWeight = FontWeight.ExtraBold
           )
           Spacer(modifier = Modifier.height(6.dp))
           Text(
-            text = "هل تريد حذف جميع عناصر متابعة المشاهدة والبدء من جديد؟",
+            text = "سيتم حذف جميع العناصر.",
             color = Color.LightGray,
-            fontSize = 13.sp,
+            fontSize = 14.5.sp,
             textAlign = TextAlign.Center
           )
           Spacer(modifier = Modifier.height(18.dp))
@@ -2427,10 +2422,10 @@ fun ContinueWatchingSection(
               colors = ButtonDefaults.buttonColors(containerColor = CinemaDarkBackground),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp),
+                .heightIn(min = 48.dp),
               shape = RoundedCornerShape(8.dp)
             ) {
-              Text("إلغاء", color = Color.White, maxLines = 1, softWrap = false)
+              Text("إلغاء", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
             }
             Button(
               onClick = {
@@ -2440,10 +2435,10 @@ fun ContinueWatchingSection(
               colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
               modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 44.dp),
+                .heightIn(min = 48.dp),
               shape = RoundedCornerShape(8.dp)
             ) {
-              Text("نعم، مسح", color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+              Text("مسح", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
             }
           }
         }
@@ -2460,7 +2455,7 @@ fun ContinueWatchingSection(
       Text(
         text = "متابعة المشاهدة",
         color = Color.White,
-        fontSize = 16.sp,
+        fontSize = 19.sp,
         fontWeight = FontWeight.ExtraBold,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -2473,24 +2468,26 @@ fun ContinueWatchingSection(
           color = CinemaSurface,
           shape = RoundedCornerShape(50),
           border = BorderStroke(1.dp, CinemaBorder),
-          modifier = Modifier.testTag("btn_clear_continue_watching")
+          modifier = Modifier
+            .heightIn(min = 38.dp)
+            .testTag("btn_clear_continue_watching")
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
           ) {
             Icon(
               imageVector = Icons.Default.DeleteSweep,
-              contentDescription = "مسح السجل",
+              contentDescription = "مسح",
               tint = Color(0xFFFF5252),
-              modifier = Modifier.size(14.dp)
+              modifier = Modifier.size(16.dp)
             )
             Text(
-              text = "مسح السجل",
+              text = "مسح",
               color = Color.LightGray,
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
+              fontSize = 13.5.sp,
+              fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               softWrap = false
             )
@@ -2522,6 +2519,7 @@ fun ContinueWatchingSection(
       itemsIndexed(history.take(15), key = { _, it -> it.id }) { idx, entry ->
         ContinueWatchingCard(
           entry = entry,
+          repository = repository,
           onFocused = {
             historyRowScope.launch {
               try {
@@ -2540,6 +2538,7 @@ fun ContinueWatchingSection(
 @Composable
 fun ContinueWatchingCard(
   entry: HistoryEntry,
+  repository: TvPreferencesRepository? = null,
   onFocused: () -> Unit = {},
   onResume: () -> Unit,
   onDelete: () -> Unit
@@ -2553,16 +2552,75 @@ fun ContinueWatchingCard(
   )
   val formattedDate = remember(entry.timestamp) {
     try {
-      val sdf = SimpleDateFormat("dd MMM", Locale.getDefault())
+      val sdf = SimpleDateFormat("dd MMM", Locale.US)
       sdf.format(Date(entry.timestamp))
     } catch (_: Exception) {
       ""
     }
   }
 
+  val resolvedMedia = remember(entry.id, entry.title, entry.url, entry.seasonNumber, entry.episodeNumber, entry.isSeries) {
+    val parsed = SearchAndSubtitlesService.formatStandardizedEpisodeInfo(
+      seriesTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(entry.title),
+      pageTitle = entry.title,
+      lastSearchQuery = "",
+      watchPageUrl = entry.url,
+      embedUrl = "",
+      serverName = "",
+      isSeriesHint = entry.isSeries || entry.seasonNumber > 0 || entry.episodeNumber > 0,
+      selectedSeasonHint = entry.seasonNumber,
+      currentEpisodeHint = entry.episodeNumber
+    )
+    val isSeries = entry.isSeries || parsed.isSeries || entry.seasonNumber > 0 || entry.episodeNumber > 0
+    val seasonNum = when {
+      entry.seasonNumber > 0 -> entry.seasonNumber
+      isSeries && (parsed.seasonNumber ?: 0) > 0 -> parsed.seasonNumber ?: 1
+      else -> 0
+    }
+    val episodeNum = when {
+      entry.episodeNumber > 0 -> entry.episodeNumber
+      isSeries && (parsed.episodeNumber ?: 0) > 0 -> parsed.episodeNumber ?: 1
+      else -> 0
+    }
+    val cleanShowName = if (parsed.cleanTitle.isNotBlank() && !parsed.cleanTitle.equals("Asser TV", ignoreCase = true)) {
+      parsed.cleanTitle
+    } else {
+      SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(entry.title).ifBlank { entry.title }
+    }
+    val codeTag = if (isSeries && seasonNum > 0 && episodeNum > 0) {
+      "S${seasonNum.toString().padStart(2, '0')}E${episodeNum.toString().padStart(2, '0')}"
+    } else ""
+    val arabicStoppedLabel = if (isSeries && seasonNum > 0 && episodeNum > 0) {
+      "الموسم $seasonNum • الحلقة $episodeNum"
+    } else if (isSeries && seasonNum > 0) {
+      "الموسم $seasonNum"
+    } else {
+      "فيلم • استكمال"
+    }
+    Triple(cleanShowName, codeTag, arabicStoppedLabel)
+  }
+  val cleanShowName = resolvedMedia.first
+  val shortEpisodeCode = resolvedMedia.second
+  val arabicStoppedLabel = resolvedMedia.third
+
+  val progressFraction = remember(entry.id, cleanShowName, entry.seasonNumber, entry.episodeNumber) {
+    val contentKey = TvPreferencesRepository.buildNormalizedContentKey(
+      rawTitle = cleanShowName,
+      seasonNumber = entry.seasonNumber.takeIf { it > 0 },
+      episodeNumber = entry.episodeNumber.takeIf { it > 0 },
+      isSeries = shortEpisodeCode.isNotBlank()
+    )
+    val rec = if (contentKey.isNotBlank()) repository?.getPlaybackProgress(contentKey) else null
+    if (rec != null && rec.durationMs > 0L) {
+      (rec.positionMs.toFloat() / rec.durationMs.toFloat()).coerceIn(0.08f, 0.96f)
+    } else {
+      0.35f
+    }
+  }
+
   Column(
     modifier = Modifier
-      .width(165.dp)
+      .width(210.dp)
       .graphicsLayer {
         scaleX = scale
         scaleY = scale
@@ -2579,7 +2637,7 @@ fun ContinueWatchingCard(
     Box(
       modifier = Modifier
         .fillMaxWidth()
-        .height(105.dp)
+        .height(120.dp)
         .clip(RoundedCornerShape(14.dp))
         .background(CinemaSurface)
         .border(
@@ -2600,12 +2658,12 @@ fun ContinueWatchingCard(
           modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
             .background(CinemaSurfaceVariant)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
         ) {
           Text(
             text = entry.portal.displayNameArabic,
             color = CinemaAccent,
-            fontSize = 9.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             softWrap = false
@@ -2615,14 +2673,14 @@ fun ContinueWatchingCard(
         IconButton(
           onClick = onDelete,
           modifier = Modifier
-            .size(24.dp)
+            .size(28.dp)
             .focusProperties { canFocus = false }
         ) {
           Icon(
             imageVector = Icons.Default.Delete,
             contentDescription = "حذف",
             tint = Color.LightGray,
-            modifier = Modifier.size(14.dp)
+            modifier = Modifier.size(16.dp)
           )
         }
       }
@@ -2631,7 +2689,7 @@ fun ContinueWatchingCard(
       Box(
         modifier = Modifier
           .align(Alignment.Center)
-          .size(34.dp)
+          .size(38.dp)
           .clip(CircleShape)
           .background(ClipboxWhite),
         contentAlignment = Alignment.Center
@@ -2640,11 +2698,11 @@ fun ContinueWatchingCard(
           imageVector = Icons.Default.PlayArrow,
           contentDescription = null,
           tint = Color.Black,
-          modifier = Modifier.size(20.dp)
+          modifier = Modifier.size(22.dp)
         )
       }
 
-      // Bottom Meta + Clipbox Red Progress Line
+      // Bottom Meta (Episode Pill SxxExx + Date) + Red Progress Line
       Column(
         modifier = Modifier
           .align(Alignment.BottomCenter)
@@ -2653,48 +2711,89 @@ fun ContinueWatchingCard(
         Row(
           modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-          horizontalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          Text(
-            text = "استكمال",
-            color = Color.LightGray,
-            fontSize = 9.sp,
-            maxLines = 1
-          )
-          Text(
-            text = formattedDate,
-            color = Color.Gray,
-            fontSize = 9.sp,
-            maxLines = 1
-          )
+          if (shortEpisodeCode.isNotBlank()) {
+            Box(
+              modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(CinemaPrimary.copy(alpha = 0.92f))
+                .padding(horizontal = 7.dp, vertical = 2.dp)
+            ) {
+              CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Text(
+                  text = shortEpisodeCode,
+                  color = Color.White,
+                  fontSize = 12.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
+            }
+          } else {
+            Text(
+              text = "استكمال",
+              color = Color.LightGray,
+              fontSize = 12.sp,
+              fontWeight = FontWeight.SemiBold,
+              maxLines = 1
+            )
+          }
+
+          CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Text(
+              text = formattedDate,
+              color = Color.Gray,
+              fontSize = 11.5.sp,
+              maxLines = 1,
+              softWrap = false
+            )
+          }
         }
-        // Clipbox signature red progress bar at the bottom edge
+        // Signature red progress bar at the bottom edge
         Box(
           modifier = Modifier
             .fillMaxWidth()
-            .height(3.dp)
+            .height(3.5.dp)
             .background(Color.DarkGray)
         ) {
           Box(
             modifier = Modifier
-              .fillMaxWidth(0.65f)
-              .height(3.dp)
+              .fillMaxWidth(progressFraction)
+              .height(3.5.dp)
               .background(CinemaPrimary)
           )
         }
       }
     }
 
-    Spacer(modifier = Modifier.height(6.dp))
+    Spacer(modifier = Modifier.height(7.dp))
 
+    // Clean Show Title
     Text(
-      text = entry.title,
-      color = Color.White,
-      fontSize = 12.sp,
-      fontWeight = FontWeight.SemiBold,
+      text = cleanShowName,
+      color = if (isFocused) CinemaFocusGlow else Color.White,
+      fontSize = 15.sp,
+      fontWeight = FontWeight.ExtraBold,
       maxLines = 1,
-      overflow = TextOverflow.Ellipsis
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.fillMaxWidth()
+    )
+
+    Spacer(modifier = Modifier.height(3.dp))
+
+    // Prominent, NEVER-truncated Arabic Season & Episode line ("الموسم 1 • الحلقة 5")
+    Text(
+      text = arabicStoppedLabel,
+      color = if (shortEpisodeCode.isNotBlank()) CinemaAccent else Color.LightGray,
+      fontSize = 14.sp,
+      fontWeight = if (shortEpisodeCode.isNotBlank()) FontWeight.ExtraBold else FontWeight.SemiBold,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.fillMaxWidth()
     )
   }
 }

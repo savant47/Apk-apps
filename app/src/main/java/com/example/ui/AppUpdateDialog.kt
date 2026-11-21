@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -206,22 +207,22 @@ fun AppUpdateDialog(
 
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "التحديث الداخلي عبر GitHub Releases",
+                text = "التحديثات",
                 color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 19.sp,
+                fontWeight = FontWeight.ExtraBold
               )
               Text(
-                text = "تنزيل وتثبيت أحدث نسخة APK من قسم النسخ (Releases) مباشرة",
+                text = "GitHub Releases",
                 color = Color.LightGray,
-                fontSize = 11.sp
+                fontSize = 13.sp
               )
             }
 
             IconButton(
               onClick = onDismiss,
               modifier = Modifier
-                .size(36.dp)
+                .size(42.dp)
                 .clip(CircleShape)
                 .background(CinemaSurface)
                 .testTag("btn_close_update_dialog")
@@ -230,7 +231,7 @@ fun AppUpdateDialog(
                 imageVector = Icons.Default.Close,
                 contentDescription = "إغلاق",
                 tint = Color.LightGray,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(20.dp)
               )
             }
           }
@@ -252,26 +253,27 @@ fun AppUpdateDialog(
                 imageVector = Icons.Default.Security,
                 contentDescription = null,
                 tint = CinemaSuccess,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(26.dp)
               )
-              Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
-                  text = "الإصدار المثبت حالياً: v$currentVersion (Code $currentVersionCode)",
+                  text = "الإصدار: v$currentVersion ($currentVersionCode)",
                   color = Color.White,
-                  fontSize = 13.5.sp,
+                  fontSize = 15.5.sp,
                   fontWeight = FontWeight.Bold
                 )
                 Text(
-                  text = "بصمة التوقيع SHA-256: $installedShaShort",
+                  text = "SHA: $installedShaShort",
                   color = Color.LightGray,
-                  fontSize = 10.5.sp,
+                  fontSize = 12.5.sp,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                  text = "سجل المشاهدة والمفضلات محمية ومحفوظة بالكامل 🛡️",
+                  text = "بياناتك محفوظة 🛡️",
                   color = CinemaSuccess,
-                  fontSize = 11.5.sp
+                  fontSize = 13.5.sp,
+                  fontWeight = FontWeight.SemiBold
                 )
               }
             }
@@ -295,28 +297,28 @@ fun AppUpdateDialog(
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 Text(
-                  text = "مستودع GitHub Releases:",
+                  text = "المصدر:",
                   color = Color.LightGray,
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.Medium
+                  fontSize = 14.sp,
+                  fontWeight = FontWeight.Bold
                 )
                 Text(
-                  text = if (isEditingRepo) "إلغاء التعديل" else "تعديل المصدر / Token ⚙️",
+                  text = if (isEditingRepo) "إلغاء" else "تعديل ⚙️",
                   color = CinemaAccent,
-                  fontSize = 11.5.sp,
+                  fontSize = 13.5.sp,
                   fontWeight = FontWeight.Bold,
                   modifier = Modifier
                     .clickable { isEditingRepo = !isEditingRepo }
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
                 )
               }
 
               if (isEditingRepo) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                   OutlinedTextField(
                     value = repoInput,
                     onValueChange = { repoInput = it },
-                    label = { Text("اسم المستودع (مثل: savant47/Apk-apps)", fontSize = 11.sp) },
+                    label = { Text("المستودع (user/repo)", fontSize = 13.sp) },
                     colors = OutlinedTextFieldDefaults.colors(
                       focusedTextColor = Color.White,
                       unfocusedTextColor = Color.White,
@@ -329,8 +331,8 @@ fun AppUpdateDialog(
                   OutlinedTextField(
                     value = tokenInput,
                     onValueChange = { tokenInput = it },
-                    label = { Text("GitHub Token (اختياري إذا كان المستودع Private 🔒)", fontSize = 10.5.sp) },
-                    placeholder = { Text("ghp_xxxxxxxxxxxx", fontSize = 11.sp) },
+                    label = { Text("Token (اختياري)", fontSize = 13.sp) },
+                    placeholder = { Text("ghp_xxxxxxxxxxxx", fontSize = 13.sp) },
                     colors = OutlinedTextFieldDefaults.colors(
                       focusedTextColor = Color.White,
                       unfocusedTextColor = Color.White,
@@ -345,13 +347,13 @@ fun AppUpdateDialog(
                       repository.setGitHubRepo(repoInput)
                       repository.setGitHubToken(tokenInput)
                       isEditingRepo = false
-                      Toast.makeText(context, "تم حفظ إعدادات التحديث من GitHub", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(context, "تم الحفظ", Toast.LENGTH_SHORT).show()
                       startCheck()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = CinemaAccent),
-                    modifier = Modifier.fillMaxWidth().height(38.dp)
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp)
                   ) {
-                    Text("حفظ وفحص التحديثات", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("حفظ وفحص", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
                   }
                 }
               } else {
@@ -361,11 +363,11 @@ fun AppUpdateDialog(
                   modifier = Modifier.fillMaxWidth()
                 ) {
                   Text(
-                    text = "$repoInput (Releases)",
+                    text = repoInput,
                     color = CinemaAccent,
-                    fontSize = 12.5.sp,
+                    fontSize = 14.5.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
                   )
                 }
               }
@@ -376,7 +378,7 @@ fun AppUpdateDialog(
           when (val state = updateState) {
             is UpdateDownloadState.Idle -> {
               TvDialogButton(
-                text = "فحص التحديثات الآن 🔍",
+                text = "فحص التحديثات",
                 icon = Icons.Default.Refresh,
                 containerColor = CinemaPrimary,
                 contentColor = Color.White,
@@ -399,15 +401,16 @@ fun AppUpdateDialog(
                   horizontalArrangement = Arrangement.Center
                 ) {
                   CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
+                    modifier = Modifier.size(24.dp),
                     color = CinemaAccent,
                     strokeWidth = 2.5.dp
                   )
                   Spacer(modifier = Modifier.width(10.dp))
                   Text(
-                    text = "جاري الاتصال بـ GitHub Releases وفحص أحدث إصدار...",
+                    text = "جاري الفحص...",
                     color = Color.White,
-                    fontSize = 12.5.sp
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
                   )
                 }
               }
@@ -431,22 +434,22 @@ fun AppUpdateDialog(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
                     tint = CinemaSuccess,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(34.dp)
                   )
                   Text(
-                    text = "تطبيقك محدث بالكامل (v${state.currentVersion})",
+                    text = "التطبيق محدّث (v${state.currentVersion})",
                     color = Color.White,
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 16.5.sp,
+                    fontWeight = FontWeight.ExtraBold
                   )
                   Text(
-                    text = "أحدث إصدار على GitHub Releases: ${state.latestInfo?.tagName ?: state.currentVersion}",
+                    text = "الأحدث: ${state.latestInfo?.tagName ?: state.currentVersion}",
                     color = Color.LightGray,
-                    fontSize = 11.5.sp
+                    fontSize = 14.sp
                   )
                   if (state.latestInfo != null) {
                     TvDialogButton(
-                      text = "إعادة تنزيل وتثبيت النسخة (${state.latestInfo.tagName}) 🚀",
+                      text = "إعادة التثبيت (${state.latestInfo.tagName})",
                       icon = Icons.Default.Download,
                       containerColor = CinemaSuccess,
                       contentColor = Color.Black,
@@ -457,11 +460,11 @@ fun AppUpdateDialog(
                   OutlinedButton(
                     onClick = { startCheck() },
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                    modifier = Modifier.height(36.dp)
+                    modifier = Modifier.heightIn(min = 44.dp)
                   ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(17.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("إعادة الفحص", fontSize = 11.5.sp)
+                    Text("فحص مجدداً", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                   }
                 }
               }
@@ -497,10 +500,10 @@ fun AppUpdateDialog(
                         modifier = Modifier.size(20.dp)
                       )
                       Text(
-                        text = "إصدار جديد متوفر: ${info.tagName}",
+                        text = "تحديث جديد: ${info.tagName}",
                         color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.ExtraBold
                       )
                     }
                     if (info.fileSizeBytes > 0) {
@@ -508,7 +511,7 @@ fun AppUpdateDialog(
                       Text(
                         text = sizeMB,
                         color = CinemaAccent,
-                        fontSize = 12.sp,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                       )
                     }
@@ -523,14 +526,14 @@ fun AppUpdateDialog(
                       Text(
                         text = info.releaseNotes,
                         color = Color.White,
-                        fontSize = 11.5.sp,
+                        fontSize = 13.5.sp,
                         modifier = Modifier.padding(10.dp)
                       )
                     }
                   }
 
                   TvDialogButton(
-                    text = "تنزيل وتثبيت التحديث الآن 🚀",
+                    text = "تنزيل وتثبيت",
                     icon = Icons.Default.Download,
                     containerColor = CinemaSuccess,
                     contentColor = Color.Black,
@@ -560,11 +563,11 @@ fun AppUpdateDialog(
                     verticalAlignment = Alignment.CenterVertically
                   ) {
                     Text(
-                      text = "جاري تنزيل ملف التحديث من GitHub Releases...",
+                      text = "جاري التنزيل...",
                       color = Color.White,
-                      fontSize = 12.5.sp,
+                      fontSize = 15.sp,
                       fontWeight = FontWeight.Bold,
-                      maxLines = 2,
+                      maxLines = 1,
                       overflow = TextOverflow.Ellipsis,
                       modifier = Modifier.weight(1f)
                     )
@@ -576,11 +579,11 @@ fun AppUpdateDialog(
                       Text(
                         text = "${(downloadProgress * 100).toInt()}%",
                         color = CinemaAccent,
-                        fontSize = 13.sp,
+                        fontSize = 15.5.sp,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
                         softWrap = false,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                       )
                     }
                   }
@@ -603,16 +606,16 @@ fun AppUpdateDialog(
                     verticalAlignment = Alignment.CenterVertically
                   ) {
                     Text(
-                      text = "تم تنزيل: $cleanDownloaded من $cleanTotal MB",
+                      text = "$cleanDownloaded / $cleanTotal MB",
                       color = Color.LightGray,
-                      fontSize = 11.5.sp,
+                      fontSize = 13.5.sp,
                       maxLines = 1,
                       overflow = TextOverflow.Ellipsis
                     )
                     Text(
                       text = "APK",
                       color = CinemaSuccess,
-                      fontSize = 10.5.sp,
+                      fontSize = 12.5.sp,
                       fontWeight = FontWeight.Bold,
                       maxLines = 1,
                       softWrap = false
@@ -652,13 +655,13 @@ fun AppUpdateDialog(
                   )
                   Text(
                     text = if (hasConflict) {
-                      "⚠️ تنبيه هام قبل التثبيت (تعارض في الحزمة)"
+                      "⚠️ تعارض في الحزمة"
                     } else {
-                      "اكتمل التنزيل بنجاح! التوقيع مطابق وجاهز للتثبيت 🎬"
+                      "جاهز للتثبيت ✓"
                     },
                     color = Color.White,
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
                     textAlign = TextAlign.Center
                   )
 
@@ -676,31 +679,31 @@ fun AppUpdateDialog(
                         Text(
                           text = apkCheck.warningMessageArabic,
                           color = Color(0xFFFFE0B2),
-                          fontSize = 11.5.sp
+                          fontSize = 13.5.sp
                         )
                         Text(
-                          text = "المثبت: Code ${apkCheck.installedVersionCode} | ${updateManager.getShortFingerprint(apkCheck.installedSha256)}",
+                          text = "المثبت: ${apkCheck.installedVersionCode} | ${updateManager.getShortFingerprint(apkCheck.installedSha256)}",
                           color = Color.LightGray,
-                          fontSize = 10.sp
+                          fontSize = 12.5.sp
                         )
                         Text(
-                          text = "الجديد: Code ${apkCheck.apkVersionCode} | ${updateManager.getShortFingerprint(apkCheck.apkSha256)}",
+                          text = "الجديد: ${apkCheck.apkVersionCode} | ${updateManager.getShortFingerprint(apkCheck.apkSha256)}",
                           color = Color(0xFFFFCC80),
-                          fontSize = 10.sp
+                          fontSize = 12.5.sp
                         )
                       }
                     }
                   } else {
                     Text(
-                      text = "التحديث مطابق بالكامل (Code ${apkCheck.installedVersionCode} ➔ ${apkCheck.apkVersionCode}). اضغط الزر بالأسفل لفتح مثبت الأندرويد دون فقدان بياناتك.",
+                      text = "الإصدار ${apkCheck.installedVersionCode} ➔ ${apkCheck.apkVersionCode}",
                       color = Color.LightGray,
-                      fontSize = 11.5.sp,
+                      fontSize = 14.sp,
                       textAlign = TextAlign.Center
                     )
                   }
 
                   TvDialogButton(
-                    text = if (hasConflict) "محاولة التثبيت على أي حال" else "تثبيت التحديث الآن 🚀",
+                    text = if (hasConflict) "تثبيت على أي حال" else "تثبيت الآن",
                     icon = Icons.Default.SystemUpdate,
                     containerColor = if (hasConflict) Color(0xFFFFB74D) else CinemaSuccess,
                     contentColor = Color.Black,
@@ -725,15 +728,15 @@ fun AppUpdateDialog(
                   verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                   Text(
-                    text = "⚠️ تعذر إكمال العملية:",
+                    text = "⚠️ تعذر التحديث",
                     color = Color(0xFFFF5252),
-                    fontSize = 13.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                   )
                   Text(
                     text = state.message,
                     color = Color.White,
-                    fontSize = 11.5.sp
+                    fontSize = 13.5.sp
                   )
                   TvDialogButton(
                     text = "إعادة المحاولة",
@@ -762,15 +765,15 @@ fun AppUpdateDialog(
             ) {
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                  text = "💾 نسخة احتياطية محلية لبياناتك:",
+                  text = "💾 نسخة احتياطية",
                   color = Color.White,
-                  fontSize = 12.5.sp,
+                  fontSize = 15.sp,
                   fontWeight = FontWeight.Bold
                 )
                 Text(
-                  text = "حفظ نسخة من سجل المشاهدة والمفضلات في ذاكرة الجهاز واسترجاعها في أي وقت",
+                  text = "للسجل والمفضلة",
                   color = Color.LightGray,
-                  fontSize = 10.5.sp
+                  fontSize = 13.sp
                 )
               }
 
@@ -784,19 +787,19 @@ fun AppUpdateDialog(
                     try {
                       val backupFile = File(context.filesDir, "savant_tv_backup.json")
                       backupFile.writeText(json)
-                      Toast.makeText(context, "✅ تم حفظ نسخة احتياطية بنجاح!", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(context, "✅ تم الحفظ", Toast.LENGTH_SHORT).show()
                     } catch (e: Exception) {
-                      Toast.makeText(context, "فشل حفظ النسخة: ${e.message}", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(context, "فشل الحفظ: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                   },
                   colors = ButtonDefaults.outlinedButtonColors(contentColor = CinemaAccent),
                   modifier = Modifier
                     .weight(1f)
-                    .height(38.dp)
+                    .heightIn(min = 44.dp)
                 ) {
-                  Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(14.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("حفظ نسخة", fontSize = 11.5.sp)
+                  Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(17.dp))
+                  Spacer(modifier = Modifier.width(5.dp))
+                  Text("حفظ", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
 
                 OutlinedButton(
@@ -806,12 +809,12 @@ fun AppUpdateDialog(
                       if (backupFile.exists()) {
                         val success = repository.restoreUserDataJson(backupFile.readText())
                         if (success) {
-                          Toast.makeText(context, "✅ تم استعادة بياناتك بنجاح!", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(context, "✅ تم الاسترجاع", Toast.LENGTH_SHORT).show()
                         } else {
-                          Toast.makeText(context, "الملف غير صالح", Toast.LENGTH_SHORT).show()
+                          Toast.makeText(context, "ملف غير صالح", Toast.LENGTH_SHORT).show()
                         }
                       } else {
-                        Toast.makeText(context, "لم يتم العثور على نسخة سابقة", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "لا توجد نسخة سابقة", Toast.LENGTH_SHORT).show()
                       }
                     } catch (e: Exception) {
                       Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -820,11 +823,11 @@ fun AppUpdateDialog(
                   colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
                   modifier = Modifier
                     .weight(1f)
-                    .height(38.dp)
+                    .heightIn(min = 44.dp)
                 ) {
-                  Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(14.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("استرجاع", fontSize = 11.5.sp)
+                  Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(17.dp))
+                  Spacer(modifier = Modifier.width(5.dp))
+                  Text("استرجاع", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
               }
             }
@@ -858,7 +861,7 @@ private fun TvDialogButton(
     shape = RoundedCornerShape(10.dp),
     modifier = modifier
       .fillMaxWidth()
-      .defaultMinSize(minHeight = 46.dp)
+      .defaultMinSize(minHeight = 50.dp)
       .scale(if (isFocused) 1.02f else 1.0f)
       .border(
         width = if (isFocused) 2.dp else 0.dp,
@@ -868,12 +871,12 @@ private fun TvDialogButton(
       .focusable(interactionSource = interactionSource)
       .testTag(testTag)
   ) {
-    Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
+    Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
     Spacer(modifier = Modifier.width(8.dp))
     Text(
       text = text,
-      fontSize = 13.sp,
-      fontWeight = FontWeight.Bold,
+      fontSize = 15.5.sp,
+      fontWeight = FontWeight.ExtraBold,
       textAlign = TextAlign.Center
     )
   }

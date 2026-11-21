@@ -65,10 +65,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -304,8 +306,8 @@ fun MainScreen(
 
     val bestHeight = combinedVariants.firstOrNull()?.height ?: 0
     val lowestHeight = combinedVariants.lastOrNull()?.height ?: 0
-    val lowestLabel = if (lowestHeight > 0) "أقل جودة (توفير الباقة • ${lowestHeight}p)" else "أقل جودة (توفير الباقة)"
-    val autoLabel = if (bestHeight > 0) "تلقائي Auto (${bestHeight}p)" else "تلقائي (Auto)"
+    val lowestLabel = if (lowestHeight > 0) "توفير ${lowestHeight}p" else "توفير الباقة"
+    val autoLabel = if (bestHeight > 0) "تلقائي ${bestHeight}p" else "تلقائي"
 
     val merged = mutableListOf<VideoQualityOption>()
     merged.add(
@@ -893,8 +895,17 @@ fun MainScreen(
       val resolvedPortalWatchUrl = scraped.watchServers.firstOrNull { !it.isDirectEmbed }?.embedUrl ?: req.targetUrl
       if (!StreamingPortal.isEmbedIframeUrl(resolvedPortalWatchUrl)) {
         activeWatchPageUrl = resolvedPortalWatchUrl
-        val canonicalTitle = pageTitle.ifBlank { req.titleHint.ifBlank { req.portal.displayNameArabic } }
-        repository.addHistory(canonicalTitle, resolvedPortalWatchUrl, req.portal)
+        val canonicalTitle = scraped.seriesTitle.ifBlank {
+          req.titleHint.ifBlank { pageTitle.ifBlank { req.portal.displayNameArabic } }
+        }
+        repository.addHistory(
+          title = canonicalTitle,
+          url = resolvedPortalWatchUrl,
+          portal = req.portal,
+          seasonNumber = if (scraped.isSeries) scraped.selectedSeasonNumber else 0,
+          episodeNumber = if (scraped.isSeries) scraped.currentEpisodeNumber else 0,
+          isSeries = scraped.isSeries
+        )
       }
 
       // If the scraper resolved a direct .m3u8 / .mp4 stream URL, kill any WebView and launch NativeTvExoPlayer!
@@ -1001,7 +1012,10 @@ fun MainScreen(
       repository.addHistory(
         title = (title ?: pageTitle).ifBlank { targetPortal.displayNameArabic },
         url = cleanUrl,
-        portal = targetPortal
+        portal = targetPortal,
+        seasonNumber = if (selectedEpisodeNum > 0 || selectedSeasonNum > 1) selectedSeasonNum else 0,
+        episodeNumber = selectedEpisodeNum,
+        isSeries = selectedEpisodeNum > 0 || selectedSeasonNum > 1
       )
     }
     isHomeActive = false
@@ -1713,24 +1727,24 @@ fun MainScreen(
             shape = RoundedCornerShape(50),
             border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f)),
             modifier = Modifier
-              .heightIn(min = 30.dp)
+              .heightIn(min = 36.dp)
               .testTag("btn_embedded_video_fullscreen")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
               verticalAlignment = Alignment.CenterVertically
             ) {
               Icon(
                 imageVector = if (isFullscreenVideo) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                contentDescription = "تكبير الفيديو",
+                contentDescription = "تكبير",
                 tint = CinemaAccent,
-                modifier = Modifier.size(15.dp)
+                modifier = Modifier.size(17.dp)
               )
-              Spacer(modifier = Modifier.width(4.dp))
+              Spacer(modifier = Modifier.width(5.dp))
               Text(
-                text = if (isFullscreenVideo) "تصغير الشاشة" else "تكبير الفيديو",
+                text = if (isFullscreenVideo) "تصغير" else "تكبير",
                 color = Color.White,
-                fontSize = 10.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.ExtraBold
               )
             }
@@ -1742,24 +1756,24 @@ fun MainScreen(
             shape = RoundedCornerShape(50),
             border = BorderStroke(1.dp, CinemaSecondary.copy(alpha = 0.7f)),
             modifier = Modifier
-              .heightIn(min = 30.dp)
+              .heightIn(min = 36.dp)
               .testTag("btn_embedded_diagnostics")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
               verticalAlignment = Alignment.CenterVertically
             ) {
               Icon(
                 imageVector = Icons.Default.BugReport,
                 contentDescription = "اللوج",
                 tint = CinemaSecondary,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(16.dp)
               )
               Spacer(modifier = Modifier.width(4.dp))
               Text(
                 text = "اللوج",
                 color = CinemaSecondary,
-                fontSize = 10.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
               )
             }
@@ -1772,24 +1786,24 @@ fun MainScreen(
               shape = RoundedCornerShape(50),
               border = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
               modifier = Modifier
-                .heightIn(min = 30.dp)
+                .heightIn(min = 36.dp)
                 .testTag("btn_embedded_next_episode")
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
               ) {
                 Icon(
                   imageVector = Icons.Default.SkipNext,
                   contentDescription = "الحلقة التالية",
                   tint = Color.White,
-                  modifier = Modifier.size(15.dp)
+                  modifier = Modifier.size(17.dp)
                 )
-                Spacer(modifier = Modifier.width(3.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text(
                   text = "التالية",
                   color = Color.White,
-                  fontSize = 10.sp,
+                  fontSize = 13.sp,
                   fontWeight = FontWeight.ExtraBold
                 )
               }
@@ -1815,23 +1829,24 @@ fun MainScreen(
           modifier = Modifier
             .align(Alignment.TopEnd)
             .padding(8.dp)
+            .heightIn(min = 38.dp)
             .testTag("btn_open_watch_side_panel")
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
           ) {
             Icon(
               imageVector = Icons.Default.VideoLibrary,
               contentDescription = null,
               tint = Color.White,
-              modifier = Modifier.size(15.dp)
+              modifier = Modifier.size(17.dp)
             )
             Spacer(modifier = Modifier.width(5.dp))
             Text(
-              text = if (isFullscreenVideo) "إظهار الحلقات والسيرفرات" else "السيرفرات والحلقات",
+              text = "الحلقات",
               color = Color.White,
-              fontSize = 10.sp,
+              fontSize = 13.sp,
               fontWeight = FontWeight.ExtraBold,
               maxLines = 1,
               softWrap = false
@@ -1994,6 +2009,17 @@ fun MainScreen(
     }
   }
 
+  // Display-aware 10-foot TV font scale boost across the whole app (kept gentle on Mobile to prevent clipping)
+  val baseDensity = LocalDensity.current
+  val uiFontBoost = if (displayMode == AppDisplayMode.TV) 1.15f else 1.04f
+  val boostedDensity = remember(baseDensity, uiFontBoost) {
+    Density(
+      density = baseDensity.density,
+      fontScale = (baseDensity.fontScale * uiFontBoost).coerceAtMost(1.42f)
+    )
+  }
+
+  CompositionLocalProvider(LocalDensity provides boostedDensity) {
   Scaffold(
     modifier = modifier.fillMaxSize(),
     containerColor = CinemaDarkBackground,
@@ -2085,24 +2111,24 @@ fun MainScreen(
                   shape = RoundedCornerShape(10.dp),
                   border = BorderStroke(1.dp, CinemaBorder),
                   modifier = Modifier
-                    .heightIn(min = 32.dp)
+                    .heightIn(min = 38.dp)
                     .testTag("btn_back_to_asser_tv_search")
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                   ) {
                     Icon(
                       imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                      contentDescription = "العودة للبحث",
+                      contentDescription = "العودة",
                       tint = Color.White,
-                      modifier = Modifier.size(15.dp)
+                      modifier = Modifier.size(17.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
                       text = "رجوع",
                       color = Color.White,
-                      fontSize = 11.sp,
+                      fontSize = 14.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
                       softWrap = false
@@ -2122,7 +2148,7 @@ fun MainScreen(
                       activePortal.displayNameArabic
                     },
                     color = Color.White,
-                    fontSize = 12.5.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -2130,7 +2156,7 @@ fun MainScreen(
                   Text(
                     text = activePortal.displayNameArabic,
                     color = CinemaAccent,
-                    fontSize = 10.sp,
+                    fontSize = 12.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -2285,6 +2311,19 @@ fun MainScreen(
             onOpenDisplayMode = { showDisplayModeDialog = true },
             onOpenAdBlockSettings = { showAdBlockDialog = true },
             onOpenUpdate = { showUpdateDialog = true },
+            onResumeHistory = { entry ->
+              lastSearchQuery = entry.title
+              isWatchSidePanelOpen = true
+              navigateTo(
+                url = entry.url,
+                portal = entry.portal,
+                title = entry.title,
+                isGeneralBrowser = false,
+                autoScrapeAndLoadEmbed = true,
+                selectedSeasonNum = entry.seasonNumber.coerceAtLeast(1),
+                selectedEpisodeNum = entry.episodeNumber
+              )
+            },
             modifier = Modifier.weight(1f),
             searchService = searchService
           )
@@ -2698,7 +2737,17 @@ fun MainScreen(
       history = history,
       onSelectEntry = { entry ->
         showHistoryDialog = false
-        navigateTo(entry.url, entry.portal, entry.title, isGeneralBrowser = false)
+        lastSearchQuery = entry.title
+        isWatchSidePanelOpen = true
+        navigateTo(
+          url = entry.url,
+          portal = entry.portal,
+          title = entry.title,
+          isGeneralBrowser = false,
+          autoScrapeAndLoadEmbed = true,
+          selectedSeasonNum = entry.seasonNumber.coerceAtLeast(1),
+          selectedEpisodeNum = entry.episodeNumber
+        )
       },
       onRemoveEntry = { id -> repository.removeHistoryEntry(id) },
       onClearHistory = { repository.clearHistory() },
@@ -2763,6 +2812,7 @@ fun MainScreen(
     DiagnosticsLogDialog(
       onDismiss = { showDiagnosticsDialog = false }
     )
+  }
   }
 }
 

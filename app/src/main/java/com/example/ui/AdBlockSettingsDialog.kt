@@ -126,17 +126,17 @@ fun AdBlockSettingsDialog(
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
               Text(
-                text = "درع مانع الإعلانات & AdGuard",
+                text = "مانع الإعلانات",
                 color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
               )
               Text(
-                text = "حظر الإعلانات المنبثقة والتحويلات الإجبارية 100%",
+                text = "حظر الإعلانات والنوافذ المنبثقة",
                 color = CinemaSuccess,
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -151,7 +151,7 @@ fun AdBlockSettingsDialog(
           }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Status Banner
         Card(
@@ -168,26 +168,26 @@ fun AdBlockSettingsDialog(
               imageVector = if (isAdBlockEnabled && isStrictPopupBlocker) Icons.Default.CheckCircle else Icons.Default.Block,
               contentDescription = null,
               tint = if (isAdBlockEnabled && isStrictPopupBlocker) CinemaSuccess else Color.Gray,
-              modifier = Modifier.size(24.dp)
+              modifier = Modifier.size(26.dp)
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column {
               Text(
-                text = if (isAdBlockEnabled && isStrictPopupBlocker) "الحماية الصارمة نشطة بالكامل 🛡️" else "الحماية معطلة جزئياً",
+                text = if (isAdBlockEnabled && isStrictPopupBlocker) "الحماية مفعّلة 🛡️" else "الحماية جزئية",
                 color = Color.White,
-                fontSize = 13.sp,
+                fontSize = 15.5.sp,
                 fontWeight = FontWeight.Bold
               )
               Text(
-                text = "يتم منع أي تحويل منبثق (مثل luugy.com والإعلانات الخفية) تلقائياً عند النقر",
+                text = "حظر الإعلانات والتحويلات تلقائياً",
                 color = Color.LightGray,
-                fontSize = 11.sp
+                fontSize = 13.sp
               )
             }
           }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Toggle 1: Strict Pop-up & Redirect Blocker
         Row(
@@ -201,15 +201,15 @@ fun AdBlockSettingsDialog(
         ) {
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "حظر النوافذ المنبثقة الصارم (Anti-Popup)",
+              text = "حظر النوافذ المنبثقة",
               color = Color.White,
-              fontSize = 13.sp,
-              fontWeight = FontWeight.SemiBold
+              fontSize = 15.5.sp,
+              fontWeight = FontWeight.Bold
             )
             Text(
-              text = "يمنع الصفحات من فتح إعلانات جانبية أو تغيير الرابط عند الضغط على زر التشغيل",
-              color = Color.Gray,
-              fontSize = 10.sp
+              text = "منع الإعلانات والتحويلات",
+              color = Color.LightGray,
+              fontSize = 13.sp
             )
           }
           Switch(
@@ -243,15 +243,15 @@ fun AdBlockSettingsDialog(
         ) {
           Column(modifier = Modifier.weight(1f)) {
             Text(
-              text = "محرك فلترة AdGuard المدمج",
+              text = "فلتر AdGuard",
               color = Color.White,
-              fontSize = 13.sp,
-              fontWeight = FontWeight.SemiBold
+              fontSize = 15.5.sp,
+              fontWeight = FontWeight.Bold
             )
             Text(
-              text = "اعتراض مسارات وشبكات الإعلانات (Adsterra, Propeller, Luugy, PopAds)",
-              color = Color.Gray,
-              fontSize = 10.sp
+              text = "حظر شبكات الإعلانات",
+              color = Color.LightGray,
+              fontSize = 13.sp
             )
           }
           Switch(
@@ -282,20 +282,20 @@ fun AdBlockSettingsDialog(
         ) {
           Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-              Icon(Icons.Default.Dns, contentDescription = null, tint = CinemaSecondary, modifier = Modifier.size(18.dp))
+              Icon(Icons.Default.Dns, contentDescription = null, tint = CinemaSecondary, modifier = Modifier.size(20.dp))
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "إعداد DNS الخاص لنظام أندرويد (Private DNS)",
+                text = "AdGuard DNS",
                 color = Color.White,
-                fontSize = 12.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Bold
               )
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-              text = "يمكنك أيضاً وضع عنوان خادم AdGuard في إعدادات الهاتف لحجب الإعلانات على مستوى كافة التطبيقات:",
+              text = "لإضافته في إعدادات الشبكة:",
               color = Color.LightGray,
-              fontSize = 10.sp
+              fontSize = 13.sp
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -306,14 +306,14 @@ fun AdBlockSettingsDialog(
                 .clip(RoundedCornerShape(6.dp))
                 .background(CinemaDarkBackground)
                 .border(1.dp, CinemaBorder, RoundedCornerShape(6.dp))
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
               Text(
                 text = adguardDnsHost,
                 color = CinemaAccent,
-                fontSize = 12.sp,
+                fontSize = 14.5.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -325,16 +325,16 @@ fun AdBlockSettingsDialog(
                   val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                   val clip = ClipData.newPlainText("AdGuard DNS", adguardDnsHost)
                   clipboard.setPrimaryClip(clip)
-                  Toast.makeText(context, "تم نسخ: $adguardDnsHost 📋", Toast.LENGTH_SHORT).show()
+                  Toast.makeText(context, "تم نسخ: $adguardDnsHost", Toast.LENGTH_SHORT).show()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = CinemaSecondary),
                 shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                modifier = Modifier.heightIn(min = 34.dp)
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.heightIn(min = 40.dp)
               ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("نسخ", fontSize = 11.sp, maxLines = 1, softWrap = false)
+                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("نسخ", fontSize = 13.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
               }
             }
 
@@ -355,43 +355,43 @@ fun AdBlockSettingsDialog(
                     }
                     context.startActivity(fallbackIntent)
                   } catch (_: Exception) {
-                    Toast.makeText(context, "افتح إعدادات الهاتف > الشبكة > DNS الخاص", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "افتح الإعدادات > الشبكة > DNS الخاص", Toast.LENGTH_LONG).show()
                   }
                 }
               },
               border = BorderStroke(1.dp, CinemaBorder),
               shape = RoundedCornerShape(6.dp),
-              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+              contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp),
               modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 42.dp)
+                .heightIn(min = 46.dp)
             ) {
-              Icon(Icons.Default.Settings, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(14.dp))
+              Icon(Icons.Default.Settings, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(17.dp))
               Spacer(modifier = Modifier.width(6.dp))
-              Text("فتح إعدادات DNS الخاص في الأندرويد ⚙️", color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+              Text("إعدادات DNS ⚙️", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
           }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Confirm & Close Button
         Button(
           onClick = {
-            Toast.makeText(context, "تم حفظ إعدادات مانع الإعلانات بنجاح 🛡️", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "تم حفظ الإعدادات 🛡️", Toast.LENGTH_SHORT).show()
             onDismiss()
           },
           colors = ButtonDefaults.buttonColors(containerColor = CinemaSuccess),
           shape = RoundedCornerShape(8.dp),
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
           modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 46.dp)
+            .heightIn(min = 48.dp)
             .testTag("btn_save_adblock_settings")
         ) {
-          Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+          Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(20.dp))
           Spacer(modifier = Modifier.width(6.dp))
-          Text("تم وحفظ الإعدادات", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+          Text("حفظ", color = Color.White, fontSize = 15.5.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
         }
       }
     }
