@@ -38,16 +38,10 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
 
   companion object {
     init {
-      // Silence Mesa driver logs and avoid searching for non-existent DRM rendernodes
+      // Silence noisy Mesa/EGL logs without altering emulator/GPU driver overrides
       try {
         android.system.Os.setenv("MESA_LOG_LEVEL", "none", true)
         android.system.Os.setenv("EGL_LOG_LEVEL", "none", true)
-        android.system.Os.setenv("MESA_NO_ERROR", "1", true)
-        android.system.Os.setenv("MESA_LOG_FILE", "/dev/null", true)
-        android.system.Os.unsetenv("MESA_LOADER_DRIVER_OVERRIDE")
-        android.system.Os.unsetenv("GALLIUM_DRIVER")
-        android.system.Os.unsetenv("MESA_DEBUG")
-        android.system.Os.unsetenv("LIBGL_DEBUG")
       } catch (_: Throwable) {}
     }
   }
@@ -59,39 +53,6 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
   private var hasCompletedCleanExit = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    // Disable hardware acceleration at the Window level on emulators to prevent libhwui from initializing EGL/Mesa drivers, 
-    // entirely eliminating 'Failed to open rendernode' warnings in cloud environments.
-    val arch = (System.getProperty("os.arch") ?: "").lowercase()
-    val hardware = (Build.HARDWARE ?: "").lowercase()
-    val fingerprint = (Build.FINGERPRINT ?: "").lowercase()
-    val model = (Build.MODEL ?: "").lowercase()
-    val product = (Build.PRODUCT ?: "").lowercase()
-    val brand = (Build.BRAND ?: "").lowercase()
-    val manufacturer = (Build.MANUFACTURER ?: "").lowercase()
-
-    val isEmulator = arch.contains("x86") || arch.contains("i686") || arch.contains("amd64") ||
-        (Build.SUPPORTED_ABIS ?: emptyArray()).any { it.lowercase().contains("x86") } ||
-        hardware.contains("goldfish") ||
-        hardware.contains("ranchu") ||
-        hardware.contains("cuttlefish") ||
-        hardware.contains("cutf") ||
-        hardware.contains("dummy") ||
-        fingerprint.startsWith("generic") ||
-        fingerprint.contains("cuttlefish") ||
-        model.contains("google_sdk") ||
-        model.contains("emulator") ||
-        model.contains("cuttlefish") ||
-        product.contains("sdk") ||
-        product.contains("cuttlefish") ||
-        brand.contains("generic") ||
-        manufacturer.contains("unknown") ||
-        manufacturer.contains("android") ||
-        (brand.contains("google") && !hardware.contains("pixel") && !hardware.contains("nexus") && !hardware.contains("shiba") && !hardware.contains("husky") && !hardware.contains("felix"))
-
-    if (isEmulator) {
-      window.clearFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
-    }
-
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -102,32 +63,7 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
     window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-    // Ensure WebView multi-process data directory isolation to prevent MESA/Chromium process lock errors
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-      try {
-        val processName = android.app.Application.getProcessName()
-        if (packageName != processName) {
-          android.webkit.WebView.setDataDirectorySuffix(processName)
-        }
-      } catch (_: Exception) {}
-    }
-
     repository = TvPreferencesRepository(applicationContext)
-
-    // Clean up potentially corrupted index and pre-create WebView Code Cache directories to prevent opendir and index reconstruction errors
-    try {
-      val httpCacheDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache")
-      val indexFile = java.io.File(httpCacheDir, "index")
-      val jsCacheDir = java.io.File(httpCacheDir, "Code Cache/js")
-      val wasmCacheDir = java.io.File(httpCacheDir, "Code Cache/wasm")
-      
-      if (indexFile.exists() && (!jsCacheDir.exists() || !wasmCacheDir.exists())) {
-        indexFile.delete()
-      }
-      
-      if (!jsCacheDir.exists()) jsCacheDir.mkdirs()
-      if (!wasmCacheDir.exists()) wasmCacheDir.mkdirs()
-    } catch (_: Exception) {}
 
     lifecycleScope.launch {
       repository.displayModeFlow.collect { mode ->
@@ -159,6 +95,17 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
     if (::repository.isInitialized) {
       applyDisplayMode(repository.getDisplayMode())
     }
+  }
+
+  override fun onStop() {
+    super.onStop()
+    try {
+      if (isFinishing) {
+        releaseAllActiveGraphicsAndWebViews(window?.decorView)
+      } else {
+        AppRuntimeMemoryGuard.notifyMemoryPressure(TRIM_MEMORY_UI_HIDDEN)
+      }
+    } catch (_: Throwable) {}
   }
 
   fun applyDisplayMode(mode: AppDisplayMode) {
@@ -293,11 +240,10 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
     for (wv in webViews) {
       try {
         wv.stopLoading()
+        wv.webChromeClient = null
+        wv.webViewClient = android.webkit.WebViewClient()
+        wv.removeJavascriptInterface("AndroidTvBridge")
         wv.onPause()
-        wv.pauseTimers()
-        wv.clearHistory()
-        wv.clearCache(true)
-        wv.loadUrl("about:blank")
         wv.visibility = View.GONE
         (wv.parent as? ViewGroup)?.removeView(wv)
         wv.removeAllViews()

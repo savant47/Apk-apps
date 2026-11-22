@@ -184,9 +184,7 @@ fun MainScreen(
   var isFullscreenVideo by remember { mutableStateOf(false) }
   var loadingProgress by remember { mutableIntStateOf(0) }
   var pageTitle by remember { mutableStateOf("") }
-  var currentUrl by remember {
-    mutableStateOf(activePortal.homeUrl.replace("topcinema.site", "topcinema.io"))
-  }
+  var currentUrl by remember { mutableStateOf("") }
   var activeWatchPageUrl by remember { mutableStateOf("") }
   var activeServerName by remember { mutableStateOf("") }
   var activeEmbedRefererUrl by remember { mutableStateOf("") }
@@ -206,6 +204,9 @@ fun MainScreen(
   var webChromeClientRef by remember { mutableStateOf<TvWebChromeClient?>(null) }
   var isWebViewMounted by remember { mutableStateOf(false) }
   var pendingWebViewLoad by remember { mutableStateOf<PendingWebViewLoad?>(null) }
+  val destroyedWebViews = remember {
+    java.util.Collections.newSetFromMap(java.util.IdentityHashMap<WebView, Boolean>())
+  }
 
   // Atomic deduplication guards so Compose recompositions NEVER double-load portals or embeds
   val inFlightScrapeKeyRef = remember { AtomicReference<String?>(null) }
@@ -249,13 +250,16 @@ fun MainScreen(
     }
   }
 
-  // Ensure permissive SSL is installed early for all streaming CDNs
+  // Ensure permissive SSL is installed asynchronously off the main thread for streaming CDNs
   LaunchedEffect(Unit) {
-    SearchAndSubtitlesService.installPermissiveSslForStreaming()
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+      SearchAndSubtitlesService.installPermissiveSslForStreaming()
+    }
   }
 
   // Keep AppDiagnosticsLogger live summary synchronized
   LaunchedEffect(
+    isHomeActive,
     activePortal,
     activeWatchPageUrl,
     currentUrl,
@@ -266,11 +270,14 @@ fun MainScreen(
     currentVideoQuality
   ) {
     AppDiagnosticsLogger.activePortalName = activePortal.displayNameArabic
-    AppDiagnosticsLogger.activeWatchUrl = activeWatchPageUrl.ifBlank { currentUrl }
-    AppDiagnosticsLogger.currentWebViewUrl = currentUrl
-    AppDiagnosticsLogger.activePlayerMode =
-      if (playNativeVideoUrl != null) "Native ExoPlayer (يعمل بنجاح ✅)"
-      else "مشغل السيرفر المدمج (WebView)"
+    AppDiagnosticsLogger.activeWatchUrl = if (isHomeActive) "الشاشة الرئيسية" else activeWatchPageUrl.ifBlank { currentUrl }
+    AppDiagnosticsLogger.currentWebViewUrl = if (isHomeActive && !isWebViewMounted) "NONE (غير مُحمّل لتوفير الرام)" else currentUrl
+    AppDiagnosticsLogger.activePlayerMode = when {
+      isHomeActive -> "الشاشة الرئيسية (وضع توفير الرام)"
+      playNativeVideoUrl != null -> "Native ExoPlayer (يعمل بنجاح ✅)"
+      isWebViewMounted -> "مشغل السيرفر المدمج (WebView)"
+      else -> "جاهز (بدون WebView)"
+    }
     AppDiagnosticsLogger.extractedStreamUrl = detectedVideoUrl ?: ""
     AppDiagnosticsLogger.streamReferer = activeEmbedRefererUrl.ifBlank { currentUrl }
     AppDiagnosticsLogger.detectedQualitiesSummary =
@@ -279,14 +286,10 @@ fun MainScreen(
     AppDiagnosticsLogger.selectedQualityId = currentVideoQuality
   }
 
-  val cleanAndroidChromeUa = remember(context) {
-    try {
-      WebSettings.getDefaultUserAgent(context)
-        .replace("; wv", "")
-        .replace("Version/4.0 ", "")
-    } catch (_: Exception) {
-      "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-    }
+  // CRITICAL FOR 1GB RAM TV STICKS (SDK 28): NEVER call WebSettings.getDefaultUserAgent(context)
+  // on startup — it synchronously boots the entire Chromium WebView engine (~180MB RAM + 15-60s freeze)!
+  val cleanAndroidChromeUa = remember {
+    "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE ?: "13"}; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
   }
   val desktopChromeUa =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -355,8 +358,28 @@ fun MainScreen(
   }
 
   /**
-   * Hard-destroys the extractor WebView and kills its ~150MB Chromium renderer process
-   * immediately once NativeTvExoPlayer takes over or the user exits the watch view.
+   * Idempotent, crash-safe WebView teardown that avoids triggering new renderer IPCs
+   * (`loadUrl("about:blank")`, `clearCache(true)`, global `pauseTimers()`) right before `destroy()`.
+   */
+  fun safelyDestroyWebView(wv: WebView?) {
+    if (wv == null) return
+    if (!destroyedWebViews.add(wv)) return
+    try {
+      wv.stopLoading()
+      wv.webChromeClient = null
+      wv.webViewClient = android.webkit.WebViewClient()
+      wv.removeJavascriptInterface("AndroidTvBridge")
+      wv.onPause()
+      wv.visibility = View.GONE
+      (wv.parent as? ViewGroup)?.removeView(wv)
+      wv.removeAllViews()
+      wv.destroy()
+    } catch (_: Throwable) {}
+  }
+
+  /**
+   * Hard-destroys the extractor WebView and frees its Chromium renderer process
+   * once NativeTvExoPlayer takes over or the user exits the watch view.
    */
   fun hardDestroyWebView(reason: String) {
     val wv = webViewRef
@@ -367,18 +390,7 @@ fun MainScreen(
     lastWebViewLoadedKeyRef.set(null)
     isWebViewMounted = false
     if (wv != null) {
-      try {
-        wv.stopLoading()
-        wv.removeJavascriptInterface("AndroidTvBridge")
-        wv.loadUrl("about:blank")
-        wv.onPause()
-        wv.pauseTimers()
-        wv.clearHistory()
-        wv.clearCache(true)
-        wv.removeAllViews()
-        (wv.parent as? ViewGroup)?.removeView(wv)
-        wv.destroy()
-      } catch (_: Throwable) {}
+      safelyDestroyWebView(wv)
       AppDiagnosticsLogger.log("WebViewDestroy", "Hard-destroyed WebView ($reason)")
       AppDiagnosticsLogger.recordBreadcrumb(context, "WEBVIEW_DESTROYED", reason)
     }
@@ -404,6 +416,25 @@ fun MainScreen(
   LaunchedEffect(playNativeVideoUrl) {
     if (!playNativeVideoUrl.isNullOrBlank() && !isGeneralBrowserSession) {
       hardDestroyWebView("NativeTvExoPlayer handoff")
+    }
+  }
+
+  // React to OS onLowMemory() / onTrimMemory() / Activity onStop() safely without crash loops
+  LaunchedEffect(Unit) {
+    com.example.AppRuntimeMemoryGuard.memoryTrimEvents.collect { trimLevel ->
+      try {
+        if (isHomeActive || trimLevel >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+          activeServerSelectionJob?.cancel()
+          activeServerSelectionJob = null
+          if (isHomeActive) {
+            activeEpisodeScrapeRequest = null
+            inFlightScrapeKeyRef.set(null)
+          }
+        }
+        if (isHomeActive || playNativeVideoUrl != null) {
+          hardDestroyWebView("OS memory trim (level=$trimLevel)")
+        }
+      } catch (_: Throwable) {}
     }
   }
 
@@ -1408,18 +1439,7 @@ fun MainScreen(
                 webViewRef = null
                 fullscreenContainerRef = null
                 webChromeClientRef = null
-                try {
-                  wv.stopLoading()
-                  wv.removeJavascriptInterface("AndroidTvBridge")
-                  wv.loadUrl("about:blank")
-                  wv.onPause()
-                  wv.pauseTimers()
-                  wv.clearHistory()
-                  wv.clearCache(true)
-                  wv.removeAllViews()
-                  (wv.parent as? ViewGroup)?.removeView(wv)
-                  wv.destroy()
-                } catch (_: Throwable) {}
+                safelyDestroyWebView(wv)
               }
             }
           }
@@ -1442,7 +1462,18 @@ fun MainScreen(
               }
               fullscreenContainerRef = fsContainer
 
-              val webView = WebView(ctx).apply {
+              val webView = try {
+                com.example.AppRuntimeMemoryGuard.hasWebViewBeenCreated = true
+                WebView(ctx)
+              } catch (e: Throwable) {
+                AppDiagnosticsLogger.log(
+                  "WebViewInit",
+                  "تعذر تشغيل WebView على الجهاز: ${e.message}",
+                  isError = true
+                )
+                isWebViewMounted = false
+                return@AndroidView rootLayout
+              }.apply {
               layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -1450,6 +1481,11 @@ fun MainScreen(
 
               setBackgroundColor(android.graphics.Color.BLACK)
               setLayerType(View.LAYER_TYPE_NONE, null)
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                  setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
+                } catch (_: Throwable) {}
+              }
 
               isClickable = true
               isLongClickable = true
@@ -1467,8 +1503,10 @@ fun MainScreen(
                 false
               }
 
-              CookieManager.getInstance().setAcceptCookie(true)
-              CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+              try {
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+              } catch (_: Throwable) {}
 
               if (webViewRecreateKey > 0) {
                 try {
@@ -1610,8 +1648,16 @@ fun MainScreen(
                   }
                 },
                 onRenderProcessGoneCallback = {
+                  // Dead WebView was already detached & destroyed inside TvWebViewClient.onRenderProcessGone.
+                  // Mark it destroyed and clear refs immediately so DisposableEffect never double-destroys it.
+                  webViewRef?.let { destroyedWebViews.add(it) }
+                  webViewRef = null
+                  fullscreenContainerRef = null
+                  webChromeClientRef = null
+                  lastWebViewLoadedKeyRef.set(null)
+
                   val now = System.currentTimeMillis()
-                  if (now - lastRendererCrashTimeMs < 10_000L) {
+                  if (now - lastRendererCrashTimeMs < 15_000L) {
                     rendererCrashCount++
                   } else {
                     rendererCrashCount = 1
@@ -1624,16 +1670,24 @@ fun MainScreen(
                       "إعادة بناء WebView بعد توقف محرك العرض (محاولة $rendererCrashCount/3)",
                       isError = true
                     )
-                    webViewRecreateKey++
+                    // Wait briefly so Chromium finishes tearing down the crashed renderer before spawning a fresh one
+                    scope.launch {
+                      kotlinx.coroutines.delay(400L)
+                      if (isWebViewMounted && (isGeneralBrowserSession || playNativeVideoUrl == null)) {
+                        webViewRecreateKey++
+                      }
+                    }
                   } else {
+                    isWebViewMounted = false
+                    pendingWebViewLoad = null
                     AppDiagnosticsLogger.log(
                       "WebViewOOM",
-                      "تم إيقاف إعادة التحميل التلقائي مؤقتاً لحماية الرام بعد تكرار تعطل صفحة $currentUrl",
+                      "تم إيقاف WebView لحماية الذاكرة بعد تكرار تعطل صفحة $currentUrl",
                       isError = true
                     )
                     Toast.makeText(
                       context,
-                      "الصفحة ثقيلة جداً على الرام - جرّب سيرفراً آخر أو المشغل الأساسي",
+                      "تعذر تحميل الصفحة - جرّب سيرفراً آخر",
                       Toast.LENGTH_LONG
                     ).show()
                   }

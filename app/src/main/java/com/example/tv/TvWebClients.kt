@@ -443,10 +443,13 @@ class TvWebViewClient(
 
     view?.let { webView ->
       try {
-        webView.stopLoading()
-        webView.clearCache(false)
+        webView.webChromeClient = null
+        webView.webViewClient = WebViewClient()
+        webView.removeJavascriptInterface("AndroidTvBridge")
+        webView.visibility = View.GONE
         val parent = webView.parent as? ViewGroup
         parent?.removeView(webView)
+        webView.removeAllViews()
         webView.destroy()
       } catch (_: Throwable) {
         try {
@@ -738,6 +741,8 @@ class TvWebViewClient(
 
     val enhancePlayerJs = """
       (function() {
+        if (window.__asserPlayerEnhanced) return;
+        window.__asserPlayerEnhanced = true;
         // 1. Programmatic Pause Blocker to prevent mouse click-to-pause bug
         try {
           if (!HTMLVideoElement.prototype.originalPause) {
@@ -821,23 +826,7 @@ class TvWebViewClient(
           }
         }, true); // Capture!
 
-        // 3. Media Buffer Keeper: keep-alive connection poking when video is paused
-        setInterval(function() {
-          try {
-            var vids = document.querySelectorAll('video');
-            vids.forEach(function(v) {
-              if (v.paused && !v.ended && v.readyState > 1) {
-                // Micro-nudge current time to keep media streaming connection alive and cached
-                if (v.currentTime > 0.1) {
-                  v.currentTime = v.currentTime + 0.0001;
-                  v.currentTime = v.currentTime - 0.0001;
-                }
-              }
-            });
-          } catch(e) {}
-        }, 3000);
-
-        // 4. Dynamic Quality Controller & Clean Player Isolation:
+        // 3. Dynamic Quality Controller & Clean Player Isolation (lightweight, non-thrashing):
         function enforceSelectedQuality() {
           try {
             var targetQ = window.__asserTargetQuality || 'auto';
@@ -863,7 +852,7 @@ class TvWebViewClient(
             }
           } catch(e) {}
         }
-        setInterval(enforceSelectedQuality, 2500);
+        setInterval(enforceSelectedQuality, 5000);
 
         // 4b. Auto-upgrade LaRoza (video.php -> play.php) & TopCinema episode/movie pages (-> /watch/)
         // and isolate the video player container cleanly!
@@ -961,7 +950,8 @@ class TvWebViewClient(
                 var source = v.querySelector('source');
                 if (source) src = source.src || '';
               }
-              if (src && src.startsWith('http') && src.indexOf('.ts') === -1) {
+              if (src && src.startsWith('http') && src.indexOf('.ts') === -1 && window.__asserLastDetectedSrc !== src) {
+                window.__asserLastDetectedSrc = src;
                 if (window.AndroidTvBridge && typeof window.AndroidTvBridge.onVideoDetected === 'function') {
                   window.AndroidTvBridge.onVideoDetected(src);
                 }
@@ -977,7 +967,8 @@ class TvWebViewClient(
             }
           } catch(e) {}
         }
-        setInterval(sniffVideoUrls, 1200);
+        setTimeout(sniffVideoUrls, 600);
+        setInterval(sniffVideoUrls, 2500);
 
         // Listen to postMessage from cross-origin iframes
         window.addEventListener('message', function(event) {
@@ -1373,21 +1364,31 @@ class TvWebViewClient(
 
             if (!window.hasTvMutationObserver) {
               window.hasTvMutationObserver = true;
+              var mutDebounceTimer = null;
               var observer = new MutationObserver(function() {
-                hookVideoEnded(document);
-                setupVideoClickFilter(document);
-                var currentIfrs = document.querySelectorAll('iframe');
-                currentIfrs.forEach(function(ifr) {
+                if (mutDebounceTimer) return;
+                mutDebounceTimer = setTimeout(function() {
+                  mutDebounceTimer = null;
                   try {
-                    var doc = ifr.contentDocument || ifr.contentWindow.document;
-                    if (doc) {
-                      hookVideoEnded(doc);
-                      setupVideoClickFilter(doc);
-                    }
+                    hookVideoEnded(document);
+                    setupVideoClickFilter(document);
+                    var currentIfrs = document.querySelectorAll('iframe');
+                    currentIfrs.forEach(function(ifr) {
+                      try {
+                        var doc = ifr.contentDocument || ifr.contentWindow.document;
+                        if (doc) {
+                          hookVideoEnded(doc);
+                          setupVideoClickFilter(doc);
+                        }
+                      } catch(e) {}
+                    });
                   } catch(e) {}
-                });
+                }, 450);
               });
-              observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+              var rootNode = document.body || document.documentElement;
+              if (rootNode) {
+                observer.observe(rootNode, { childList: true, subtree: true });
+              }
             }
           } catch(e) {}
         }

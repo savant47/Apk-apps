@@ -41,28 +41,48 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
+data class HomeCatalogBundle(
+  val trending: List<CatalogMediaItem>,
+  val top10Movies: List<CatalogMediaItem>,
+  val top10TvSeries: List<CatalogMediaItem>
+)
+
 class SearchAndSubtitlesService {
 
-  init {
-    installPermissiveSslForStreaming()
-  }
-
-  private val httpClient = buildSslTolerantHttpClient()
+  private val httpClient: OkHttpClient by lazy { buildSslTolerantHttpClient() }
 
   // Fast 8s hard-timeout client for HTML watch-page scraping & single-server stream extraction
-  private val fastScraperClient: OkHttpClient = httpClient.newBuilder()
-    .connectTimeout(5, TimeUnit.SECONDS)
-    .readTimeout(8, TimeUnit.SECONDS)
-    .writeTimeout(5, TimeUnit.SECONDS)
-    .callTimeout(8, TimeUnit.SECONDS)
-    .build()
+  private val fastScraperClient: OkHttpClient by lazy {
+    httpClient.newBuilder()
+      .connectTimeout(5, TimeUnit.SECONDS)
+      .readTimeout(8, TimeUnit.SECONDS)
+      .writeTimeout(5, TimeUnit.SECONDS)
+      .callTimeout(8, TimeUnit.SECONDS)
+      .build()
+  }
 
-  // Ultra-fast 5s hard-timeout client for HLS master playlist quality parsing
-  private val fastManifestClient: OkHttpClient = httpClient.newBuilder()
-    .connectTimeout(4, TimeUnit.SECONDS)
-    .readTimeout(5, TimeUnit.SECONDS)
-    .callTimeout(5, TimeUnit.SECONDS)
-    .build()
+  // Ultra-fast 5s hard-timeout client for HLS master playlist quality parsing & lightweight catalog fetches
+  private val fastManifestClient: OkHttpClient by lazy {
+    httpClient.newBuilder()
+      .connectTimeout(4, TimeUnit.SECONDS)
+      .readTimeout(5, TimeUnit.SECONDS)
+      .callTimeout(5, TimeUnit.SECONDS)
+      .build()
+  }
+
+  @Volatile
+  private var cachedCatalogBundle: HomeCatalogBundle? = null
+  @Volatile
+  private var cachedCatalogTimestampMs: Long = 0L
+
+  private fun safeGetWebViewCookie(url: String): String {
+    if (!com.example.AppRuntimeMemoryGuard.hasWebViewBeenCreated) return ""
+    return try {
+      android.webkit.CookieManager.getInstance()?.getCookie(url) ?: ""
+    } catch (_: Throwable) {
+      ""
+    }
+  }
 
   // Pre-compiled patterns for fast zero-allocation scraping loops
   private val episodeNumberRegex = Regex("(?:الحلق[ةه]|حلقة|\\bepisode|\\bep)[\\s\\-_]*([0-9]{1,3})\\b", RegexOption.IGNORE_CASE)
@@ -90,157 +110,163 @@ class SearchAndSubtitlesService {
   // 1. LIVE DAILY IMDb CHARTS & DAILY TRENDING (TRENDING NOW, TOP 10 MOVIES, TOP 10 TV)
   // ============================================================================
 
-  suspend fun fetchTrendingCatalog(): List<CatalogMediaItem> = withContext(Dispatchers.IO) {
-    val list = mutableListOf<CatalogMediaItem>()
-    val seenTitles = mutableSetOf<String>()
+  /**
+   * Single-pass, memory-safe Daily Catalog loader for Home Dashboard:
+   * - Serves 30-minute in-memory cache immediately when available.
+   * - Fetches lightweight TMDB JSON endpoints first (~15KB each, fast & low-RAM on 160MB Android 9 TV).
+   * - Avoids downloading 4 multi-MB IMDb HTML pages simultaneously at cold start.
+   */
+  suspend fun fetchHomeCatalogBundle(forceRefresh: Boolean = false): HomeCatalogBundle = withContext(Dispatchers.IO) {
+    val now = System.currentTimeMillis()
+    val existing = cachedCatalogBundle
+    if (!forceRefresh && existing != null && (now - cachedCatalogTimestampMs) < 30L * 60_000L && existing.trending.isNotEmpty()) {
+      return@withContext existing
+    }
 
-    // 1) Try scraping live IMDb Daily Trending (moviemeter + tvmeter top movers)
-    val imdbTrendingTv = scrapeImdbChart(
-      chartUrl = "https://www.imdb.com/chart/tvmeter/",
-      mediaType = "tv",
-      maxItems = 8,
-      assignRank = false
-    )
-    val imdbTrendingMovies = scrapeImdbChart(
-      chartUrl = "https://www.imdb.com/chart/moviemeter/",
-      mediaType = "movie",
-      maxItems = 8,
-      assignRank = false
-    )
-    val maxInterleave = maxOf(imdbTrendingTv.size, imdbTrendingMovies.size)
-    for (i in 0 until maxInterleave) {
-      if (i < imdbTrendingTv.size) {
-        val tvItem = imdbTrendingTv[i]
-        if (seenTitles.add(tvItem.title.lowercase())) list.add(tvItem)
-      }
-      if (i < imdbTrendingMovies.size) {
-        val movItem = imdbTrendingMovies[i]
-        if (seenTitles.add(movItem.title.lowercase())) list.add(movItem)
+    val isLowRamSdk = android.os.Build.VERSION.SDK_INT <= android.os.Build.VERSION_CODES.P
+
+    val (imdbMovies, imdbTv) = if (isLowRamSdk && !forceRefresh) {
+      // On 1GB RAM Android 9 TV sticks, skip heavy multi-MB IMDb HTML parsing on cold start
+      // and use lightweight TMDB JSON API (~15KB) for instant, crash-free Home loading.
+      emptyList<CatalogMediaItem>() to emptyList<CatalogMediaItem>()
+    } else {
+      coroutineScope {
+        val m = async {
+          withTimeoutOrNull(4500L) {
+            scrapeImdbChart("https://www.imdb.com/chart/moviemeter/", "movie", 10, true)
+          } ?: emptyList()
+        }
+        val t = async {
+          withTimeoutOrNull(4500L) {
+            scrapeImdbChart("https://www.imdb.com/chart/tvmeter/", "tv", 10, true)
+          } ?: emptyList()
+        }
+        m.await() to t.await()
       }
     }
 
-    // 2) Enrich / fallback with Live Daily Trending (/trending/all/day) — strictly released & rated items only
-    if (list.size < 12) {
-      try {
-        val url = "https://api.themoviedb.org/3/trending/all/day?api_key=$tmdbKey&language=en-US"
-        val request = Request.Builder().url(url).header("User-Agent", desktopUserAgent).build()
-        val response = httpClient.newCall(request).execute()
-        val body = response.body?.string() ?: ""
+    // Build Top 10 Movies (fill from fast TMDB JSON if needed)
+    val topMovies = mutableListOf<CatalogMediaItem>()
+    val seenMovies = mutableSetOf<String>()
+    for (item in imdbMovies) {
+      if (seenMovies.add(item.title.lowercase())) topMovies.add(item.copy(rank = topMovies.size + 1))
+    }
+    if (topMovies.size < 10) {
+      fetchTmdbList(
+        "https://api.themoviedb.org/3/trending/movie/day?api_key=$tmdbKey&language=en-US",
+        "movie",
+        10
+      ).forEach { item ->
+        if (topMovies.size < 10 && seenMovies.add(item.title.lowercase())) {
+          topMovies.add(item.copy(rank = topMovies.size + 1))
+        }
+      }
+    }
+
+    // Build Top 10 TV Series (fill from fast TMDB JSON if needed)
+    val topTv = mutableListOf<CatalogMediaItem>()
+    val seenTv = mutableSetOf<String>()
+    for (item in imdbTv) {
+      if (seenTv.add(item.title.lowercase())) topTv.add(item.copy(rank = topTv.size + 1))
+    }
+    if (topTv.size < 10) {
+      fetchTmdbList(
+        "https://api.themoviedb.org/3/trending/tv/day?api_key=$tmdbKey&language=en-US",
+        "tv",
+        10
+      ).forEach { item ->
+        if (topTv.size < 10 && seenTv.add(item.title.lowercase())) {
+          topTv.add(item.copy(rank = topTv.size + 1))
+        }
+      }
+    }
+
+    // Build Trending interleave from already-fetched items + lightweight /trending/all/day
+    val trending = mutableListOf<CatalogMediaItem>()
+    val seenTrending = mutableSetOf<String>()
+    val maxInterleave = minOf(8, maxOf(topTv.size, topMovies.size))
+    for (i in 0 until maxInterleave) {
+      if (i < topTv.size) {
+        val tvItem = topTv[i].copy(rank = null)
+        if (seenTrending.add(tvItem.title.lowercase())) trending.add(tvItem)
+      }
+      if (i < topMovies.size) {
+        val movItem = topMovies[i].copy(rank = null)
+        if (seenTrending.add(movItem.title.lowercase())) trending.add(movItem)
+      }
+    }
+    if (trending.size < 12) {
+      fetchTmdbMixedTrending(16).forEach { item ->
+        if (trending.size < 16 && seenTrending.add(item.title.lowercase())) {
+          trending.add(item)
+        }
+      }
+    }
+
+    val bundle = HomeCatalogBundle(
+      trending = trending,
+      top10Movies = topMovies,
+      top10TvSeries = topTv
+    )
+    if (trending.isNotEmpty() || topMovies.isNotEmpty() || topTv.isNotEmpty()) {
+      cachedCatalogBundle = bundle
+      cachedCatalogTimestampMs = System.currentTimeMillis()
+    }
+    bundle
+  }
+
+  private fun fetchTmdbList(apiUrl: String, mediaType: String, limit: Int): List<CatalogMediaItem> {
+    val out = mutableListOf<CatalogMediaItem>()
+    try {
+      val request = Request.Builder().url(apiUrl).header("User-Agent", desktopUserAgent).build()
+      fastManifestClient.newCall(request).execute().use { response ->
+        val body = response.body?.string().orEmpty()
         if (body.isNotBlank()) {
-          val json = JSONObject(body)
-          val results = json.optJSONArray("results")
+          val results = JSONObject(body).optJSONArray("results")
           if (results != null) {
             for (i in 0 until results.length()) {
-              if (list.size >= 16) break
-              val item = results.getJSONObject(i)
+              if (out.size >= limit) break
+              val item = results.optJSONObject(i) ?: continue
+              val parsed = parseTmdbCatalogItem(item, mediaType, rank = out.size + 1)
+              if (parsed != null) out.add(parsed)
+            }
+          }
+        }
+      }
+    } catch (_: Throwable) {}
+    return out
+  }
+
+  private fun fetchTmdbMixedTrending(limit: Int): List<CatalogMediaItem> {
+    val out = mutableListOf<CatalogMediaItem>()
+    try {
+      val url = "https://api.themoviedb.org/3/trending/all/day?api_key=$tmdbKey&language=en-US"
+      val request = Request.Builder().url(url).header("User-Agent", desktopUserAgent).build()
+      fastManifestClient.newCall(request).execute().use { response ->
+        val body = response.body?.string().orEmpty()
+        if (body.isNotBlank()) {
+          val results = JSONObject(body).optJSONArray("results")
+          if (results != null) {
+            for (i in 0 until results.length()) {
+              if (out.size >= limit) break
+              val item = results.optJSONObject(i) ?: continue
               val mediaType = item.optString("media_type", "tv")
               if (mediaType != "movie" && mediaType != "tv") continue
               val parsed = parseTmdbCatalogItem(item, mediaType, rank = null)
-              if (parsed != null && seenTitles.add(parsed.title.lowercase())) {
-                list.add(parsed)
-              }
+              if (parsed != null) out.add(parsed)
             }
           }
         }
-      } catch (_: Exception) {}
-    }
-
-    list
-  }
-
-  suspend fun fetchTop10Movies(): List<CatalogMediaItem> = withContext(Dispatchers.IO) {
-    val list = mutableListOf<CatalogMediaItem>()
-    val seenTitles = mutableSetOf<String>()
-
-    // 1) Scrape Live Daily IMDb Most Popular Movies Chart (https://www.imdb.com/chart/moviemeter/)
-    val imdbMovies = scrapeImdbChart(
-      chartUrl = "https://www.imdb.com/chart/moviemeter/",
-      mediaType = "movie",
-      maxItems = 10,
-      assignRank = true
-    )
-    for (item in imdbMovies) {
-      if (seenTitles.add(item.title.lowercase())) {
-        list.add(item.copy(rank = list.size + 1))
       }
-    }
-
-    // 2) Fill remaining slots up to 10 from Live Daily Trending Movies (/trending/movie/day) & Now Playing
-    val dailyUrls = listOf(
-      "https://api.themoviedb.org/3/trending/movie/day?api_key=$tmdbKey&language=en-US",
-      "https://api.themoviedb.org/3/movie/now_playing?api_key=$tmdbKey&language=en-US&page=1"
-    )
-    for (apiUrl in dailyUrls) {
-      if (list.size >= 10) break
-      try {
-        val request = Request.Builder().url(apiUrl).header("User-Agent", desktopUserAgent).build()
-        val response = httpClient.newCall(request).execute()
-        val body = response.body?.string() ?: ""
-        if (body.isNotBlank()) {
-          val results = JSONObject(body).optJSONArray("results")
-          if (results != null) {
-            for (i in 0 until results.length()) {
-              if (list.size >= 10) break
-              val item = results.getJSONObject(i)
-              val parsed = parseTmdbCatalogItem(item, "movie", rank = list.size + 1)
-              if (parsed != null && seenTitles.add(parsed.title.lowercase())) {
-                list.add(parsed.copy(rank = list.size + 1))
-              }
-            }
-          }
-        }
-      } catch (_: Exception) {}
-    }
-
-    list
+    } catch (_: Throwable) {}
+    return out
   }
 
-  suspend fun fetchTop10TvSeries(): List<CatalogMediaItem> = withContext(Dispatchers.IO) {
-    val list = mutableListOf<CatalogMediaItem>()
-    val seenTitles = mutableSetOf<String>()
+  suspend fun fetchTrendingCatalog(): List<CatalogMediaItem> = fetchHomeCatalogBundle().trending
 
-    // 1) Scrape Live Daily IMDb Most Popular TV Shows Chart (https://www.imdb.com/chart/tvmeter/)
-    val imdbTv = scrapeImdbChart(
-      chartUrl = "https://www.imdb.com/chart/tvmeter/",
-      mediaType = "tv",
-      maxItems = 10,
-      assignRank = true
-    )
-    for (item in imdbTv) {
-      if (seenTitles.add(item.title.lowercase())) {
-        list.add(item.copy(rank = list.size + 1))
-      }
-    }
+  suspend fun fetchTop10Movies(): List<CatalogMediaItem> = fetchHomeCatalogBundle().top10Movies
 
-    // 2) Fill remaining slots up to 10 from Live Daily Trending TV (/trending/tv/day) & On The Air
-    val dailyUrls = listOf(
-      "https://api.themoviedb.org/3/trending/tv/day?api_key=$tmdbKey&language=en-US",
-      "https://api.themoviedb.org/3/tv/on_the_air?api_key=$tmdbKey&language=en-US&page=1"
-    )
-    for (apiUrl in dailyUrls) {
-      if (list.size >= 10) break
-      try {
-        val request = Request.Builder().url(apiUrl).header("User-Agent", desktopUserAgent).build()
-        val response = httpClient.newCall(request).execute()
-        val body = response.body?.string() ?: ""
-        if (body.isNotBlank()) {
-          val results = JSONObject(body).optJSONArray("results")
-          if (results != null) {
-            for (i in 0 until results.length()) {
-              if (list.size >= 10) break
-              val item = results.getJSONObject(i)
-              val parsed = parseTmdbCatalogItem(item, "tv", rank = list.size + 1)
-              if (parsed != null && seenTitles.add(parsed.title.lowercase())) {
-                list.add(parsed.copy(rank = list.size + 1))
-              }
-            }
-          }
-        }
-      } catch (_: Exception) {}
-    }
-
-    list
-  }
+  suspend fun fetchTop10TvSeries(): List<CatalogMediaItem> = fetchHomeCatalogBundle().top10TvSeries
 
   private fun scrapeImdbChart(
     chartUrl: String,
@@ -256,8 +282,9 @@ class SearchAndSubtitlesService {
         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         .header("Accept-Language", "en-US,en;q=0.9")
         .build()
-      val resp = httpClient.newCall(req).execute()
-      val html = resp.body?.string() ?: ""
+      val html = fastManifestClient.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) "" else resp.body?.string().orEmpty()
+      }
       if (html.isBlank()) return emptyList()
 
       // Parse IMDb __NEXT_DATA__ JSON embedded in chart page
@@ -293,8 +320,13 @@ class SearchAndSubtitlesService {
               val voteCount = ratingObj?.optInt("voteCount", 0) ?: 0
               if (ratingVal <= 0.0 || voteCount < 50) continue
 
-              val posterUrl = node.optJSONObject("primaryImage")?.optString("url", "") ?: ""
-              if (posterUrl.isBlank()) continue
+              val rawPosterUrl = node.optJSONObject("primaryImage")?.optString("url", "") ?: ""
+              if (rawPosterUrl.isBlank()) continue
+              val posterUrl = if (rawPosterUrl.contains("._V1_.")) {
+                rawPosterUrl.replace("._V1_.", "._V1_UX340_.")
+              } else {
+                rawPosterUrl
+              }
 
               val releaseYear = node.optJSONObject("releaseYear")?.optInt("year", 0) ?: 0
               val yearStr = if (releaseYear > 1900) releaseYear.toString() else "2025"
@@ -353,9 +385,9 @@ class SearchAndSubtitlesService {
     val posterPath = item.optString("poster_path", "")
     if (posterPath.isBlank() || posterPath == "null") return null
     val backdropPath = item.optString("backdrop_path", "")
-    val posterUrl = "https://image.tmdb.org/t/p/w500$posterPath"
+    val posterUrl = "https://image.tmdb.org/t/p/w342$posterPath"
     val backdropUrl = if (backdropPath.isNotBlank() && backdropPath != "null") {
-      "https://image.tmdb.org/t/p/w780$backdropPath"
+      "https://image.tmdb.org/t/p/w500$backdropPath"
     } else {
       posterUrl
     }
@@ -1024,9 +1056,7 @@ class SearchAndSubtitlesService {
     return try {
       val cleanOrigin = origin.trimEnd('/')
       val ajaxUrl = "$cleanOrigin/wp-content/themes/movies2023/AjaxCenter/Single/Server.php"
-      val cookieHeader = try {
-        android.webkit.CookieManager.getInstance()?.getCookie(cleanOrigin) ?: ""
-      } catch (_: Exception) { "" }
+      val cookieHeader = safeGetWebViewCookie(cleanOrigin)
 
       val reqBuilder = Request.Builder()
         .url(ajaxUrl)
@@ -1228,9 +1258,7 @@ class SearchAndSubtitlesService {
     fun fetchHtmlWithResolvedUrl(targetUrl: String, useEgyDeadPost: Boolean = false): Pair<String, String> {
       if (!targetUrl.startsWith("http")) return "" to targetUrl
       val targetOrigin = extractOrigin(targetUrl, portal.homeUrl)
-      val cookieHeader = try {
-        android.webkit.CookieManager.getInstance()?.getCookie(targetUrl) ?: ""
-      } catch (_: Exception) { "" }
+      val cookieHeader = safeGetWebViewCookie(targetUrl)
       return try {
         val reqBuilder = Request.Builder()
           .url(targetUrl)
@@ -2236,9 +2264,7 @@ class SearchAndSubtitlesService {
     }
     return try {
       val origin = extractOrigin(refererUrl, "https://topcinemaa.one")
-      val cookieHeader = try {
-        android.webkit.CookieManager.getInstance()?.getCookie(embedUrl) ?: ""
-      } catch (_: Exception) { "" }
+      val cookieHeader = safeGetWebViewCookie(embedUrl)
 
       val reqBuilder = Request.Builder()
         .url(embedUrl)
@@ -2423,9 +2449,7 @@ class SearchAndSubtitlesService {
     val seenHeights = mutableSetOf<Int>()
 
     try {
-      val cookieHeader = try {
-        android.webkit.CookieManager.getInstance()?.getCookie(m3u8Url) ?: ""
-      } catch (_: Exception) { "" }
+      val cookieHeader = safeGetWebViewCookie(m3u8Url)
 
       val reqBuilder = Request.Builder()
         .url(m3u8Url)

@@ -1044,19 +1044,23 @@ fun NativeTvExoPlayer(
         else -> userAgent.ifBlank { standardDesktopUa }
       }
 
-      val cookieManager = try {
-        CookieManager.getInstance()
-      } catch (_: Exception) {
+      val cookieManager = if (com.example.AppRuntimeMemoryGuard.hasWebViewBeenCreated) {
+        try {
+          CookieManager.getInstance()
+        } catch (_: Throwable) {
+          null
+        }
+      } else {
         null
       }
       val videoCookie = try {
         cookieManager?.getCookie(videoUrl) ?: ""
-      } catch (_: Exception) {
+      } catch (_: Throwable) {
         ""
       }
       val refererCookie = try {
         cookieManager?.getCookie(effectiveReferer) ?: ""
-      } catch (_: Exception) {
+      } catch (_: Throwable) {
         ""
       }
       val combinedCookie = listOf(videoCookie, refererCookie)

@@ -203,15 +203,16 @@ fun HomeDashboardScreen(
   val history by repository.historyFlow.collectAsState()
   val displayMode by repository.displayModeFlow.collectAsState()
 
-  // Load Live Daily IMDb Catalog on launch and whenever refreshed
+  // Load Live Daily Catalog via single lightweight pass after first frame paints
   LaunchedEffect(catalogRefreshTrigger) {
     isLoadingCatalog = true
-    val trendingDeferred = async { searchService.fetchTrendingCatalog() }
-    val moviesDeferred = async { searchService.fetchTop10Movies() }
-    val tvDeferred = async { searchService.fetchTop10TvSeries() }
-    trendingItems = trendingDeferred.await()
-    top10Movies = moviesDeferred.await()
-    top10TvSeries = tvDeferred.await()
+    if (catalogRefreshTrigger == 0) {
+      kotlinx.coroutines.delay(180L)
+    }
+    val bundle = searchService.fetchHomeCatalogBundle(forceRefresh = catalogRefreshTrigger > 0)
+    trendingItems = bundle.trending
+    top10Movies = bundle.top10Movies
+    top10TvSeries = bundle.top10TvSeries
     isLoadingCatalog = false
   }
 

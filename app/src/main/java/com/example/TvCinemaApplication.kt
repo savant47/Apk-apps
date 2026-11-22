@@ -10,22 +10,42 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.example.data.AppDiagnosticsLogger
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
+
+/**
+ * Coordinates lazy WebView initialization state and OS low-memory trim signals
+ * across 1GB RAM Android TV devices (e.g. Xiaomi MiTV-AESP0, SDK 28, 160MB heap).
+ */
+object AppRuntimeMemoryGuard {
+  /**
+   * True ONLY after the user has actually mounted a WebView in this process session.
+   * Prevents CookieManager.getInstance() from prematurely booting Chromium (~180MB RAM)
+   * during app startup or pure OkHttp -> Native ExoPlayer playback.
+   */
+  @Volatile
+  var hasWebViewBeenCreated: Boolean = false
+
+  private val _memoryTrimEvents = MutableSharedFlow<Int>(extraBufferCapacity = 4)
+  val memoryTrimEvents: SharedFlow<Int> = _memoryTrimEvents.asSharedFlow()
+
+  fun notifyMemoryPressure(level: Int) {
+    try {
+      _memoryTrimEvents.tryEmit(level)
+    } catch (_: Throwable) {}
+  }
+}
 
 class TvCinemaApplication : Application(), ImageLoaderFactory {
 
   companion object {
     init {
       try {
-        // Completely silence Mesa error logging and avoid triggering DRI rendernode lookups
+        // Silence noisy Mesa/EGL logs without altering emulator/GPU driver selection
         Os.setenv("MESA_LOG_LEVEL", "none", true)
         Os.setenv("EGL_LOG_LEVEL", "none", true)
-        Os.setenv("MESA_NO_ERROR", "1", true)
-        Os.setenv("MESA_LOG_FILE", "/dev/null", true)
-        Os.unsetenv("MESA_LOADER_DRIVER_OVERRIDE")
-        Os.unsetenv("GALLIUM_DRIVER")
-        Os.unsetenv("MESA_DEBUG")
-        Os.unsetenv("LIBGL_DEBUG")
       } catch (_: Throwable) {}
     }
   }
@@ -61,22 +81,16 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
       detail = "v${BuildConfig.VERSION_NAME} (SDK ${Build.VERSION.SDK_INT})"
     )
 
-    // Clean up potentially corrupted index and pre-create WebView Code Cache directories
+    // Let Chromium manage its own WebView HTTP Cache & Code Cache directories cleanly.
+    // Remove any previously misplaced nested "HTTP Cache/Code Cache" folder if present.
     try {
-      val httpCacheDir = File(cacheDir, "WebView/Default/HTTP Cache")
-      val indexFile = File(httpCacheDir, "index")
-      val jsCacheDir = File(httpCacheDir, "Code Cache/js")
-      val wasmCacheDir = File(httpCacheDir, "Code Cache/wasm")
-
-      if (indexFile.exists() && (!jsCacheDir.exists() || !wasmCacheDir.exists())) {
-        indexFile.delete()
+      val misplacedCodeCache = File(cacheDir, "WebView/Default/HTTP Cache/Code Cache")
+      if (misplacedCodeCache.exists()) {
+        misplacedCodeCache.deleteRecursively()
       }
-
-      if (!jsCacheDir.exists()) jsCacheDir.mkdirs()
-      if (!wasmCacheDir.exists()) wasmCacheDir.mkdirs()
     } catch (_: Throwable) {}
 
-    // Isolate WebView data directories across child processes
+    // Isolate WebView data directories across child processes without booting Chromium in main process
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
       try {
         val processName = getProcessName()
@@ -89,8 +103,8 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
 
   /**
    * Ultra-lightweight Coil ImageLoader capped strictly for 1GB RAM Android TV 9 devices:
-   * - Max 10% app heap memory cache
-   * - Small 16MB disk cache
+   * - Max 8% app heap memory cache on Android 9 (10% on newer devices)
+   * - Small 12MB disk cache on Android 9 (16MB on newer devices)
    * - Hardware bitmaps disabled on Android 9 (SDK <= 28) to prevent GPU GL_INVALID_VALUE / buffer exhaustion
    * - RGB_565 bitmaps on Android 9 to halve decoded poster RAM usage
    */
@@ -99,7 +113,7 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
     return ImageLoader.Builder(this)
       .memoryCache {
         MemoryCache.Builder(this)
-          .maxSizePercent(0.10)
+          .maxSizePercent(if (isAndroid9OrLower) 0.08 else 0.10)
           .strongReferencesEnabled(true)
           .weakReferencesEnabled(false)
           .build()
@@ -107,7 +121,7 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
       .diskCache {
         DiskCache.Builder()
           .directory(File(cacheDir, "image_cache"))
-          .maxSizeBytes(16L * 1024L * 1024L)
+          .maxSizeBytes(if (isAndroid9OrLower) 12L * 1024L * 1024L else 16L * 1024L * 1024L)
           .build()
       }
       .allowHardware(!isAndroid9OrLower)
@@ -121,8 +135,9 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
   override fun onTrimMemory(level: Int) {
     super.onTrimMemory(level)
     try {
-      if (level >= TRIM_MEMORY_RUNNING_MODERATE) {
+      if (level >= TRIM_MEMORY_RUNNING_MODERATE || level == TRIM_MEMORY_UI_HIDDEN) {
         coil.Coil.imageLoader(this).memoryCache?.clear()
+        AppRuntimeMemoryGuard.notifyMemoryPressure(level)
       }
     } catch (_: Throwable) {}
   }
@@ -133,9 +148,10 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
       AppDiagnosticsLogger.recordBreadcrumb(
         context = applicationContext,
         stage = "LOW_MEMORY",
-        detail = "System triggered onLowMemory() — clearing Coil cache"
+        detail = "System triggered onLowMemory() — clearing Coil cache & inactive WebViews"
       )
       coil.Coil.imageLoader(this).memoryCache?.clear()
+      AppRuntimeMemoryGuard.notifyMemoryPressure(TRIM_MEMORY_RUNNING_CRITICAL)
     } catch (_: Throwable) {}
   }
 }
