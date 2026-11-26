@@ -132,3 +132,32 @@ data class SubtitleItem(
     get() = source
 }
 
+data class UpNextItem(
+  val id: String,
+  val seriesKey: String,
+  val showTitle: String,
+  val seasonNumber: Int,
+  val episodeNumber: Int,
+  val episodeTitle: String = "",
+  val posterUrl: String = "",
+  val watchedCount: Int = 0,
+  val totalCount: Int = 0,
+  val traktSlug: String = "",
+  val traktEpisodeUrl: String = "",
+  val traktEpisodeId: String = "",
+  val fromTrakt: Boolean = false,
+  val preferredPortal: StreamingPortal = StreamingPortal.WATCH_SERIES,
+  val watchUrl: String = "",
+  val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+data class TraktParsedLink(
+  val slug: String,
+  val showTitle: String,
+  val seasonNumber: Int?,
+  val episodeNumber: Int?,
+  val isMovie: Boolean,
+  val originalUrl: String
+)
+
+

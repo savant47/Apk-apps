@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -66,6 +67,7 @@ fun TvNavBar(
   currentDisplayMode: AppDisplayMode,
   onGoToBrowserHome: () -> Unit,
   onGoToAsserTvHome: () -> Unit = onGoToBrowserHome,
+  onGoToTrakt: () -> Unit = {},
   onSelectPortal: (StreamingPortal) -> Unit,
   onOpenBookmarks: () -> Unit,
   onOpenHistory: () -> Unit,
@@ -112,6 +114,18 @@ fun TvNavBar(
           activeColor = CinemaPrimary,
           onClick = onGoToAsserTvHome,
           testTag = "btn_nav_asser_tv"
+        )
+      }
+
+      // 2b. Trakt Portal Tab Button
+      item {
+        TvNavUtilityButton(
+          label = "Trakt",
+          icon = Icons.Default.TrackChanges,
+          isActive = isHomeActive && selectedMainTab == AppMainTab.TRAKT,
+          activeColor = Color(0xFFED1C24),
+          onClick = onGoToTrakt,
+          testTag = "btn_nav_trakt"
         )
       }
 

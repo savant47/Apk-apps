@@ -46,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,7 +80,9 @@ fun AdBlockSettingsDialog(
   val context = LocalContext.current
   var isAdBlockEnabled by remember { mutableStateOf(repository.isAdBlockEnabled()) }
   var isStrictPopupBlocker by remember { mutableStateOf(repository.isStrictPopupBlockerEnabled()) }
+  var isStrictIframeSandbox by remember { mutableStateOf(repository.isStrictIframeSandboxEnabled()) }
   var isAdGuardDnsEnabled by remember { mutableStateOf(repository.isAdGuardDnsEnabled()) }
+  val blockedAdsCount by repository.blockedAdsCountFlow.collectAsState()
 
   val adguardDnsHost = "dns.adguard-dns.com"
 
@@ -171,7 +174,7 @@ fun AdBlockSettingsDialog(
               modifier = Modifier.size(26.dp)
             )
             Spacer(modifier = Modifier.width(10.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
               Text(
                 text = if (isAdBlockEnabled && isStrictPopupBlocker) "الحماية مفعّلة 🛡️" else "الحماية جزئية",
                 color = Color.White,
@@ -179,10 +182,25 @@ fun AdBlockSettingsDialog(
                 fontWeight = FontWeight.Bold
               )
               Text(
-                text = "حظر الإعلانات والتحويلات تلقائياً",
-                color = Color.LightGray,
-                fontSize = 13.sp
+                text = "تم حجب $blockedAdsCount إعلان/نافذة منبثقة",
+                color = CinemaAccent,
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.testTag("txt_blocked_ads_count")
               )
+            }
+            if (blockedAdsCount > 0) {
+              OutlinedButton(
+                onClick = { repository.resetBlockedAdsCount() },
+                border = BorderStroke(1.dp, CinemaBorder),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier
+                  .heightIn(min = 36.dp)
+                  .testTag("btn_reset_blocked_ads_count")
+              ) {
+                Text("تصفير", color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+              }
             }
           }
         }
@@ -226,6 +244,48 @@ fun AdBlockSettingsDialog(
               uncheckedTrackColor = CinemaSurfaceVariant
             ),
             modifier = Modifier.testTag("switch_strict_popup")
+          )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Toggle 1b: Strict Iframe Sandbox (Smart Anti-Popup without "Please Disable Sandbox" breakages)
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(CinemaSurface)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = "Strict Iframe Sandbox",
+              color = Color.White,
+              fontSize = 15.5.sp,
+              fontWeight = FontWeight.Bold
+            )
+            Text(
+              text = "حظر اختطاف النقرات والبوب-أب داخل المشغل بدون تعارض Sandbox",
+              color = Color.LightGray,
+              fontSize = 12.5.sp
+            )
+          }
+          Switch(
+            checked = isStrictIframeSandbox,
+            onCheckedChange = { checked ->
+              isStrictIframeSandbox = checked
+              repository.setStrictIframeSandboxEnabled(checked)
+              onSettingsChanged()
+            },
+            colors = SwitchDefaults.colors(
+              checkedThumbColor = Color.White,
+              checkedTrackColor = CinemaSuccess,
+              uncheckedThumbColor = Color.Gray,
+              uncheckedTrackColor = CinemaSurfaceVariant
+            ),
+            modifier = Modifier.testTag("switch_strict_iframe_sandbox")
           )
         }
 

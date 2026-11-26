@@ -8,6 +8,7 @@ import com.example.model.HistoryEntry
 import com.example.model.StreamingPortal
 import com.example.model.SubtitleEdgeStyle
 import com.example.model.SubtitleStyleConfig
+import com.example.model.UpNextItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,6 +55,27 @@ class TvPreferencesRepository(context: Context) {
   private val _videoResizeModeFlow = MutableStateFlow(RESIZE_MODE_FILL)
   val videoResizeModeFlow: StateFlow<String> = _videoResizeModeFlow.asStateFlow()
 
+  private val _strictIframeSandboxFlow = MutableStateFlow(true)
+  val strictIframeSandboxFlow: StateFlow<Boolean> = _strictIframeSandboxFlow.asStateFlow()
+
+  private val _blockedAdsCountFlow = MutableStateFlow(0)
+  val blockedAdsCountFlow: StateFlow<Int> = _blockedAdsCountFlow.asStateFlow()
+
+  private val _audioBoostPercentFlow = MutableStateFlow(100)
+  val audioBoostPercentFlow: StateFlow<Int> = _audioBoostPercentFlow.asStateFlow()
+
+  private val _watchedEpisodesFlow = MutableStateFlow<Set<String>>(emptySet())
+  val watchedEpisodesFlow: StateFlow<Set<String>> = _watchedEpisodesFlow.asStateFlow()
+
+  private val _upNextFlow = MutableStateFlow<List<UpNextItem>>(emptyList())
+  val upNextFlow: StateFlow<List<UpNextItem>> = _upNextFlow.asStateFlow()
+
+  private val _traktUsernameFlow = MutableStateFlow("")
+  val traktUsernameFlow: StateFlow<String> = _traktUsernameFlow.asStateFlow()
+
+  private val _traktLastSyncMsFlow = MutableStateFlow(0L)
+  val traktLastSyncMsFlow: StateFlow<Long> = _traktLastSyncMsFlow.asStateFlow()
+
   init {
     loadBookmarks()
     loadHistory()
@@ -62,10 +84,17 @@ class TvPreferencesRepository(context: Context) {
     loadPreferredQuality()
     loadVideoResizeMode()
     _autoPlayNextEpisodeFlow.value = prefs.getBoolean(KEY_AUTO_PLAY_NEXT_EPISODE, true)
+    _strictIframeSandboxFlow.value = prefs.getBoolean(KEY_STRICT_IFRAME_SANDBOX, true)
+    _blockedAdsCountFlow.value = prefs.getInt(KEY_BLOCKED_ADS_COUNT, 0).coerceAtLeast(0)
+    _audioBoostPercentFlow.value = prefs.getInt(KEY_AUDIO_BOOST_PERCENT, 100).coerceIn(0, 300)
+    _traktUsernameFlow.value = prefs.getString(KEY_TRAKT_USERNAME, "") ?: ""
+    _traktLastSyncMsFlow.value = prefs.getLong(KEY_TRAKT_LAST_SYNC_MS, 0L)
+    loadWatchedEpisodes()
+    loadUpNextQueue()
     loadPortals()
     AppDiagnosticsLogger.log(
       "Prefs",
-      "Loaded prefs: quality=${_preferredQualityFlow.value}, resize=${_videoResizeModeFlow.value}, subSize=${_subtitleStyleFlow.value.fontSizeSp.toInt()}sp, subEdge=${_subtitleStyleFlow.value.edgeStyle.id}, subBottom=${_subtitleStyleFlow.value.bottomOffsetDp}dp"
+      "Loaded prefs: quality=${_preferredQualityFlow.value}, resize=${_videoResizeModeFlow.value}, audioBoost=${_audioBoostPercentFlow.value}%, subSize=${_subtitleStyleFlow.value.fontSizeSp.toInt()}sp"
     )
   }
 
@@ -344,6 +373,389 @@ class TvPreferencesRepository(context: Context) {
     prefs.edit().putBoolean(KEY_STRICT_POPUP_BLOCKER, enabled).apply()
   }
 
+  fun isStrictIframeSandboxEnabled(): Boolean = _strictIframeSandboxFlow.value
+
+  fun setStrictIframeSandboxEnabled(enabled: Boolean) {
+    _strictIframeSandboxFlow.value = enabled
+    prefs.edit().putBoolean(KEY_STRICT_IFRAME_SANDBOX, enabled).apply()
+  }
+
+  @Synchronized
+  fun incrementBlockedAdsCount(delta: Int = 1) {
+    val updated = (_blockedAdsCountFlow.value + delta).coerceAtLeast(0)
+    _blockedAdsCountFlow.value = updated
+    prefs.edit().putInt(KEY_BLOCKED_ADS_COUNT, updated).apply()
+  }
+
+  @Synchronized
+  fun resetBlockedAdsCount() {
+    _blockedAdsCountFlow.value = 0
+    prefs.edit().putInt(KEY_BLOCKED_ADS_COUNT, 0).apply()
+  }
+
+  fun getAudioBoostPercent(): Int = _audioBoostPercentFlow.value
+
+  fun setAudioBoostPercent(percent: Int) {
+    val clamped = percent.coerceIn(0, 300)
+    _audioBoostPercentFlow.value = clamped
+    prefs.edit().putInt(KEY_AUDIO_BOOST_PERCENT, clamped).apply()
+  }
+
+  // =========================================================================
+  // LOCAL WATCHED EPISODES TRACKER & UP NEXT QUEUE (التالي للمشاهدة)
+  // =========================================================================
+
+  private fun loadWatchedEpisodes() {
+    val raw = prefs.getString(KEY_WATCHED_EPISODES_JSON, null)
+    if (raw.isNullOrBlank()) {
+      _watchedEpisodesFlow.value = emptySet()
+      return
+    }
+    val set = LinkedHashSet<String>()
+    try {
+      val arr = JSONArray(raw)
+      for (i in 0 until arr.length()) {
+        val k = arr.optString(i, "").trim()
+        if (k.isNotBlank()) set.add(k)
+      }
+    } catch (_: Exception) {}
+    _watchedEpisodesFlow.value = set
+  }
+
+  private fun saveWatchedEpisodes(set: Set<String>) {
+    _watchedEpisodesFlow.value = set
+    val arr = JSONArray()
+    for (k in set) {
+      arr.put(k)
+    }
+    prefs.edit().putString(KEY_WATCHED_EPISODES_JSON, arr.toString()).apply()
+  }
+
+  fun isEpisodeWatched(showTitle: String, seasonNumber: Int, episodeNumber: Int): Boolean {
+    val key = buildEpisodeWatchedKey(showTitle, seasonNumber, episodeNumber)
+    return key.isNotBlank() && _watchedEpisodesFlow.value.contains(key)
+  }
+
+  @Synchronized
+  fun markEpisodeWatched(
+    showTitle: String,
+    seasonNumber: Int,
+    episodeNumber: Int,
+    preferredPortal: StreamingPortal = StreamingPortal.WATCH_SERIES,
+    nextEpisodeWatchUrl: String = "",
+    autoEnqueueNext: Boolean = true
+  ) {
+    val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(showTitle).ifBlank { showTitle }.trim()
+    if (cleanShow.isBlank() || episodeNumber <= 0) return
+    val s = seasonNumber.coerceAtLeast(1)
+    val e = episodeNumber.coerceAtLeast(1)
+    val key = buildEpisodeWatchedKey(cleanShow, s, e)
+    if (key.isNotBlank()) {
+      val updated = _watchedEpisodesFlow.value.toMutableSet()
+      updated.add(key)
+      saveWatchedEpisodes(updated)
+    }
+    if (autoEnqueueNext) {
+      enqueueNextEpisode(
+        showTitle = cleanShow,
+        seasonNumber = s,
+        episodeNumber = e + 1,
+        preferredPortal = preferredPortal,
+        watchUrl = nextEpisodeWatchUrl
+      )
+    }
+  }
+
+  @Synchronized
+  fun unmarkEpisodeWatched(showTitle: String, seasonNumber: Int, episodeNumber: Int) {
+    val key = buildEpisodeWatchedKey(showTitle, seasonNumber, episodeNumber)
+    if (key.isBlank()) return
+    val updated = _watchedEpisodesFlow.value.toMutableSet()
+    if (updated.remove(key)) {
+      saveWatchedEpisodes(updated)
+    }
+  }
+
+  // =========================================================================
+  // TRAKT ACCOUNT SESSION & REAL PROGRESS SYNC (Zero-Startup-WebView Cookie Store)
+  // =========================================================================
+
+  @Synchronized
+  fun saveTraktSession(
+    cookie: String = "",
+    username: String = "",
+    csrfToken: String = ""
+  ) {
+    val editor = prefs.edit()
+    if (cookie.isNotBlank()) {
+      editor.putString(KEY_TRAKT_COOKIE, cookie.trim())
+    }
+    if (username.isNotBlank()) {
+      val cleanUser = username.trim()
+      _traktUsernameFlow.value = cleanUser
+      editor.putString(KEY_TRAKT_USERNAME, cleanUser)
+    }
+    if (csrfToken.isNotBlank()) {
+      editor.putString(KEY_TRAKT_CSRF_TOKEN, csrfToken.trim())
+    }
+    editor.apply()
+  }
+
+  fun getTraktCookie(): String = prefs.getString(KEY_TRAKT_COOKIE, "") ?: ""
+
+  fun getTraktUsername(): String = _traktUsernameFlow.value.ifBlank {
+    prefs.getString(KEY_TRAKT_USERNAME, "") ?: ""
+  }
+
+  fun getTraktCsrfToken(): String = prefs.getString(KEY_TRAKT_CSRF_TOKEN, "") ?: ""
+
+  @Synchronized
+  fun clearTraktSession() {
+    _traktUsernameFlow.value = ""
+    _traktLastSyncMsFlow.value = 0L
+    prefs.edit()
+      .remove(KEY_TRAKT_COOKIE)
+      .remove(KEY_TRAKT_USERNAME)
+      .remove(KEY_TRAKT_CSRF_TOKEN)
+      .remove(KEY_TRAKT_LAST_SYNC_MS)
+      .apply()
+  }
+
+  private fun loadUpNextQueue() {
+    val raw = prefs.getString(KEY_UP_NEXT_JSON, null)
+    if (raw.isNullOrBlank()) {
+      _upNextFlow.value = emptyList()
+      return
+    }
+    val list = mutableListOf<UpNextItem>()
+    val seenSeries = mutableSetOf<String>()
+    try {
+      val arr = JSONArray(raw)
+      for (i in 0 until arr.length()) {
+        val obj = arr.getJSONObject(i)
+        val showTitle = obj.optString("showTitle", "").trim()
+        val s = obj.optInt("seasonNumber", 1).coerceAtLeast(1)
+        val e = obj.optInt("episodeNumber", 1).coerceAtLeast(1)
+        if (showTitle.isBlank()) continue
+        val seriesKey = obj.optString("seriesKey", "").ifBlank {
+          buildNormalizedContentKey(showTitle, null, null, isSeries = false)
+        }
+        if (seriesKey.isNotBlank() && !seenSeries.add(seriesKey)) continue
+        list.add(
+          UpNextItem(
+            id = obj.optString("id", UUID.randomUUID().toString()),
+            seriesKey = seriesKey,
+            showTitle = showTitle,
+            seasonNumber = s,
+            episodeNumber = e,
+            episodeTitle = obj.optString("episodeTitle", ""),
+            posterUrl = obj.optString("posterUrl", ""),
+            watchedCount = obj.optInt("watchedCount", 0).coerceAtLeast(0),
+            totalCount = obj.optInt("totalCount", 0).coerceAtLeast(0),
+            traktSlug = obj.optString("traktSlug", ""),
+            traktEpisodeUrl = obj.optString("traktEpisodeUrl", ""),
+            traktEpisodeId = obj.optString("traktEpisodeId", ""),
+            fromTrakt = obj.optBoolean("fromTrakt", false),
+            preferredPortal = StreamingPortal.fromId(obj.optString("preferredPortal", StreamingPortal.WATCH_SERIES.id)),
+            watchUrl = obj.optString("watchUrl", ""),
+            updatedAtMs = obj.optLong("updatedAtMs", System.currentTimeMillis())
+          )
+        )
+      }
+    } catch (_: Exception) {}
+    _upNextFlow.value = list
+  }
+
+  private fun saveUpNextQueue(list: List<UpNextItem>) {
+    _upNextFlow.value = list
+    val arr = JSONArray()
+    for (item in list) {
+      arr.put(
+        JSONObject().apply {
+          put("id", item.id)
+          put("seriesKey", item.seriesKey)
+          put("showTitle", item.showTitle)
+          put("seasonNumber", item.seasonNumber)
+          put("episodeNumber", item.episodeNumber)
+          put("episodeTitle", item.episodeTitle)
+          put("posterUrl", item.posterUrl)
+          put("watchedCount", item.watchedCount)
+          put("totalCount", item.totalCount)
+          put("traktSlug", item.traktSlug)
+          put("traktEpisodeUrl", item.traktEpisodeUrl)
+          put("traktEpisodeId", item.traktEpisodeId)
+          put("fromTrakt", item.fromTrakt)
+          put("preferredPortal", item.preferredPortal.id)
+          put("watchUrl", item.watchUrl)
+          put("updatedAtMs", item.updatedAtMs)
+        }
+      )
+    }
+    prefs.edit().putString(KEY_UP_NEXT_JSON, arr.toString()).apply()
+  }
+
+  /**
+   * Merges real Progress ("Next to Watch") items extracted from the user's logged-in Trakt account
+   * while preserving user-preferred portal choices and any non-duplicate local Up Next items.
+   */
+  @Synchronized
+  fun mergeTraktProgressItems(traktItems: List<UpNextItem>) {
+    if (traktItems.isEmpty()) return
+    val existingByKey = _upNextFlow.value.associateBy { it.seriesKey }
+    val seenKeys = mutableSetOf<String>()
+    val merged = mutableListOf<UpNextItem>()
+
+    for (raw in traktItems) {
+      val key = raw.seriesKey.ifBlank {
+        buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false)
+      }
+      if (key.isNotBlank() && !seenKeys.add(key)) continue
+      val prev = existingByKey[key]
+      merged.add(
+        raw.copy(
+          seriesKey = key,
+          posterUrl = raw.posterUrl.ifBlank { prev?.posterUrl.orEmpty() },
+          preferredPortal = prev?.preferredPortal ?: raw.preferredPortal,
+          fromTrakt = true
+        )
+      )
+    }
+
+    // Keep local (non-Trakt) Up Next items that aren't already represented by Trakt
+    for (local in _upNextFlow.value) {
+      if (!local.fromTrakt && local.seriesKey.isNotBlank() && seenKeys.add(local.seriesKey)) {
+        merged.add(local)
+      }
+    }
+
+    val now = System.currentTimeMillis()
+    _traktLastSyncMsFlow.value = now
+    prefs.edit().putLong(KEY_TRAKT_LAST_SYNC_MS, now).apply()
+    saveUpNextQueue(merged.take(80))
+  }
+
+  /**
+   * Optimistically marks the given Up Next episode as watched locally and immediately advances
+   * its row to the next episode (while Trakt two-way sync runs in the background to fetch the
+   * exact next episode title / season rollover).
+   */
+  @Synchronized
+  fun advanceUpNextItemLocally(item: UpNextItem) {
+    val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(item.showTitle)
+      .ifBlank { item.showTitle }
+      .trim()
+    val s = item.seasonNumber.coerceAtLeast(1)
+    val e = item.episodeNumber.coerceAtLeast(1)
+    val watchedKey = buildEpisodeWatchedKey(cleanShow, s, e)
+    if (watchedKey.isNotBlank()) {
+      val updatedSet = _watchedEpisodesFlow.value.toMutableSet()
+      updatedSet.add(watchedKey)
+      saveWatchedEpisodes(updatedSet)
+    }
+
+    val nextEp = e + 1
+    val nextWatchedCount = if (item.totalCount > 0) {
+      (item.watchedCount + 1).coerceAtMost(item.totalCount)
+    } else {
+      item.watchedCount + 1
+    }
+    val nextTraktUrl = if (item.traktSlug.isNotBlank()) {
+      "https://trakt.tv/shows/${item.traktSlug}/seasons/$s/episodes/$nextEp"
+    } else {
+      ""
+    }
+    val advancedItem = item.copy(
+      seasonNumber = s,
+      episodeNumber = nextEp,
+      episodeTitle = "",
+      watchedCount = nextWatchedCount,
+      traktEpisodeUrl = nextTraktUrl,
+      traktEpisodeId = "",
+      watchUrl = "",
+      updatedAtMs = System.currentTimeMillis()
+    )
+
+    val seriesKey = item.seriesKey.ifBlank {
+      buildNormalizedContentKey(cleanShow, null, null, isSeries = false)
+    }
+    val remaining = _upNextFlow.value.filterNot { existing ->
+      existing.id == item.id ||
+        (seriesKey.isNotBlank() && existing.seriesKey == seriesKey) ||
+        existing.showTitle.equals(cleanShow, ignoreCase = true)
+    }.toMutableList()
+
+    // If all episodes in the show are now finished, remove from active queue; otherwise place at top (Recently Watched)
+    if (item.totalCount <= 0 || nextWatchedCount < item.totalCount) {
+      remaining.add(0, advancedItem)
+    }
+    saveUpNextQueue(remaining.take(80))
+  }
+
+  @Synchronized
+  fun enqueueNextEpisode(
+    showTitle: String,
+    seasonNumber: Int,
+    episodeNumber: Int,
+    preferredPortal: StreamingPortal = StreamingPortal.WATCH_SERIES,
+    watchUrl: String = ""
+  ) {
+    val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(showTitle).ifBlank { showTitle }.trim()
+    if (cleanShow.isBlank() || episodeNumber <= 0) return
+    val seriesKey = buildNormalizedContentKey(cleanShow, null, null, isSeries = false)
+    val prev = _upNextFlow.value.firstOrNull { existing ->
+      (seriesKey.isNotBlank() && existing.seriesKey == seriesKey) ||
+        existing.showTitle.equals(cleanShow, ignoreCase = true)
+    }
+    val current = _upNextFlow.value.filterNot { existing ->
+      (seriesKey.isNotBlank() && existing.seriesKey == seriesKey) ||
+        existing.showTitle.equals(cleanShow, ignoreCase = true)
+    }.toMutableList()
+    val s = seasonNumber.coerceAtLeast(1)
+    val e = episodeNumber.coerceAtLeast(1)
+    val updatedWatched = if (prev != null && prev.totalCount > 0) {
+      (prev.watchedCount + 1).coerceAtMost(prev.totalCount)
+    } else {
+      prev?.watchedCount ?: 0
+    }
+    current.add(
+      0,
+      UpNextItem(
+        id = prev?.id ?: UUID.randomUUID().toString(),
+        seriesKey = seriesKey,
+        showTitle = prev?.showTitle?.ifBlank { cleanShow } ?: cleanShow,
+        seasonNumber = s,
+        episodeNumber = e,
+        episodeTitle = "",
+        posterUrl = prev?.posterUrl.orEmpty(),
+        watchedCount = updatedWatched,
+        totalCount = prev?.totalCount ?: 0,
+        traktSlug = prev?.traktSlug.orEmpty(),
+        traktEpisodeUrl = if (!prev?.traktSlug.isNullOrBlank()) {
+          "https://trakt.tv/shows/${prev!!.traktSlug}/seasons/$s/episodes/$e"
+        } else {
+          ""
+        },
+        traktEpisodeId = "",
+        fromTrakt = prev?.fromTrakt ?: false,
+        preferredPortal = preferredPortal,
+        watchUrl = watchUrl,
+        updatedAtMs = System.currentTimeMillis()
+      )
+    )
+    saveUpNextQueue(current.take(80))
+  }
+
+  @Synchronized
+  fun removeUpNextItem(id: String) {
+    val updated = _upNextFlow.value.filterNot { it.id == id }
+    saveUpNextQueue(updated)
+  }
+
+  @Synchronized
+  fun clearUpNext() {
+    saveUpNextQueue(emptyList())
+  }
+
   fun addBookmark(title: String, url: String, portal: StreamingPortal): Boolean {
     val current = _bookmarksFlow.value.toMutableList()
     if (current.any { it.url == url }) return false
@@ -434,9 +846,10 @@ class TvPreferencesRepository(context: Context) {
       ""
     }
 
+    // UNIFIED CONTINUE WATCHING: deduplicate EVERY series into ONE single card across ALL portals & episodes
     val current = _historyFlow.value.filterNot { existing ->
       if (existing.url == canonicalUrl) return@filterNot true
-      if (resolvedIsSeries && existing.portal == portal && incomingShowKey.isNotBlank()) {
+      if (resolvedIsSeries && incomingShowKey.isNotBlank()) {
         val existingBase = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(existing.title)
           .ifBlank { existing.title }
         val existingKey = buildNormalizedContentKey(existingBase, null, null, isSeries = false)
@@ -557,8 +970,9 @@ class TvPreferencesRepository(context: Context) {
         val cleanTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(rawTitle).ifBlank { rawTitle }
 
         if (resolvedIsSeries) {
-          val showKey = "${portal.id}|${buildNormalizedContentKey(cleanTitle, null, null, isSeries = false)}"
-          if (showKey.endsWith("|").not() && !seenSeriesPortalKeys.add(showKey)) {
+          // Cross-portal unified deduplication: one single Continue Watching card per series
+          val showKey = buildNormalizedContentKey(cleanTitle, null, null, isSeries = false)
+          if (showKey.isNotBlank() && !seenSeriesPortalKeys.add(showKey)) {
             continue
           }
         }
@@ -642,6 +1056,11 @@ class TvPreferencesRepository(context: Context) {
     root.put("sub_bottom_offset", sub.bottomOffsetDp)
     root.put("sub_edge_style", sub.edgeStyle.id)
     root.put("sub_sync_offset", sub.syncOffsetMs)
+    root.put("watched_episodes", prefs.getString(KEY_WATCHED_EPISODES_JSON, "[]"))
+    root.put("up_next_queue", prefs.getString(KEY_UP_NEXT_JSON, "[]"))
+    root.put("audio_boost_percent", getAudioBoostPercent())
+    root.put("strict_iframe_sandbox", isStrictIframeSandboxEnabled())
+    root.put("blocked_ads_count", _blockedAdsCountFlow.value)
     return root.toString(2)
   }
 
@@ -666,6 +1085,11 @@ class TvPreferencesRepository(context: Context) {
       if (root.has("sub_bottom_offset")) editor.putInt(KEY_SUB_BOTTOM_OFFSET, root.getInt("sub_bottom_offset"))
       if (root.has("sub_edge_style")) editor.putString(KEY_SUB_EDGE_STYLE, root.getString("sub_edge_style"))
       if (root.has("sub_sync_offset")) editor.putLong(KEY_SUB_SYNC_OFFSET, root.getLong("sub_sync_offset"))
+      if (root.has("watched_episodes")) editor.putString(KEY_WATCHED_EPISODES_JSON, root.getString("watched_episodes"))
+      if (root.has("up_next_queue")) editor.putString(KEY_UP_NEXT_JSON, root.getString("up_next_queue"))
+      if (root.has("audio_boost_percent")) editor.putInt(KEY_AUDIO_BOOST_PERCENT, root.getInt("audio_boost_percent").coerceIn(0, 300))
+      if (root.has("strict_iframe_sandbox")) editor.putBoolean(KEY_STRICT_IFRAME_SANDBOX, root.getBoolean("strict_iframe_sandbox"))
+      if (root.has("blocked_ads_count")) editor.putInt(KEY_BLOCKED_ADS_COUNT, root.getInt("blocked_ads_count").coerceAtLeast(0))
       editor.commit()
       loadBookmarks()
       loadHistory()
@@ -673,6 +1097,11 @@ class TvPreferencesRepository(context: Context) {
       loadSubtitleStyle()
       loadPreferredQuality()
       loadVideoResizeMode()
+      loadWatchedEpisodes()
+      loadUpNextQueue()
+      _audioBoostPercentFlow.value = prefs.getInt(KEY_AUDIO_BOOST_PERCENT, 100).coerceIn(0, 300)
+      _strictIframeSandboxFlow.value = prefs.getBoolean(KEY_STRICT_IFRAME_SANDBOX, true)
+      _blockedAdsCountFlow.value = prefs.getInt(KEY_BLOCKED_ADS_COUNT, 0).coerceAtLeast(0)
       true
     } catch (_: Exception) {
       false
@@ -680,6 +1109,22 @@ class TvPreferencesRepository(context: Context) {
   }
 
   companion object {
+    const val ADMIN_PASSWORD = "ahayabasharya89a"
+
+    fun verifyAdminPassword(input: String): Boolean {
+      return input.trim() == ADMIN_PASSWORD
+    }
+
+    fun buildEpisodeWatchedKey(showTitle: String, seasonNumber: Int, episodeNumber: Int): String {
+      if (showTitle.isBlank() || episodeNumber <= 0) return ""
+      return buildNormalizedContentKey(
+        rawTitle = showTitle,
+        seasonNumber = seasonNumber.coerceAtLeast(1),
+        episodeNumber = episodeNumber.coerceAtLeast(1),
+        isSeries = true
+      )
+    }
+
     private const val KEY_BOOKMARKS_JSON = "bookmarks_json"
     private const val KEY_HISTORY_JSON = "history_json"
     private const val KEY_PLAYBACK_PROGRESS_JSON = "playback_progress_json_v1"
@@ -690,6 +1135,15 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_AD_BLOCK = "ad_block_enabled"
     private const val KEY_ADGUARD_DNS = "adguard_dns_enabled"
     private const val KEY_STRICT_POPUP_BLOCKER = "strict_popup_blocker_enabled"
+    private const val KEY_STRICT_IFRAME_SANDBOX = "strict_iframe_sandbox_enabled_v1"
+    private const val KEY_BLOCKED_ADS_COUNT = "blocked_ads_count_v1"
+    private const val KEY_AUDIO_BOOST_PERCENT = "audio_boost_percent_v1"
+    private const val KEY_WATCHED_EPISODES_JSON = "watched_episodes_json_v1"
+    private const val KEY_UP_NEXT_JSON = "up_next_queue_json_v1"
+    private const val KEY_TRAKT_COOKIE = "trakt_session_cookie_v1"
+    private const val KEY_TRAKT_USERNAME = "trakt_username_v1"
+    private const val KEY_TRAKT_CSRF_TOKEN = "trakt_csrf_token_v1"
+    private const val KEY_TRAKT_LAST_SYNC_MS = "trakt_last_sync_ms_v1"
     private const val KEY_GITHUB_REPO = "github_repo_slug"
     private const val KEY_GITHUB_TOKEN = "github_pat_token"
     private const val KEY_SUB_TEXT_COLOR = "subtitle_text_color_argb"

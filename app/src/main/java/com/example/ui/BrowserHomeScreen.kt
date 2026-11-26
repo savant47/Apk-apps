@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
@@ -227,12 +228,12 @@ fun AppMainTabSwitcherBar(
 
       Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
         MainModeTabItem(
-          title = "Asser Browser",
-          subtitle = "بحث جوجل وتصفح",
+          title = "المتصفح",
+          subtitle = "بحث جوجل",
           icon = Icons.Default.Public,
           isSelected = selectedTab == AppMainTab.BROWSER,
           activeColor = Color(0xFF38BDF8),
@@ -249,6 +250,17 @@ fun AppMainTabSwitcherBar(
           activeColor = CinemaPrimary,
           onClick = { onSelectTab(AppMainTab.ASSER_TV) },
           testTag = "tab_asser_tv",
+          modifier = Modifier.weight(1f)
+        )
+
+        MainModeTabItem(
+          title = "Trakt",
+          subtitle = "متابعة الحلقات",
+          icon = Icons.Default.TrackChanges,
+          isSelected = selectedTab == AppMainTab.TRAKT,
+          activeColor = Color(0xFFED1C24),
+          onClick = { onSelectTab(AppMainTab.TRAKT) },
+          testTag = "tab_trakt",
           modifier = Modifier.weight(1f)
         )
       }
@@ -302,6 +314,16 @@ fun AppMainTabSwitcherBar(
           activeColor = CinemaPrimary,
           onClick = { onSelectTab(AppMainTab.ASSER_TV) },
           testTag = "tab_asser_tv"
+        )
+
+        MainModeTabItem(
+          title = "Trakt",
+          subtitle = "متابعة الحلقات",
+          icon = Icons.Default.TrackChanges,
+          isSelected = selectedTab == AppMainTab.TRAKT,
+          activeColor = Color(0xFFED1C24),
+          onClick = { onSelectTab(AppMainTab.TRAKT) },
+          testTag = "tab_trakt"
         )
       }
 

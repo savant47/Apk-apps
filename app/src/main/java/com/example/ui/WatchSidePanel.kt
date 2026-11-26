@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.TvPreferencesRepository
 import com.example.model.ScrapedEpisodeItem
 import com.example.model.ScrapedSeasonItem
 import com.example.model.ScrapedSeriesStructure
@@ -131,6 +132,10 @@ fun WatchSidePanel(
   onSelectQuality: (qualityOption: VideoQualityOption) -> Unit,
   onOpenSubtitles: () -> Unit,
   onClosePanel: () -> Unit,
+  watchedEpisodes: Set<String> = emptySet(),
+  seriesTitleForWatched: String = "",
+  isCurrentEpisodeWatched: Boolean = false,
+  onToggleCurrentEpisodeWatched: () -> Unit = {},
   isCompactMobileSheet: Boolean = false,
   modifier: Modifier = Modifier
 ) {
@@ -754,8 +759,11 @@ fun WatchSidePanel(
                 }
               }
 
-              // Expanded Multi-Row Episodes Grid (50dp touch/focus targets + crisp D-Pad ring)
+              // Expanded Multi-Row Episodes Grid (50dp touch/focus targets + crisp D-Pad ring + Watched ✓ Badge)
               if (seriesStructure.episodes.isNotEmpty()) {
+                val showNameForWatched = seriesTitleForWatched.ifBlank {
+                  seriesStructure.seriesTitle.ifBlank { searchQuery }
+                }
                 Row(
                   modifier = Modifier.fillMaxWidth(),
                   verticalAlignment = Alignment.CenterVertically,
@@ -766,6 +774,16 @@ fun WatchSidePanel(
                     color = Color.White,
                     fontSize = 14.5.sp,
                     fontWeight = FontWeight.ExtraBold
+                  )
+                  SidePanelFocusPill(
+                    label = if (isCurrentEpisodeWatched) "تمت المشاهدة ✓" else "تمت المشاهدة",
+                    icon = Icons.Default.CheckCircle,
+                    containerColor = if (isCurrentEpisodeWatched) CinemaSuccess else CinemaSurfaceVariant,
+                    contentColor = Color.White,
+                    iconTint = if (isCurrentEpisodeWatched) Color.White else CinemaSuccess,
+                    borderColor = CinemaSuccess,
+                    onClick = onToggleCurrentEpisodeWatched,
+                    testTag = "btn_side_panel_mark_watched"
                   )
                 }
 
@@ -780,6 +798,12 @@ fun WatchSidePanel(
                 ) {
                   items(seriesStructure.episodes, key = { "${it.episodeNumber}_${it.url}" }) { ep ->
                     val isCurrentEp = activeWatchPageUrl == ep.url || currentUrl == ep.url
+                    val epWatchedKey = TvPreferencesRepository.buildEpisodeWatchedKey(
+                      showTitle = showNameForWatched,
+                      seasonNumber = ep.seasonNumber.coerceAtLeast(seriesStructure.selectedSeasonNumber.coerceAtLeast(1)),
+                      episodeNumber = ep.episodeNumber
+                    )
+                    val isWatchedEp = epWatchedKey.isNotBlank() && watchedEpisodes.contains(epWatchedKey)
                     val epInteraction = remember { MutableInteractionSource() }
                     val isFocused by epInteraction.collectIsFocusedAsState()
                     val bringIntoView = remember { BringIntoViewRequester() }
@@ -789,6 +813,7 @@ fun WatchSidePanel(
                       color = when {
                         isFocused -> CinemaFocusGlow
                         isCurrentEp -> CinemaSuccess
+                        isWatchedEp -> CinemaSuccess.copy(alpha = 0.22f)
                         else -> CinemaDarkBackground
                       },
                       shape = RoundedCornerShape(10.dp),
@@ -797,6 +822,7 @@ fun WatchSidePanel(
                         color = when {
                           isFocused -> Color.White
                           isCurrentEp -> ClipboxWhite
+                          isWatchedEp -> CinemaSuccess
                           else -> CinemaBorder
                         }
                       ),
@@ -817,11 +843,12 @@ fun WatchSidePanel(
                         horizontalArrangement = Arrangement.Center
                       ) {
                         Icon(
-                          imageVector = Icons.Default.PlayArrow,
-                          contentDescription = null,
+                          imageVector = if (isWatchedEp && !isCurrentEp) Icons.Default.CheckCircle else Icons.Default.PlayArrow,
+                          contentDescription = if (isWatchedEp) "تمت المشاهدة" else null,
                           tint = when {
                             isFocused -> Color.Black
                             isCurrentEp -> Color.White
+                            isWatchedEp -> CinemaSuccess
                             else -> CinemaAccent
                           },
                           modifier = Modifier.size(17.dp)

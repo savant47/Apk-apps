@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.graphics.Typeface
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.os.Build
 import android.util.TypedValue
@@ -49,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -61,12 +63,15 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -150,6 +155,8 @@ import okhttp3.ConnectionPool
 import okhttp3.Protocol
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.math.ln
+import kotlin.math.roundToInt
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -182,6 +189,11 @@ fun NativeTvExoPlayer(
   onOpenSubtitles: () -> Unit = {},
   onOpenDiagnostics: () -> Unit = {},
   onQualitiesDetected: (List<VideoQualityOption>) -> Unit = {},
+  audioBoostPercent: Int = 100,
+  onAudioBoostChanged: (Int) -> Unit = {},
+  isCurrentEpisodeWatched: Boolean = false,
+  onAutoMarkWatched: () -> Unit = {},
+  onToggleWatchedManual: () -> Unit = {},
   externalPause: Boolean = false,
   onFallbackToWebPlayer: () -> Unit = onDismiss
 ) {
@@ -198,6 +210,15 @@ fun NativeTvExoPlayer(
   val latestOnPlayNextEpisode by rememberUpdatedState(onPlayNextEpisode)
   val latestOnSavePlaybackProgress by rememberUpdatedState(onSavePlaybackProgress)
   val latestOnClearPlaybackProgress by rememberUpdatedState(onClearPlaybackProgress)
+  val latestOnAutoMarkWatched by rememberUpdatedState(onAutoMarkWatched)
+
+  var currentAudioBoostPercent by remember { mutableIntStateOf(audioBoostPercent.coerceIn(0, 300)) }
+  var loudnessEnhancerRef by remember { mutableStateOf<LoudnessEnhancer?>(null) }
+  var hasAutoMarkedWatched by remember(videoUrl, contentKey) { mutableStateOf(false) }
+
+  LaunchedEffect(audioBoostPercent) {
+    currentAudioBoostPercent = audioBoostPercent.coerceIn(0, 300)
+  }
 
   var retryAttempt by remember(videoUrl) { mutableIntStateOf(0) }
   var isControllerVisible by remember { mutableStateOf(true) }
@@ -570,6 +591,13 @@ fun NativeTvExoPlayer(
           latestOnSavePlaybackProgress(pos, dur)
         }
 
+        // Auto-Watched Tracker at 80% completion (marks episode watched & enqueues next episode in Up Next)
+        if (!hasAutoMarkedWatched && !showResumePrompt && dur > 60_000L && pos >= (dur * 0.80).toLong()) {
+          hasAutoMarkedWatched = true
+          latestOnAutoMarkWatched()
+          AppDiagnosticsLogger.log("AutoWatched", "تم تسجيل الحلقة كمشاهدة تلقائياً عند 80% ($title)")
+        }
+
         if (!latestNextEpisodeTitle.isNullOrBlank() &&
             latestIsAutoPlayNextEnabled &&
             !userCancelledNextEpisode &&
@@ -849,6 +877,32 @@ fun NativeTvExoPlayer(
         }
       }
 
+      override fun onAudioSessionIdChanged(audioSessionId: Int) {
+        if (audioSessionId != C.AUDIO_SESSION_ID_UNSET && audioSessionId > 0) {
+          try {
+            loudnessEnhancerRef?.release()
+          } catch (_: Throwable) {}
+          loudnessEnhancerRef = null
+          try {
+            val enhancer = LoudnessEnhancer(audioSessionId)
+            loudnessEnhancerRef = enhancer
+            val pct = currentAudioBoostPercent.coerceIn(0, 300)
+            if (pct <= 100) {
+              player.volume = pct / 100f
+              enhancer.setTargetGain(0)
+              enhancer.enabled = false
+            } else {
+              player.volume = 1.0f
+              val extraRatio = (pct - 100) / 200.0
+              // Logarithmic soft-limited gain curve up to +12 dB (1200 mB) to prevent clipping/distortion
+              val targetGainMb = (ln(1.0 + extraRatio * 3.0) / ln(4.0) * 1200.0).roundToInt().coerceIn(0, 1200)
+              enhancer.setTargetGain(targetGainMb)
+              enhancer.enabled = true
+            }
+          } catch (_: Throwable) {}
+        }
+      }
+
       override fun onIsPlayingChanged(isPlaying: Boolean) {
         isPlayerPaused = !isPlaying && player.playbackState == Player.STATE_READY
         if (!isPlaying && !showResumePrompt) {
@@ -925,6 +979,11 @@ fun NativeTvExoPlayer(
     if (!isPlayerReleased) {
       isPlayerReleased = true
       try {
+        loudnessEnhancerRef?.enabled = false
+        loudnessEnhancerRef?.release()
+      } catch (_: Throwable) {}
+      loudnessEnhancerRef = null
+      try {
         player.playWhenReady = false
         player.stop()
       } catch (_: Throwable) {}
@@ -939,6 +998,35 @@ fun NativeTvExoPlayer(
       } catch (_: Throwable) {}
       AppDiagnosticsLogger.recordBreadcrumb(context, "EXOPLAYER_RELEASE", "Released ExoPlayer + SurfaceView")
     }
+  }
+
+  // Sync Pro Audio Booster (0% - 300%, zero clipping) whenever boost percent changes
+  LaunchedEffect(currentAudioBoostPercent, player) {
+    if (isPlayerReleased) return@LaunchedEffect
+    val pct = currentAudioBoostPercent.coerceIn(0, 300)
+    try {
+      if (pct <= 100) {
+        player.volume = pct / 100f
+        loudnessEnhancerRef?.let {
+          it.setTargetGain(0)
+          it.enabled = false
+        }
+      } else {
+        player.volume = 1.0f
+        val sessionId = player.audioSessionId
+        if (sessionId != C.AUDIO_SESSION_ID_UNSET && sessionId > 0) {
+          val enhancer = loudnessEnhancerRef ?: try {
+            LoudnessEnhancer(sessionId).also { loudnessEnhancerRef = it }
+          } catch (_: Throwable) { null }
+          if (enhancer != null) {
+            val extraRatio = (pct - 100) / 200.0
+            val targetGainMb = (ln(1.0 + extraRatio * 3.0) / ln(4.0) * 1200.0).roundToInt().coerceIn(0, 1200)
+            enhancer.setTargetGain(targetGainMb)
+            enhancer.enabled = true
+          }
+        }
+      }
+    } catch (_: Throwable) {}
   }
 
   // Also release hardware SurfaceView overlay immediately when Activity stops/destroys (e.g. Home/Back on TV Box)
@@ -2153,6 +2241,155 @@ fun NativeTvExoPlayer(
                       )
                     }
                   }
+                }
+              }
+
+              // 4b. Pro Audio Booster (0% - 300%, VLC-Style Zero-Clipping LoudnessEnhancer)
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.VolumeUp,
+                    contentDescription = null,
+                    tint = if (currentAudioBoostPercent > 100) CinemaSuccess else CinemaAccent,
+                    modifier = Modifier.size(18.dp)
+                  )
+                  Text(
+                    text = "تضخيم الصوت (Audio Boost):",
+                    color = CinemaAccent,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.ExtraBold
+                  )
+                }
+                Surface(
+                  color = if (currentAudioBoostPercent > 100) CinemaSuccess else CinemaSurfaceVariant,
+                  shape = RoundedCornerShape(8.dp)
+                ) {
+                  Text(
+                    text = "$currentAudioBoostPercent%",
+                    color = Color.White,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier
+                      .padding(horizontal = 9.dp, vertical = 3.dp)
+                      .testTag("txt_audio_boost_percent")
+                  )
+                }
+              }
+
+              Slider(
+                value = currentAudioBoostPercent.toFloat(),
+                onValueChange = { v ->
+                  val rounded = ((v / 10f).roundToInt() * 10).coerceIn(0, 300)
+                  currentAudioBoostPercent = rounded
+                  onAudioBoostChanged(rounded)
+                },
+                valueRange = 0f..300f,
+                steps = 29,
+                colors = SliderDefaults.colors(
+                  thumbColor = CinemaAccent,
+                  activeTrackColor = if (currentAudioBoostPercent > 100) CinemaSuccess else CinemaPrimary,
+                  inactiveTrackColor = CinemaBorder
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("slider_audio_boost")
+              )
+
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                listOf(50, 100, 150, 200, 250, 300).forEach { preset ->
+                  val isSelected = currentAudioBoostPercent == preset
+                  val pInteraction = remember { MutableInteractionSource() }
+                  val isPFocused by pInteraction.collectIsFocusedAsState()
+                  Surface(
+                    onClick = {
+                      currentAudioBoostPercent = preset
+                      onAudioBoostChanged(preset)
+                      resizeHudMessage = "🔊 الصوت: $preset%"
+                      resizeHudNonce += 1
+                    },
+                    interactionSource = pInteraction,
+                    color = when {
+                      isPFocused -> CinemaFocusGlow
+                      isSelected -> if (preset > 100) CinemaSuccess else ClipboxWhite
+                      else -> CinemaSurfaceVariant
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(
+                      width = if (isPFocused) 2.5.dp else 1.dp,
+                      color = if (isPFocused) Color.White else if (isSelected) ClipboxWhite else CinemaBorder
+                    ),
+                    modifier = Modifier
+                      .heightIn(min = 38.dp)
+                      .testTag("btn_audio_boost_$preset")
+                  ) {
+                    Text(
+                      text = "$preset%",
+                      color = if (isPFocused || (isSelected && preset <= 100)) Color.Black else Color.White,
+                      fontSize = 13.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+              }
+
+              // 4c. Manual "تمت المشاهدة ✓" Button
+              val watchedBtnInteraction = remember { MutableInteractionSource() }
+              val isWatchedFocused by watchedBtnInteraction.collectIsFocusedAsState()
+              Surface(
+                onClick = {
+                  onToggleWatchedManual()
+                  resizeHudMessage = if (!isCurrentEpisodeWatched) "✅ تمت المشاهدة — أضيفت التالية" else "تم إلغاء علامة المشاهدة"
+                  resizeHudNonce += 1
+                },
+                interactionSource = watchedBtnInteraction,
+                color = when {
+                  isWatchedFocused -> CinemaFocusGlow
+                  isCurrentEpisodeWatched -> CinemaSuccess
+                  else -> CinemaSurfaceVariant
+                },
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(
+                  width = if (isWatchedFocused) 2.5.dp else 1.dp,
+                  color = if (isWatchedFocused) Color.White else if (isCurrentEpisodeWatched) ClipboxWhite else CinemaSuccess.copy(alpha = 0.65f)
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .heightIn(min = 44.dp)
+                  .testTag("exo_mark_watched_button")
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                  horizontalArrangement = Arrangement.Center,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = if (isWatchedFocused) Color.Black else Color.White,
+                    modifier = Modifier.size(18.dp)
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = if (isCurrentEpisodeWatched) "تمت المشاهدة ✓" else "تحديد كـ تمت المشاهدة ✓",
+                    color = if (isWatchedFocused) Color.Black else Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.ExtraBold
+                  )
                 }
               }
 

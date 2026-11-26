@@ -81,6 +81,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.example.data.AppDiagnosticsLogger
 import com.example.data.AppDisplayMode
 import com.example.data.SearchAndSubtitlesService
+import com.example.data.TraktSyncResult
+import com.example.data.TraktSyncService
 import com.example.data.TvPreferencesRepository
 import com.example.model.AppMainTab
 import com.example.model.ControlMode
@@ -90,6 +92,7 @@ import com.example.model.ScrapedSeriesStructure
 import com.example.model.SearchResultItem
 import com.example.model.StreamingPortal
 import com.example.model.SubtitleItem
+import com.example.model.UpNextItem
 import com.example.model.VideoQualityOption
 import com.example.tv.TvKeyHandler
 import com.example.tv.TvPlayerBridge
@@ -146,6 +149,7 @@ fun MainScreen(
   val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
   val scope = rememberCoroutineScope()
   val searchService = remember { SearchAndSubtitlesService() }
+  val traktSyncService = remember { TraktSyncService() }
 
   // Display Mode & Dialogs
   val displayMode by repository.displayModeFlow.collectAsState()
@@ -228,6 +232,8 @@ fun MainScreen(
   var activeSubtitleItem by remember { mutableStateOf<SubtitleItem?>(null) }
   val subtitleStyle by repository.subtitleStyleFlow.collectAsState()
   val autoPlayNextEpisode by repository.autoPlayNextEpisodeFlow.collectAsState()
+  val audioBoostPercent by repository.audioBoostPercentFlow.collectAsState()
+  val watchedEpisodes by repository.watchedEpisodesFlow.collectAsState()
   var webVideoCurrentTimeMs by remember { mutableStateOf(0L) }
   val failedNativeStreamUrls = remember { mutableSetOf<String>() }
 
@@ -1600,6 +1606,12 @@ fun MainScreen(
                       } catch (_: Exception) {
                       }
                     }
+                  },
+                  onAdBlocked = { reason ->
+                    post {
+                      repository.incrementBlockedAdsCount()
+                      AppDiagnosticsLogger.log("ADBLOCK", "حجب نافذة/نقرة إعلانية: $reason")
+                    }
                   }
                 ),
                 "AndroidTvBridge"
@@ -1618,6 +1630,10 @@ fun MainScreen(
                   if (isGeneralBrowserSession || pageTitle.isBlank()) {
                     pageTitle = t
                   }
+                },
+                onPopupBlocked = {
+                  repository.incrementBlockedAdsCount()
+                  AppDiagnosticsLogger.log("ADBLOCK", "منع نافذة منبثقة (onCreateWindow)")
                 }
               )
               webChromeClientRef = chromeClient
@@ -1625,6 +1641,7 @@ fun MainScreen(
 
               webViewClient = TvWebViewClient(
                 isAdBlockEnabled = { repository.isAdBlockEnabled() },
+                isStrictIframeSandboxEnabled = { repository.isStrictIframeSandboxEnabled() },
                 isGeneralBrowserMode = { isGeneralBrowserSession },
                 onPageFinishedCallback = { url ->
                   val isEmbed = StreamingPortal.isEmbedIframeUrl(url)
@@ -1693,6 +1710,7 @@ fun MainScreen(
                   }
                 },
                 onAdBlockedCallback = { blockedHostOrUrl ->
+                  repository.incrementBlockedAdsCount()
                   AppDiagnosticsLogger.log("ADBLOCK", "منع إعلان: $blockedHostOrUrl")
                 },
                 onVideoDetectedCallback = { url, headers ->
@@ -1950,6 +1968,18 @@ fun MainScreen(
           repository.getPlaybackProgress(activeContentKey)?.positionMs ?: 0L
         }
 
+        val activeShowCleanForWatched = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+          standardizedMediaInfo.cleanTitle.ifBlank { rawTitleForKey }
+        ).ifBlank { rawTitleForKey }
+        val activeEpNumResolved = (activeEpNumForKey ?: standardizedMediaInfo.episodeNumber ?: 0).coerceAtLeast(0)
+        val activeSeasonResolved = (standardizedMediaInfo.seasonNumber ?: activeSeasonForKey).coerceAtLeast(1)
+        val currentEpWatchedKey = if (activeEpNumResolved > 0) {
+          TvPreferencesRepository.buildEpisodeWatchedKey(activeShowCleanForWatched, activeSeasonResolved, activeEpNumResolved)
+        } else {
+          ""
+        }
+        val isCurrentEpWatchedInPlayer = currentEpWatchedKey.isNotBlank() && watchedEpisodes.contains(currentEpWatchedKey)
+
         NativeTvExoPlayer(
           videoUrl = playNativeVideoUrl ?: "",
           title = standardizedMediaInfo.displayTitle,
@@ -2006,6 +2036,105 @@ fun MainScreen(
           },
           onOpenDiagnostics = {
             showDiagnosticsDialog = true
+          },
+          audioBoostPercent = audioBoostPercent,
+          onAudioBoostChanged = { pct ->
+            repository.setAudioBoostPercent(pct)
+          },
+          isCurrentEpisodeWatched = isCurrentEpWatchedInPlayer,
+          onAutoMarkWatched = {
+            if (activeEpNumResolved > 0 && activeShowCleanForWatched.isNotBlank()) {
+              repository.markEpisodeWatched(
+                showTitle = activeShowCleanForWatched,
+                seasonNumber = activeSeasonResolved,
+                episodeNumber = activeEpNumResolved,
+                preferredPortal = activePortal,
+                nextEpisodeWatchUrl = nextEpisodeItem?.url ?: "",
+                autoEnqueueNext = true
+              )
+              val cookie = repository.getTraktCookie()
+              if (cookie.isNotBlank()) {
+                val showKey = TvPreferencesRepository.buildNormalizedContentKey(activeShowCleanForWatched, null, null, isSeries = false)
+                val matchedUpNext = repository.upNextFlow.value.firstOrNull {
+                  (showKey.isNotBlank() && it.seriesKey == showKey) ||
+                    it.showTitle.equals(activeShowCleanForWatched, ignoreCase = true)
+                }
+                val itemForSync = (matchedUpNext ?: UpNextItem(
+                  id = "exo_sync",
+                  seriesKey = showKey,
+                  showTitle = activeShowCleanForWatched,
+                  seasonNumber = activeSeasonResolved,
+                  episodeNumber = activeEpNumResolved
+                )).copy(
+                  seasonNumber = activeSeasonResolved,
+                  episodeNumber = activeEpNumResolved
+                )
+                scope.launch {
+                  val synced = traktSyncService.markEpisodeWatchedOnTrakt(
+                    item = itemForSync,
+                    cookieHeader = cookie,
+                    csrfTokenHint = repository.getTraktCsrfToken(),
+                    usernameHint = repository.getTraktUsername()
+                  )
+                  if (synced) {
+                    val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
+                    if (refreshed is TraktSyncResult.Success && refreshed.items.isNotEmpty()) {
+                      repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
+                      repository.mergeTraktProgressItems(refreshed.items)
+                    }
+                  }
+                }
+              }
+            }
+          },
+          onToggleWatchedManual = {
+            if (activeEpNumResolved > 0 && activeShowCleanForWatched.isNotBlank()) {
+              if (isCurrentEpWatchedInPlayer) {
+                repository.unmarkEpisodeWatched(activeShowCleanForWatched, activeSeasonResolved, activeEpNumResolved)
+              } else {
+                repository.markEpisodeWatched(
+                  showTitle = activeShowCleanForWatched,
+                  seasonNumber = activeSeasonResolved,
+                  episodeNumber = activeEpNumResolved,
+                  preferredPortal = activePortal,
+                  nextEpisodeWatchUrl = nextEpisodeItem?.url ?: "",
+                  autoEnqueueNext = true
+                )
+                val cookie = repository.getTraktCookie()
+                if (cookie.isNotBlank()) {
+                  val showKey = TvPreferencesRepository.buildNormalizedContentKey(activeShowCleanForWatched, null, null, isSeries = false)
+                  val matchedUpNext = repository.upNextFlow.value.firstOrNull {
+                    (showKey.isNotBlank() && it.seriesKey == showKey) ||
+                      it.showTitle.equals(activeShowCleanForWatched, ignoreCase = true)
+                  }
+                  val itemForSync = (matchedUpNext ?: UpNextItem(
+                    id = "exo_sync_manual",
+                    seriesKey = showKey,
+                    showTitle = activeShowCleanForWatched,
+                    seasonNumber = activeSeasonResolved,
+                    episodeNumber = activeEpNumResolved
+                  )).copy(
+                    seasonNumber = activeSeasonResolved,
+                    episodeNumber = activeEpNumResolved
+                  )
+                  scope.launch {
+                    val synced = traktSyncService.markEpisodeWatchedOnTrakt(
+                      item = itemForSync,
+                      cookieHeader = cookie,
+                      csrfTokenHint = repository.getTraktCsrfToken(),
+                      usernameHint = repository.getTraktUsername()
+                    )
+                    if (synced) {
+                      val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
+                      if (refreshed is TraktSyncResult.Success && refreshed.items.isNotEmpty()) {
+                        repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
+                        repository.mergeTraktProgressItems(refreshed.items)
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           externalPause = showSubtitlesDialog,
           onQualitiesDetected = { exoQualities ->
@@ -2282,6 +2411,10 @@ fun MainScreen(
             selectedMainTab = AppMainTab.ASSER_TV
             isHomeActive = true
           },
+          onGoToTrakt = {
+            selectedMainTab = AppMainTab.TRAKT
+            isHomeActive = true
+          },
           onSelectPortal = { portal ->
             navigateTo(portal.homeUrl, portal, portal.displayNameArabic, isGeneralBrowser = false)
           },
@@ -2327,60 +2460,254 @@ fun MainScreen(
           onOpenDiagnostics = { showDiagnosticsDialog = true }
         )
 
-        if (selectedMainTab == AppMainTab.BROWSER) {
-          BrowserHomeScreen(
-            repository = repository,
-            onOpenWebUrl = { url, title ->
-              val detectedPortal = StreamingPortal.values().firstOrNull { p ->
-                p.homeUrl.isNotBlank() && url.contains(p.homeUrl.removePrefix("https://").removePrefix("http://").trimEnd('/'))
+        fun resolveAndLaunchShowEpisode(
+          showTitle: String,
+          seasonNumber: Int?,
+          episodeNumber: Int?,
+          isMovie: Boolean,
+          preferredPortal: StreamingPortal,
+          directWatchUrl: String = ""
+        ) {
+          val cleanShow = showTitle.trim()
+          if (cleanShow.isBlank()) return
+          val targetSeason = (seasonNumber ?: 1).coerceAtLeast(1)
+          val targetEp = if (isMovie) 0 else (episodeNumber ?: 1).coerceAtLeast(1)
+          val epTag = if (!isMovie && targetEp > 0) {
+            " S${targetSeason.toString().padStart(2, '0')}E${targetEp.toString().padStart(2, '0')}"
+          } else {
+            ""
+          }
+
+          if (directWatchUrl.startsWith("http")) {
+            lastSearchQuery = cleanShow
+            isWatchSidePanelOpen = true
+            navigateTo(
+              url = directWatchUrl,
+              portal = preferredPortal,
+              title = "$cleanShow$epTag",
+              isGeneralBrowser = false,
+              autoScrapeAndLoadEmbed = true,
+              selectedSeasonNum = targetSeason,
+              selectedEpisodeNum = targetEp
+            )
+            return
+          }
+
+          Toast.makeText(
+            context,
+            "جاري فتح $cleanShow$epTag عبر ${preferredPortal.displayNameArabic}...",
+            Toast.LENGTH_SHORT
+          ).show()
+
+          scope.launch {
+            val allResults = searchService.searchAllPortals(cleanShow)
+            lastSearchQuery = cleanShow
+            lastSearchPortalResults = allResults
+
+            val portalOrder = listOf(
+              preferredPortal,
+              StreamingPortal.WATCH_SERIES,
+              StreamingPortal.TOP_CINEMA,
+              StreamingPortal.LAROZA,
+              StreamingPortal.EGY_DEAD,
+              StreamingPortal.FLIXER
+            ).distinct()
+
+            var chosenPortal = preferredPortal
+            var bestResult: SearchResultItem? = null
+            for (p in portalOrder) {
+              val hits = allResults[p].orEmpty()
+              if (hits.isNotEmpty()) {
+                chosenPortal = p
+                bestResult = hits.firstOrNull {
+                  it.title.contains(cleanShow, ignoreCase = true)
+                } ?: hits.first()
+                break
               }
-              if (detectedPortal != null) {
-                navigateTo(url, detectedPortal, title, isGeneralBrowser = false)
-              } else {
-                navigateTo(url, null, title, isGeneralBrowser = true)
+            }
+
+            if (bestResult != null) {
+              var targetUrl = bestResult.url
+              // For WatchSeries TV URLs (/tv/slug/id or /tv/slug/id/1/1), jump directly to exact S/E!
+              if (!isMovie && chosenPortal == StreamingPortal.WATCH_SERIES && targetUrl.contains("/tv/", ignoreCase = true)) {
+                val wsMatch = Regex("""(https?://[^/]+/tv/[^/]+/\d+)(?:/\d+/\d+)?""", RegexOption.IGNORE_CASE).find(targetUrl)
+                if (wsMatch != null) {
+                  targetUrl = "${wsMatch.groupValues[1]}/$targetSeason/$targetEp"
+                }
               }
-            },
-            onSwitchToAsserTv = {
-              selectedMainTab = AppMainTab.ASSER_TV
-            },
-            onOpenBookmarks = { showFavoritesDialog = true },
-            onOpenHistory = { showHistoryDialog = true },
-            modifier = Modifier.weight(1f)
-          )
-        } else {
-          HomeDashboardScreen(
-            repository = repository,
-            onLaunchUrl = { url, portal, title ->
-              isWatchSidePanelOpen = true
-              navigateTo(url, portal, title, isGeneralBrowser = false, autoScrapeAndLoadEmbed = true)
-            },
-            onLaunchResultWithSources = { url, portal, title, query, resultsMap ->
-              lastSearchQuery = query
-              lastSearchPortalResults = resultsMap
-              isWatchSidePanelOpen = true
-              navigateTo(url, portal, title, isGeneralBrowser = false, autoScrapeAndLoadEmbed = true)
-            },
-            onOpenBookmarks = { showFavoritesDialog = true },
-            onOpenHistory = { showHistoryDialog = true },
-            onOpenDisplayMode = { showDisplayModeDialog = true },
-            onOpenAdBlockSettings = { showAdBlockDialog = true },
-            onOpenUpdate = { showUpdateDialog = true },
-            onResumeHistory = { entry ->
-              lastSearchQuery = entry.title
               isWatchSidePanelOpen = true
               navigateTo(
-                url = entry.url,
-                portal = entry.portal,
-                title = entry.title,
+                url = targetUrl,
+                portal = chosenPortal,
+                title = "$cleanShow$epTag",
                 isGeneralBrowser = false,
                 autoScrapeAndLoadEmbed = true,
-                selectedSeasonNum = entry.seasonNumber.coerceAtLeast(1),
-                selectedEpisodeNum = entry.episodeNumber
+                selectedSeasonNum = targetSeason,
+                selectedEpisodeNum = targetEp
               )
-            },
-            modifier = Modifier.weight(1f),
-            searchService = searchService
-          )
+            } else {
+              // Fallback: open portal search page directly
+              isWatchSidePanelOpen = true
+              navigateTo(
+                url = preferredPortal.buildSearchUrl(cleanShow),
+                portal = preferredPortal,
+                title = cleanShow,
+                isGeneralBrowser = false,
+                autoScrapeAndLoadEmbed = false
+              )
+            }
+          }
+        }
+
+        when (selectedMainTab) {
+          AppMainTab.BROWSER -> {
+            BrowserHomeScreen(
+              repository = repository,
+              onOpenWebUrl = { url, title ->
+                val detectedPortal = StreamingPortal.values().firstOrNull { p ->
+                  p.homeUrl.isNotBlank() && url.contains(p.homeUrl.removePrefix("https://").removePrefix("http://").trimEnd('/'))
+                }
+                if (detectedPortal != null) {
+                  navigateTo(url, detectedPortal, title, isGeneralBrowser = false)
+                } else {
+                  navigateTo(url, null, title, isGeneralBrowser = true)
+                }
+              },
+              onSwitchToAsserTv = {
+                selectedMainTab = AppMainTab.ASSER_TV
+              },
+              onOpenBookmarks = { showFavoritesDialog = true },
+              onOpenHistory = { showHistoryDialog = true },
+              modifier = Modifier.weight(1f)
+            )
+          }
+
+          AppMainTab.TRAKT -> {
+            TraktPortalScreen(
+              repository = repository,
+              traktSyncService = traktSyncService,
+              onPlayTraktTarget = { showTitle, s, e, isMovie, preferredPortal ->
+                resolveAndLaunchShowEpisode(
+                  showTitle = showTitle,
+                  seasonNumber = s,
+                  episodeNumber = e,
+                  isMovie = isMovie,
+                  preferredPortal = preferredPortal
+                )
+              },
+              onMarkUpNextItemWatched = { item ->
+                val epLabel = "S%02dE%02d".format(java.util.Locale.US, item.seasonNumber, item.episodeNumber)
+                // 1. Immediately advance locally so UI feels instant
+                repository.advanceUpNextItemLocally(item)
+                // 2. Two-way sync back to user's real Trakt account & pull the real next episode title/counts
+                val cookie = repository.getTraktCookie()
+                if (cookie.isNotBlank()) {
+                  scope.launch {
+                    val synced = traktSyncService.markEpisodeWatchedOnTrakt(
+                      item = item,
+                      cookieHeader = cookie,
+                      csrfTokenHint = repository.getTraktCsrfToken(),
+                      usernameHint = repository.getTraktUsername()
+                    )
+                    if (synced) {
+                      Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
+                      val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
+                      if (refreshed is TraktSyncResult.Success) {
+                        repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
+                        if (refreshed.items.isNotEmpty()) {
+                          repository.mergeTraktProgressItems(refreshed.items)
+                        }
+                      }
+                    } else {
+                      Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+                    }
+                  }
+                } else {
+                  Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+                }
+              },
+              modifier = Modifier.weight(1f)
+            )
+          }
+
+          AppMainTab.ASSER_TV -> {
+            HomeDashboardScreen(
+              repository = repository,
+              onLaunchUrl = { url, portal, title ->
+                isWatchSidePanelOpen = true
+                navigateTo(url, portal, title, isGeneralBrowser = false, autoScrapeAndLoadEmbed = true)
+              },
+              onLaunchResultWithSources = { url, portal, title, query, resultsMap ->
+                lastSearchQuery = query
+                lastSearchPortalResults = resultsMap
+                isWatchSidePanelOpen = true
+                navigateTo(url, portal, title, isGeneralBrowser = false, autoScrapeAndLoadEmbed = true)
+              },
+              onOpenBookmarks = { showFavoritesDialog = true },
+              onOpenHistory = { showHistoryDialog = true },
+              onOpenDisplayMode = { showDisplayModeDialog = true },
+              onOpenAdBlockSettings = { showAdBlockDialog = true },
+              onOpenUpdate = { showUpdateDialog = true },
+              onOpenTrakt = {
+                selectedMainTab = AppMainTab.TRAKT
+                isHomeActive = true
+              },
+              onPlayUpNext = { item ->
+                resolveAndLaunchShowEpisode(
+                  showTitle = item.showTitle,
+                  seasonNumber = item.seasonNumber,
+                  episodeNumber = item.episodeNumber,
+                  isMovie = false,
+                  preferredPortal = item.preferredPortal,
+                  directWatchUrl = item.watchUrl
+                )
+              },
+              onMarkUpNextWatched = { item ->
+                val epLabel = "S%02dE%02d".format(java.util.Locale.US, item.seasonNumber, item.episodeNumber)
+                repository.advanceUpNextItemLocally(item)
+                val cookie = repository.getTraktCookie()
+                if (cookie.isNotBlank()) {
+                  scope.launch {
+                    val synced = traktSyncService.markEpisodeWatchedOnTrakt(
+                      item = item,
+                      cookieHeader = cookie,
+                      csrfTokenHint = repository.getTraktCsrfToken(),
+                      usernameHint = repository.getTraktUsername()
+                    )
+                    if (synced) {
+                      Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
+                      val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
+                      if (refreshed is TraktSyncResult.Success) {
+                        repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
+                        if (refreshed.items.isNotEmpty()) {
+                          repository.mergeTraktProgressItems(refreshed.items)
+                        }
+                      }
+                    } else {
+                      Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+                    }
+                  }
+                } else {
+                  Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+                }
+              },
+              onResumeHistory = { entry ->
+                lastSearchQuery = entry.title
+                isWatchSidePanelOpen = true
+                navigateTo(
+                  url = entry.url,
+                  portal = entry.portal,
+                  title = entry.title,
+                  isGeneralBrowser = false,
+                  autoScrapeAndLoadEmbed = true,
+                  selectedSeasonNum = entry.seasonNumber.coerceAtLeast(1),
+                  selectedEpisodeNum = entry.episodeNumber
+                )
+              },
+              modifier = Modifier.weight(1f),
+              searchService = searchService
+            )
+          }
         }
       }
     } else {
@@ -2543,6 +2870,40 @@ fun MainScreen(
               },
               onOpenSubtitles = { showSubtitlesDialog = true },
               onClosePanel = { isWatchSidePanelOpen = false },
+              watchedEpisodes = watchedEpisodes,
+              seriesTitleForWatched = standardizedMediaInfo.cleanTitle.ifBlank {
+                seriesStructure.seriesTitle.ifBlank { lastSearchQuery }
+              },
+              isCurrentEpisodeWatched = run {
+                val showT = standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                val sN = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val eN = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                val k = if (eN > 0) TvPreferencesRepository.buildEpisodeWatchedKey(showT, sN, eN) else ""
+                k.isNotBlank() && watchedEpisodes.contains(k)
+              },
+              onToggleCurrentEpisodeWatched = {
+                val showT = standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                val sN = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val eN = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                if (showT.isNotBlank() && eN > 0) {
+                  val already = repository.isEpisodeWatched(showT, sN, eN)
+                  if (already) {
+                    repository.unmarkEpisodeWatched(showT, sN, eN)
+                    Toast.makeText(context, "تم إلغاء علامة المشاهدة", Toast.LENGTH_SHORT).show()
+                  } else {
+                    val nextEp = resolveNextEpisode()
+                    repository.markEpisodeWatched(
+                      showTitle = showT,
+                      seasonNumber = sN,
+                      episodeNumber = eN,
+                      preferredPortal = activePortal,
+                      nextEpisodeWatchUrl = nextEp?.url ?: "",
+                      autoEnqueueNext = true
+                    )
+                    Toast.makeText(context, "✅ تمت المشاهدة — أضيفت الحلقة التالية لقائمة التالي", Toast.LENGTH_SHORT).show()
+                  }
+                }
+              },
               isCompactMobileSheet = true,
               modifier = Modifier
                 .weight(0.64f)
@@ -2666,6 +3027,40 @@ fun MainScreen(
               },
               onOpenSubtitles = { showSubtitlesDialog = true },
               onClosePanel = { isWatchSidePanelOpen = false },
+              watchedEpisodes = watchedEpisodes,
+              seriesTitleForWatched = standardizedMediaInfo.cleanTitle.ifBlank {
+                seriesStructure.seriesTitle.ifBlank { lastSearchQuery }
+              },
+              isCurrentEpisodeWatched = run {
+                val showT = standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                val sN = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val eN = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                val k = if (eN > 0) TvPreferencesRepository.buildEpisodeWatchedKey(showT, sN, eN) else ""
+                k.isNotBlank() && watchedEpisodes.contains(k)
+              },
+              onToggleCurrentEpisodeWatched = {
+                val showT = standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                val sN = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val eN = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                if (showT.isNotBlank() && eN > 0) {
+                  val already = repository.isEpisodeWatched(showT, sN, eN)
+                  if (already) {
+                    repository.unmarkEpisodeWatched(showT, sN, eN)
+                    Toast.makeText(context, "تم إلغاء علامة المشاهدة", Toast.LENGTH_SHORT).show()
+                  } else {
+                    val nextEp = resolveNextEpisode()
+                    repository.markEpisodeWatched(
+                      showTitle = showT,
+                      seasonNumber = sN,
+                      episodeNumber = eN,
+                      preferredPortal = activePortal,
+                      nextEpisodeWatchUrl = nextEp?.url ?: "",
+                      autoEnqueueNext = true
+                    )
+                    Toast.makeText(context, "✅ تمت المشاهدة — أضيفت الحلقة التالية لقائمة التالي", Toast.LENGTH_SHORT).show()
+                  }
+                }
+              },
               isCompactMobileSheet = false,
               modifier = Modifier
                 .width(340.dp)

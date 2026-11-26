@@ -42,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
@@ -54,10 +55,12 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueuePlayNext
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Button
@@ -130,6 +133,7 @@ import com.example.model.CatalogMediaItem
 import com.example.model.HistoryEntry
 import com.example.model.SearchResultItem
 import com.example.model.StreamingPortal
+import com.example.model.UpNextItem
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
 import com.example.ui.theme.CinemaDarkBackground
@@ -170,6 +174,9 @@ fun HomeDashboardScreen(
   onOpenDisplayMode: () -> Unit,
   onOpenAdBlockSettings: () -> Unit = {},
   onOpenUpdate: () -> Unit = {},
+  onOpenTrakt: () -> Unit = {},
+  onPlayUpNext: (UpNextItem) -> Unit = {},
+  onMarkUpNextWatched: ((UpNextItem) -> Unit)? = null,
   onResumeHistory: ((HistoryEntry) -> Unit)? = null,
   modifier: Modifier = Modifier,
   searchService: SearchAndSubtitlesService = remember { SearchAndSubtitlesService() }
@@ -186,6 +193,7 @@ fun HomeDashboardScreen(
   var portalResultsMap by remember { mutableStateOf<Map<StreamingPortal, List<SearchResultItem>>>(emptyMap()) }
   var hasSearched by remember { mutableStateOf(false) }
   var showSourcesDialog by remember { mutableStateOf(false) }
+  var showAdminSourcesPrompt by remember { mutableStateOf(false) }
   var spellingSuggestion by remember { mutableStateOf<String?>(null) }
 
   // Catalog State (Live Daily IMDb Trending, Top 10 Movies Today, Top 10 TV Series Today)
@@ -201,6 +209,7 @@ fun HomeDashboardScreen(
   val contentFocusRequester = remember { FocusRequester() }
 
   val history by repository.historyFlow.collectAsState()
+  val upNextQueue by repository.upNextFlow.collectAsState()
   val displayMode by repository.displayModeFlow.collectAsState()
 
   // Load Live Daily Catalog via single lightweight pass after first frame paints
@@ -277,7 +286,8 @@ fun HomeDashboardScreen(
             },
             onOpenBookmarks = onOpenBookmarks,
             onOpenHistory = onOpenHistory,
-            onOpenSources = { showSourcesDialog = true },
+            onOpenTrakt = onOpenTrakt,
+            onOpenSources = { showAdminSourcesPrompt = true },
             onOpenUpdate = onOpenUpdate
           )
         }
@@ -421,6 +431,30 @@ fun HomeDashboardScreen(
               }
             )
           }
+        }
+      }
+
+      // Up Next Queue Row (التالي للمشاهدة) — Real Trakt Synced & Local Auto-Tracked Next Episodes
+      if (upNextQueue.isNotEmpty()) {
+        item {
+          UpNextQueueSection(
+            items = upNextQueue,
+            onPlayItem = onPlayUpNext,
+            onMarkWatched = { item ->
+              if (onMarkUpNextWatched != null) {
+                onMarkUpNextWatched(item)
+              } else {
+                repository.advanceUpNextItemLocally(item)
+              }
+            },
+            onOpenTrakt = onOpenTrakt,
+            onDeleteItem = { item ->
+              repository.removeUpNextItem(item.id)
+            },
+            onClearAll = {
+              repository.clearUpNext()
+            }
+          )
         }
       }
 
@@ -623,6 +657,18 @@ fun HomeDashboardScreen(
     }
   }
 
+  if (showAdminSourcesPrompt) {
+    AdminPasswordDialog(
+      title = "إدارة المصادر",
+      subtitle = "أدخل كلمة مرور المسؤول لتعديل روابط المصادر أو تفعيلها/تعطيلها",
+      onVerified = {
+        showAdminSourcesPrompt = false
+        showSourcesDialog = true
+      },
+      onDismiss = { showAdminSourcesPrompt = false }
+    )
+  }
+
   if (showSourcesDialog) {
     SourcesManagementDialog(
       repository = repository,
@@ -639,6 +685,7 @@ fun ClipboxNavigationRail(
   onSelectSection: (ClipboxRailSection) -> Unit,
   onOpenBookmarks: () -> Unit,
   onOpenHistory: () -> Unit,
+  onOpenTrakt: () -> Unit = {},
   onOpenSources: () -> Unit,
   onOpenUpdate: () -> Unit
 ) {
@@ -726,6 +773,15 @@ fun ClipboxNavigationRail(
           isActive = false,
           size = iconBoxSize,
           onClick = onOpenHistory
+        )
+
+        // Trakt Tracker Icon
+        ClipboxRailIcon(
+          icon = Icons.Default.TrackChanges,
+          contentDescription = "Trakt",
+          isActive = false,
+          size = iconBoxSize,
+          onClick = onOpenTrakt
         )
 
         Box(
@@ -2592,11 +2648,11 @@ fun ContinueWatchingCard(
       "S${seasonNum.toString().padStart(2, '0')}E${episodeNum.toString().padStart(2, '0')}"
     } else ""
     val arabicStoppedLabel = if (isSeries && seasonNum > 0 && episodeNum > 0) {
-      "الموسم $seasonNum • الحلقة $episodeNum"
+      "توقفت عند: الموسم $seasonNum • الحلقة $episodeNum"
     } else if (isSeries && seasonNum > 0) {
-      "الموسم $seasonNum"
+      "توقفت عند: الموسم $seasonNum"
     } else {
-      "فيلم • استكمال"
+      "فيلم • استكمال المشاهدة"
     }
     Triple(cleanShowName, codeTag, arabicStoppedLabel)
   }
@@ -2604,18 +2660,34 @@ fun ContinueWatchingCard(
   val shortEpisodeCode = resolvedMedia.second
   val arabicStoppedLabel = resolvedMedia.third
 
-  val progressFraction = remember(entry.id, cleanShowName, entry.seasonNumber, entry.episodeNumber) {
+  val progressRecord = remember(entry.id, cleanShowName, entry.seasonNumber, entry.episodeNumber, shortEpisodeCode) {
     val contentKey = TvPreferencesRepository.buildNormalizedContentKey(
       rawTitle = cleanShowName,
       seasonNumber = entry.seasonNumber.takeIf { it > 0 },
       episodeNumber = entry.episodeNumber.takeIf { it > 0 },
       isSeries = shortEpisodeCode.isNotBlank()
     )
-    val rec = if (contentKey.isNotBlank()) repository?.getPlaybackProgress(contentKey) else null
-    if (rec != null && rec.durationMs > 0L) {
-      (rec.positionMs.toFloat() / rec.durationMs.toFloat()).coerceIn(0.08f, 0.96f)
+    if (contentKey.isNotBlank()) repository?.getPlaybackProgress(contentKey) else null
+  }
+
+  val progressFraction = remember(progressRecord) {
+    if (progressRecord != null && progressRecord.durationMs > 0L) {
+      (progressRecord.positionMs.toFloat() / progressRecord.durationMs.toFloat()).coerceIn(0.08f, 0.98f)
     } else {
       0.35f
+    }
+  }
+
+  val stoppedTimeText = remember(progressRecord) {
+    if (progressRecord != null && progressRecord.positionMs > 0L) {
+      val posLabel = formatCompactDurationMs(progressRecord.positionMs)
+      if (progressRecord.durationMs > 0L) {
+        "$posLabel / ${formatCompactDurationMs(progressRecord.durationMs)}"
+      } else {
+        posLabel
+      }
+    } else {
+      ""
     }
   }
 
@@ -2773,29 +2845,401 @@ fun ContinueWatchingCard(
 
     Spacer(modifier = Modifier.height(7.dp))
 
-    // Clean Show Title
+    // Unified Yellow Title + SxxExx (e.g., "Dexter Resurrection S02E04")
+    val unifiedYellowTitle = if (shortEpisodeCode.isNotBlank()) {
+      "$cleanShowName $shortEpisodeCode"
+    } else {
+      cleanShowName
+    }
     Text(
-      text = cleanShowName,
-      color = if (isFocused) CinemaFocusGlow else Color.White,
+      text = unifiedYellowTitle,
+      color = if (isFocused) CinemaFocusGlow else CinemaAccent,
       fontSize = 15.sp,
       fontWeight = FontWeight.ExtraBold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
-      modifier = Modifier.fillMaxWidth()
+      modifier = Modifier
+        .fillMaxWidth()
+        .testTag("continue_watching_title_${entry.id}")
     )
 
     Spacer(modifier = Modifier.height(3.dp))
 
-    // Prominent, NEVER-truncated Arabic Season & Episode line ("الموسم 1 • الحلقة 5")
+    // Prominent Arabic Stopped-At Line ("توقفت عند: الموسم X • الحلقة Y")
     Text(
       text = arabicStoppedLabel,
-      color = if (shortEpisodeCode.isNotBlank()) CinemaAccent else Color.LightGray,
-      fontSize = 14.sp,
-      fontWeight = if (shortEpisodeCode.isNotBlank()) FontWeight.ExtraBold else FontWeight.SemiBold,
+      color = Color.White,
+      fontSize = 13.5.sp,
+      fontWeight = FontWeight.Bold,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       modifier = Modifier.fillMaxWidth()
     )
+
+    if (stoppedTimeText.isNotBlank()) {
+      Spacer(modifier = Modifier.height(2.dp))
+      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Text(
+          text = "⏱ $stoppedTimeText",
+          color = Color.LightGray,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.fillMaxWidth()
+        )
+      }
+    }
+  }
+}
+
+private fun formatCompactDurationMs(ms: Long): String {
+  val totalSec = (ms / 1000L).coerceAtLeast(0L)
+  val hours = totalSec / 3600L
+  val mins = (totalSec % 3600L) / 60L
+  val secs = totalSec % 60L
+  return if (hours > 0L) {
+    "%d:%02d:%02d".format(Locale.US, hours, mins, secs)
+  } else {
+    "%02d:%02d".format(Locale.US, mins, secs)
+  }
+}
+
+@Composable
+fun UpNextQueueSection(
+  items: List<UpNextItem>,
+  onPlayItem: (UpNextItem) -> Unit,
+  onMarkWatched: (UpNextItem) -> Unit,
+  onOpenTrakt: () -> Unit = {},
+  onDeleteItem: (UpNextItem) -> Unit,
+  onClearAll: () -> Unit
+) {
+  val context = LocalContext.current
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("up_next_queue_section")
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.QueuePlayNext,
+          contentDescription = null,
+          tint = CinemaSuccess,
+          modifier = Modifier.size(22.dp)
+        )
+        Text(
+          text = "التالي للمشاهدة",
+          color = Color.White,
+          fontSize = 19.sp,
+          fontWeight = FontWeight.ExtraBold
+        )
+        Surface(
+          color = CinemaSuccess.copy(alpha = 0.2f),
+          shape = RoundedCornerShape(6.dp),
+          border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.7f))
+        ) {
+          Text(
+            text = "${items.size}",
+            color = CinemaSuccess,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.ExtraBold,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+          )
+        }
+      }
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Surface(
+          onClick = onOpenTrakt,
+          color = CinemaSurfaceVariant,
+          shape = RoundedCornerShape(8.dp),
+          border = BorderStroke(1.dp, CinemaPrimary.copy(alpha = 0.75f)),
+          modifier = Modifier
+            .heightIn(min = 34.dp)
+            .testTag("btn_open_trakt_table_from_home")
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            Icon(Icons.Default.TrackChanges, contentDescription = null, tint = CinemaPrimary, modifier = Modifier.size(15.dp))
+            Text("جدول Trakt", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
+          }
+        }
+
+        Surface(
+          onClick = onClearAll,
+          color = CinemaSurface,
+          shape = RoundedCornerShape(8.dp),
+          border = BorderStroke(1.dp, CinemaBorder),
+          modifier = Modifier
+            .heightIn(min = 34.dp)
+            .testTag("btn_clear_up_next")
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
+            Text("مسح", color = Color.LightGray, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+          }
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    val rowState = rememberLazyListState()
+    LazyRow(
+      state = rowState,
+      contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      modifier = Modifier
+        .fillMaxWidth()
+        .focusGroup()
+    ) {
+      items(items.take(25), key = { it.id }) { item ->
+        val interactionSource = remember { MutableInteractionSource() }
+        val isFocused by interactionSource.collectIsFocusedAsState()
+        val sPad = item.seasonNumber.toString().padStart(2, '0')
+        val ePad = item.episodeNumber.toString().padStart(2, '0')
+        val epTag = "S.$sPad E.$ePad"
+        val hasProgress = item.totalCount > 0
+        val leftCount = if (hasProgress) (item.totalCount - item.watchedCount).coerceAtLeast(0) else 0
+        val progressFraction = if (hasProgress) (item.watchedCount.toFloat() / item.totalCount.toFloat()).coerceIn(0f, 1f) else 0f
+
+        Surface(
+          onClick = { onPlayItem(item) },
+          interactionSource = interactionSource,
+          color = CinemaSurface,
+          shape = RoundedCornerShape(14.dp),
+          border = BorderStroke(
+            width = if (isFocused) 3.dp else 1.5.dp,
+            color = if (isFocused) CinemaFocusGlow else if (item.fromTrakt) CinemaPrimary.copy(alpha = 0.7f) else CinemaSuccess.copy(alpha = 0.65f)
+          ),
+          modifier = Modifier
+            .width(if (item.posterUrl.isNotBlank()) 285.dp else 235.dp)
+            .testTag("up_next_card_${item.id}")
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            if (item.posterUrl.isNotBlank()) {
+              Box(
+                modifier = Modifier
+                  .width(62.dp)
+                  .height(92.dp)
+                  .clip(RoundedCornerShape(8.dp))
+                  .background(CinemaDarkBackground)
+                  .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+              ) {
+                AsyncImage(
+                  model = remember(item.posterUrl) {
+                    ImageRequest.Builder(context)
+                      .data(item.posterUrl)
+                      .size(160, 240)
+                      .allowHardware(Build.VERSION.SDK_INT > Build.VERSION_CODES.P)
+                      .crossfade(false)
+                      .build()
+                  },
+                  contentDescription = item.showTitle,
+                  contentScale = ContentScale.Crop,
+                  modifier = Modifier.fillMaxSize()
+                )
+              }
+            }
+
+            Column(
+              modifier = Modifier.weight(1f),
+              verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Row(
+                  horizontalArrangement = Arrangement.spacedBy(5.dp),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Surface(
+                    color = CinemaSurfaceVariant,
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f))
+                  ) {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                      Text(
+                        text = epTag,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        maxLines = 1,
+                        softWrap = false
+                      )
+                    }
+                  }
+                  if (item.fromTrakt) {
+                    Surface(
+                      color = CinemaPrimary.copy(alpha = 0.2f),
+                      shape = RoundedCornerShape(5.dp)
+                    ) {
+                      Text(
+                        text = "Trakt",
+                        color = CinemaPrimary,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                        maxLines = 1,
+                        softWrap = false
+                      )
+                    }
+                  }
+                }
+
+                IconButton(
+                  onClick = { onDeleteItem(item) },
+                  modifier = Modifier
+                    .size(26.dp)
+                    .focusProperties { canFocus = false }
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "حذف",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(15.dp)
+                  )
+                }
+              }
+
+              Text(
+                text = item.showTitle,
+                color = if (isFocused) CinemaFocusGlow else Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+
+              if (item.episodeTitle.isNotBlank()) {
+                Text(
+                  text = item.episodeTitle,
+                  color = Color(0xFFD1D5DB),
+                  fontSize = 12.5.sp,
+                  fontWeight = FontWeight.Medium,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
+
+              if (hasProgress) {
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                  ) {
+                    Text(
+                      text = "${item.watchedCount}/${item.totalCount} ($leftCount)",
+                      color = Color(0xFF9CA3AF),
+                      fontSize = 11.5.sp,
+                      fontWeight = FontWeight.SemiBold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                    Box(
+                      modifier = Modifier
+                        .weight(1f)
+                        .height(3.5.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xFF2D333B))
+                    ) {
+                      Box(
+                        modifier = Modifier
+                          .fillMaxWidth(progressFraction.coerceAtLeast(0.04f))
+                          .fillMaxHeight()
+                          .clip(RoundedCornerShape(50))
+                          .background(CinemaPrimary)
+                      )
+                    }
+                  }
+                }
+              }
+
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Surface(
+                  color = CinemaPrimary,
+                  shape = RoundedCornerShape(50)
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                  ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                    Text("شغّل", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                  }
+                }
+
+                // Watched ✓ button (marks watched + syncs to Trakt + advances to next episode)
+                Surface(
+                  onClick = { onMarkWatched(item) },
+                  color = Color.Transparent,
+                  shape = RoundedCornerShape(50),
+                  border = BorderStroke(1.3.dp, CinemaSuccess),
+                  modifier = Modifier
+                    .heightIn(min = 28.dp)
+                    .focusProperties { canFocus = false }
+                    .testTag("btn_home_up_next_watched_${item.id}")
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.CheckCircle,
+                      contentDescription = "تمت المشاهدة",
+                      tint = CinemaSuccess,
+                      modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                      text = "Watched",
+                      color = Color.White,
+                      fontSize = 11.5.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
 

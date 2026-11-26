@@ -252,7 +252,8 @@ enum class ControlMode {
 
 enum class AppMainTab {
   BROWSER,
-  ASSER_TV
+  ASSER_TV,
+  TRAKT
 }
 
 data class QuickWebSite(

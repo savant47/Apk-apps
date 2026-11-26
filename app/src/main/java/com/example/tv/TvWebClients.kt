@@ -29,7 +29,8 @@ class TvWebChromeClient(
   private val fullscreenContainer: FrameLayout,
   private val onFullscreenChanged: (Boolean) -> Unit,
   private val onProgressUpdate: (Int) -> Unit,
-  private val onTitleUpdate: (String) -> Unit
+  private val onTitleUpdate: (String) -> Unit,
+  private val onPopupBlocked: (() -> Unit)? = null
 ) : WebChromeClient() {
 
   private var customView: View? = null
@@ -112,6 +113,7 @@ class TvWebChromeClient(
     resultMsg: Message?
   ): Boolean {
     // Strictly prevent opening separate blank popup windows that hijack streaming
+    onPopupBlocked?.invoke()
     return false
   }
 
@@ -158,6 +160,7 @@ class TvWebChromeClient(
 
 class TvWebViewClient(
   private val isAdBlockEnabled: () -> Boolean,
+  private val isStrictIframeSandboxEnabled: () -> Boolean = { true },
   private val onPageFinishedCallback: (String) -> Unit,
   private val onRenderProcessGoneCallback: (() -> Unit)? = null,
   private val onAdBlockedCallback: ((String) -> Unit)? = null,
@@ -165,19 +168,20 @@ class TvWebViewClient(
   private val isGeneralBrowserMode: () -> Boolean = { false }
 ) : WebViewClient() {
 
-  // Known malicious ad / popunder / redirect / heavy tracker domains (reduces RAM & OOM crashes on watchseries.bar)
+  // Known malicious ad / popunder / redirect / heavy tracker domains (including WatchSeries & embed popups)
   private val adHostKeywords = listOf(
-    "luugy", "popads", "propellerads", "adsterra", "exoclick",
-    "bet365", "1xbet", "trafficjunky", "ad-delivery",
-    "adtrue", "juicyads", "histats", "trackvoluum", "monetag",
-    "hilltopads", "richpush", "clickadu", "realsrv", "ero-advertising",
-    "yllix", "directrev", "poppush", "pushnoti", "popunder", "popcash",
-    "adkeeper", "adcash", "adcolony", "cpalead", "trafficstars",
-    "onclickads", "adexchangeclear", "doubleclick.net",
-    "acscdn", "dtscout", "amung.us", "taboola", "outbrain", "mgid",
-    "adskeeper", "googlesyndication", "adservice.google", "pushwoosh",
-    "onesignal", "mc.yandex", "clarity.ms", "hotjar", "sharethis",
-    "disqus", "pubfuture", "bidgear", "galaksion", "vidazoo",
+    "luugy", "popads", "propellerads", "propellerclick", "adsterra", "exoclick", "exosrv",
+    "bet365", "1xbet", "trafficjunky", "trafficfactory", "ad-delivery", "admaven", "ad-maven",
+    "adtrue", "juicyads", "histats", "trackvoluum", "monetag", "alwingulla", "notix",
+    "hilltopads", "richpush", "clickadu", "realsrv", "ero-advertising", "tsyndicate",
+    "yllix", "directrev", "poppush", "pushnoti", "pushame", "inpagepush", "popunder", "popcash",
+    "adkeeper", "adcash", "adcolony", "cpalead", "trafficstars", "plugrush", "a-ads",
+    "onclickads", "onclickperformance", "adexchangeclear", "doubleclick.net", "doublepimp",
+    "acscdn", "dtscout", "amung.us", "whos.amung", "supercounters", "taboola", "outbrain", "mgid",
+    "adskeeper", "googlesyndication", "adservice.google", "pushwoosh", "highperformanceformat",
+    "profitablegate", "effectivegatecpm", "topcreativeformat", "magsrv", "wpadmngr", "adsco.re",
+    "onesignal", "mc.yandex", "yandex.ru/metrika", "clarity.ms", "hotjar", "sharethis",
+    "disqus", "pubfuture", "bidgear", "galaksion", "vidazoo", "vignette", "poperblocker",
     "adnxs", "criteo", "rubiconproject", "pubmatic", "openx.net",
     "scorecardresearch", "quantserve", "facebook.net", "connect.facebook",
     "google-analytics", "analytics.google", "googletagmanager", "cloudflareinsights",
@@ -561,6 +565,11 @@ class TvWebViewClient(
         }
       }
       if (isAd && !isStreamingOrCdnHost(host)) {
+        if (view != null) {
+          view.post { onAdBlockedCallback?.invoke(host) }
+        } else {
+          onAdBlockedCallback?.invoke(host)
+        }
         return emptyBlockedResponse()
       }
     }
@@ -691,20 +700,68 @@ class TvWebViewClient(
             };
           }
 
-          // 4. Safe window.open and popup suppressor
+          // 4. Strict Anti-Popup, Anti-Click-Hijack & Safe Sandbox Shield (avoids "Please Disable Sandbox" breakages)
+          var strictSandboxOn = ${if (isStrictIframeSandboxEnabled()) "true" else "false"};
           var safeDummyWindow = {
             closed: false,
             focus: function() {},
+            blur: function() {},
             close: function() {},
-            location: { href: '' },
-            document: { write: function() {}, open: function() {}, close: function() {} }
+            postMessage: function() {},
+            location: { href: '', assign: function() {}, replace: function() {} },
+            document: { write: function() {}, writeln: function() {}, open: function() {}, close: function() {} }
           };
-          window.open = function(u) {
-            console.log('Safe window.open handled: ' + u);
+          var reportBlocked = function(tag) {
+            try {
+              if (window.AndroidTvBridge && typeof window.AndroidTvBridge.onAdBlocked === 'function') {
+                window.AndroidTvBridge.onAdBlocked(tag || 'popup');
+              }
+            } catch(err) {}
+          };
+          var blockedOpenFn = function(u) {
+            reportBlocked('window.open:' + (u || ''));
             return safeDummyWindow;
           };
+          try {
+            Object.defineProperty(window, 'open', { value: blockedOpenFn, writable: false, configurable: false });
+          } catch(eOpen) {
+            window.open = blockedOpenFn;
+          }
           window.alert = function() { return true; };
           window.confirm = function() { return false; };
+          window.prompt = function() { return null; };
+
+          if (strictSandboxOn && !window.__asserStrictClickShield) {
+            window.__asserStrictClickShield = true;
+            var currentHost = (window.location.hostname || '').toLowerCase();
+            // Strip target="_blank" popup hijacks & third-party click-jacking links in capture phase
+            document.addEventListener('click', function(ev) {
+              try {
+                var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+                if (a) {
+                  var href = (a.getAttribute('href') || '').trim();
+                  var tgt = (a.getAttribute('target') || '').toLowerCase();
+                  if (tgt === '_blank' || href.indexOf('javascript:void') === 0) {
+                    var parsedHost = '';
+                    try { parsedHost = new URL(href, window.location.href).hostname.toLowerCase(); } catch(eu) {}
+                    if (parsedHost && parsedHost !== currentHost &&
+                        parsedHost.indexOf('watchseries') === -1 &&
+                        parsedHost.indexOf('topcinema') === -1 &&
+                        parsedHost.indexOf('laroza') === -1 &&
+                        parsedHost.indexOf('egydead') === -1 &&
+                        parsedHost.indexOf('flixer') === -1) {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      ev.stopImmediatePropagation();
+                      reportBlocked('blank_redirect:' + parsedHost);
+                      return false;
+                    }
+                    a.removeAttribute('target');
+                  }
+                }
+              } catch(ec) {}
+            }, true);
+          }
         } catch(e) {}
       })();
     """.trimIndent()
@@ -1183,14 +1240,20 @@ class TvWebViewClient(
                 el.remove();
               }
             });
-            // Remove transparent overlay divs and invisible click-jacking anchor overlays (never touch elements containing iframes or CAPTCHAs)
-            var overlays = document.querySelectorAll('div[style*="position: fixed"], div[style*="position:absolute"], a[target="_blank"]');
+            // Neutralize "Please Disable Sandbox" false warning overlays & transparent WatchSeries click-hijack layers
+            var overlays = document.querySelectorAll('div[style*="position: fixed"], div[style*="position:absolute"], a[target="_blank"], [id*="ad-overlay"], [class*="ad-overlay"], [class*="click-overlay"], [class*="sandbox"]');
             overlays.forEach(function(el) {
               if (!isCaptchaOrVerificationElement(el) && !el.querySelector('iframe') && !el.closest('#player') && !el.closest('#movie-player') && !el.closest('.movie-player-wrap') && !el.closest('iframe') && !el.closest('video') && !el.closest('.servers')) {
+                var txt = ((el.innerText || '') + '').toLowerCase();
                 var rect = el.getBoundingClientRect();
-                if (rect.width > 200 && rect.height > 200) {
+                var isSandboxNotice = txt.indexOf('disable sandbox') !== -1 || txt.indexOf('sandbox detected') !== -1;
+                var isInvisibleShield = rect.width > 180 && rect.height > 180;
+                if (isSandboxNotice || isInvisibleShield) {
                   el.style.pointerEvents = 'none';
                   el.style.display = 'none';
+                  if (window.AndroidTvBridge && typeof window.AndroidTvBridge.onAdBlocked === 'function') {
+                    window.AndroidTvBridge.onAdBlocked(isSandboxNotice ? 'sandbox_banner' : 'overlay');
+                  }
                 }
               }
             });
@@ -1496,8 +1559,13 @@ open class TvPlayerBridge(
   private val onVideoTimeUpdate: (currentTime: Float, duration: Float) -> Unit = { _, _ -> },
   private val onCenterClickFiltered: (target: String, isPlaying: Boolean) -> Unit = { _, _ -> },
   private val onVideoDetected: (String) -> Unit = {},
-  private val onQualitiesDetected: (List<Int>) -> Unit = {}
+  private val onQualitiesDetected: (List<Int>) -> Unit = {},
+  private val onAdBlocked: (String) -> Unit = {}
 ) {
+  @android.webkit.JavascriptInterface
+  open fun onAdBlocked(reason: String) {
+    this.onAdBlocked.invoke(reason)
+  }
   @android.webkit.JavascriptInterface
   open fun onVideoDetected(src: String) {
     if (!src.isNullOrBlank() && src.startsWith("http")) {

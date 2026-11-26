@@ -110,6 +110,7 @@ fun AppUpdateDialog(
   var downloadedSizeText by remember { mutableStateOf("") }
   var totalSizeText by remember { mutableStateOf("") }
   var releaseInfo by remember { mutableStateOf<UpdateReleaseInfo?>(null) }
+  var showAdminRestorePrompt by remember { mutableStateOf(false) }
 
   fun startCheck() {
     updateState = UpdateDownloadState.Checking
@@ -771,9 +772,9 @@ fun AppUpdateDialog(
                   fontWeight = FontWeight.Bold
                 )
                 Text(
-                  text = "للسجل والمفضلة",
+                  text = "السجل والمفضلة والحلقات المشاهدة وقائمة التالي",
                   color = Color.LightGray,
-                  fontSize = 13.sp
+                  fontSize = 12.5.sp
                 )
               }
 
@@ -787,7 +788,7 @@ fun AppUpdateDialog(
                     try {
                       val backupFile = File(context.filesDir, "savant_tv_backup.json")
                       backupFile.writeText(json)
-                      Toast.makeText(context, "✅ تم الحفظ", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(context, "✅ تم حفظ النسخة الاحتياطية بنجاح", Toast.LENGTH_SHORT).show()
                     } catch (e: Exception) {
                       Toast.makeText(context, "فشل الحفظ: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
@@ -796,6 +797,7 @@ fun AppUpdateDialog(
                   modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 44.dp)
+                    .testTag("btn_backup_export_open")
                 ) {
                   Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(17.dp))
                   Spacer(modifier = Modifier.width(5.dp))
@@ -803,31 +805,16 @@ fun AppUpdateDialog(
                 }
 
                 OutlinedButton(
-                  onClick = {
-                    try {
-                      val backupFile = File(context.filesDir, "savant_tv_backup.json")
-                      if (backupFile.exists()) {
-                        val success = repository.restoreUserDataJson(backupFile.readText())
-                        if (success) {
-                          Toast.makeText(context, "✅ تم الاسترجاع", Toast.LENGTH_SHORT).show()
-                        } else {
-                          Toast.makeText(context, "ملف غير صالح", Toast.LENGTH_SHORT).show()
-                        }
-                      } else {
-                        Toast.makeText(context, "لا توجد نسخة سابقة", Toast.LENGTH_SHORT).show()
-                      }
-                    } catch (e: Exception) {
-                      Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
-                  },
+                  onClick = { showAdminRestorePrompt = true },
                   colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
                   modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 44.dp)
+                    .testTag("btn_backup_restore_locked")
                 ) {
                   Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(17.dp))
                   Spacer(modifier = Modifier.width(5.dp))
-                  Text("استرجاع", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                  Text("استرجاع 🔒", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
               }
             }
@@ -835,6 +822,32 @@ fun AppUpdateDialog(
         }
       }
     }
+  }
+
+  if (showAdminRestorePrompt) {
+    AdminPasswordDialog(
+      title = "استرجاع النسخة الاحتياطية",
+      subtitle = "أدخل كلمة مرور المسؤول لاستعادة الإعدادات والنسخة الاحتياطية",
+      onVerified = {
+        showAdminRestorePrompt = false
+        try {
+          val backupFile = File(context.filesDir, "savant_tv_backup.json")
+          if (backupFile.exists()) {
+            val success = repository.restoreUserDataJson(backupFile.readText())
+            if (success) {
+              Toast.makeText(context, "✅ تم الاسترجاع بنجاح", Toast.LENGTH_SHORT).show()
+            } else {
+              Toast.makeText(context, "ملف غير صالح", Toast.LENGTH_SHORT).show()
+            }
+          } else {
+            Toast.makeText(context, "لا توجد نسخة سابقة", Toast.LENGTH_SHORT).show()
+          }
+        } catch (e: Exception) {
+          Toast.makeText(context, "خطأ: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+      },
+      onDismiss = { showAdminRestorePrompt = false }
+    )
   }
 }
 
