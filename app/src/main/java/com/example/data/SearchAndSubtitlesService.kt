@@ -1568,23 +1568,42 @@ class SearchAndSubtitlesService {
             }
           }
 
-          // Stage 3: If the opened URL was a series/season overview page (e.g. TopCinema /series/... or EgyDead /season/...)
-          // with no direct watch servers yet, fetch the target episode's watch page so servers populate immediately.
-          if (watchServers.isEmpty() && episodes.isNotEmpty()) {
-            val targetEp = episodes.firstOrNull { it.episodeNumber == selectedEpisodeNumber }
-              ?: episodes.sortedBy { it.episodeNumber }.first()
-            normalizedWatchUrl = targetEp.url
-            val decodedEpUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
-            if (selectedSeasonNumber <= 1) {
-              extractSeasonNumberFromText(decodedEpUrl)?.takeIf { it in 1..40 }?.let { effectiveSeasonNumber = it }
+          // Stage 3: If the opened URL was a series/season overview page OR a different episode card (e.g. TopCinema search returned Episode 8 while user requested Episode 5),
+          // automatically switch to the target episode's watch page and extract its servers immediately!
+          if (episodes.isNotEmpty()) {
+            val decodedCurrWatch = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
+            val currentDetectedEp = extractEpisodeNumberFromText(decodedCurrWatch)
+            val targetEp = if (selectedEpisodeNumber > 0) {
+              episodes.firstOrNull { it.episodeNumber == selectedEpisodeNumber }
+            } else {
+              null
+            } ?: if (watchServers.isEmpty()) {
+              episodes.sortedBy { it.episodeNumber }.firstOrNull()
+            } else {
+              null
             }
-            val (epHtml, epFinalUrl) = fetchHtmlWithResolvedUrl(
-              normalizedWatchUrl,
-              useEgyDeadPost = (portal == StreamingPortal.EGY_DEAD)
+
+            val shouldSwitchToTargetEp = targetEp != null && (
+              watchServers.isEmpty() ||
+                (selectedEpisodeNumber > 0 && currentDetectedEp != selectedEpisodeNumber && targetEp.url != normalizedWatchUrl)
             )
-            if (epHtml.isNotBlank()) {
-              val epOrigin = extractOrigin(epFinalUrl, watchOrigin)
-              extractServersFromDocument(Jsoup.parse(epHtml, epFinalUrl), epOrigin)
+
+            if (shouldSwitchToTargetEp && targetEp != null) {
+              normalizedWatchUrl = targetEp.url
+              val decodedEpUrl = try { java.net.URLDecoder.decode(normalizedWatchUrl, "UTF-8") } catch (_: Exception) { normalizedWatchUrl }
+              if (selectedSeasonNumber <= 1) {
+                extractSeasonNumberFromText(decodedEpUrl)?.takeIf { it in 1..40 }?.let { effectiveSeasonNumber = it }
+              }
+              watchServers.clear()
+              seenEmbedUrls.clear()
+              val (epHtml, epFinalUrl) = fetchHtmlWithResolvedUrl(
+                normalizedWatchUrl,
+                useEgyDeadPost = (portal == StreamingPortal.EGY_DEAD)
+              )
+              if (epHtml.isNotBlank()) {
+                val epOrigin = extractOrigin(epFinalUrl, watchOrigin)
+                extractServersFromDocument(Jsoup.parse(epHtml, epFinalUrl), epOrigin)
+              }
             }
           }
         }
@@ -1659,7 +1678,8 @@ class SearchAndSubtitlesService {
           pathSeasonNum ?: effectiveSeasonNumber
         }
 
-        val rawEpNum = pathEpNum
+        val rawEpNum = selectedEpisodeNumber.takeIf { it > 0 }
+          ?: pathEpNum
           ?: episodeNumberRegex.find(decodedUrl)?.groupValues?.get(1)?.toIntOrNull()
           ?: episodeNumberRegex.find(titleHint)?.groupValues?.get(1)?.toIntOrNull()
           ?: 1
@@ -1738,7 +1758,7 @@ class SearchAndSubtitlesService {
         }
       }
     } catch (e: Exception) {
-      AppDiagnosticsLogger.log("Scraper", "Fast scrape exception on $normalizedWatchUrl: ${e.message}", isError = true)
+      AppDiagnosticsLogger.log("Scraper", "Fast scrape exception on $normalizedWatchUrl: ${e.message}")
     }
 
     // Always add the normalized portal watch page itself as a server option
@@ -1777,10 +1797,11 @@ class SearchAndSubtitlesService {
       seasons.add(ScrapedSeasonItem(seasonNumber = effectiveSeasonNumber, title = "الموسم $effectiveSeasonNumber", url = normalizedWatchUrl))
     }
 
-    val primaryDirectServer = watchServers.firstOrNull {
+    val directCandidateServers = watchServers.filter {
       it.isDirectEmbed && !it.embedUrl.startsWith("topcinema-ajax://")
     }
-    val bestEmbedUrl = primaryDirectServer?.embedUrl ?: normalizedWatchUrl
+    var chosenServer = directCandidateServers.firstOrNull()
+    var bestEmbedUrl = chosenServer?.embedUrl ?: normalizedWatchUrl
     var extractedDirectStream = ""
     var extractedStreamReferer = normalizedWatchUrl
     var detectedQualities = emptyList<VideoQualityOption>()
@@ -1791,19 +1812,31 @@ class SearchAndSubtitlesService {
       "Fast-scraped ${seasons.size} seasons (active=S$effectiveSeasonNumber), ${episodes.size} episodes, ${watchServers.size} servers in ${scrapeElapsedMs}ms from $normalizedWatchUrl"
     )
 
-    // Resolve ONLY the single active/primary selected server (NEVER loop across 5-6 servers in background)
-    if (!okHttpBlockedByCloudflare && primaryDirectServer != null && !isDynamicSpaEmbed(primaryDirectServer.embedUrl)) {
-      val extractStartMs = System.currentTimeMillis()
-      val resolution = resolveDirectStreamFromEmbed(primaryDirectServer.embedUrl, normalizedWatchUrl)
-      if (resolution.primaryStreamUrl.isNotBlank()) {
-        extractedDirectStream = resolution.primaryStreamUrl
-        extractedStreamReferer = resolution.refererUrl.ifBlank { primaryDirectServer.embedUrl }
-        detectedQualities = resolution.detectedQualities
-        val extractElapsedMs = System.currentTimeMillis() - extractStartMs
-        AppDiagnosticsLogger.log(
-          "StreamExtractor",
-          "Resolved selected server [${primaryDirectServer.name}] in ${extractElapsedMs}ms: ${resolution.primaryStreamUrl} | Qualities: ${detectedQualities.joinToString { it.label }}"
-        )
+    // Resolve the primary server, and if it fails/times out, try up to 1 fallback direct server before falling back to WebView
+    if (!okHttpBlockedByCloudflare && directCandidateServers.isNotEmpty()) {
+      for (candidate in directCandidateServers.take(2)) {
+        if (isDynamicSpaEmbed(candidate.embedUrl)) {
+          if (chosenServer == null) {
+            chosenServer = candidate
+            bestEmbedUrl = candidate.embedUrl
+          }
+          continue
+        }
+        val extractStartMs = System.currentTimeMillis()
+        val resolution = resolveDirectStreamFromEmbed(candidate.embedUrl, normalizedWatchUrl)
+        if (resolution.primaryStreamUrl.isNotBlank()) {
+          chosenServer = candidate
+          bestEmbedUrl = candidate.embedUrl
+          extractedDirectStream = resolution.primaryStreamUrl
+          extractedStreamReferer = resolution.refererUrl.ifBlank { candidate.embedUrl }
+          detectedQualities = resolution.detectedQualities
+          val extractElapsedMs = System.currentTimeMillis() - extractStartMs
+          AppDiagnosticsLogger.log(
+            "StreamExtractor",
+            "Resolved selected server [${candidate.name}] in ${extractElapsedMs}ms: ${resolution.primaryStreamUrl} | Qualities: ${detectedQualities.joinToString { it.label }}"
+          )
+          break
+        }
       }
     }
 
@@ -2391,7 +2424,16 @@ class SearchAndSubtitlesService {
 
       DirectStreamResolution()
     } catch (e: Exception) {
-      AppDiagnosticsLogger.log("StreamExtractor", "Error extracting from $embedUrl: ${e.message}", isError = true)
+      val isTimeoutOrCancel = e is java.io.InterruptedIOException ||
+        e is java.net.SocketTimeoutException ||
+        e is kotlinx.coroutines.CancellationException ||
+        e.message?.contains("timeout", ignoreCase = true) == true ||
+        e.message?.contains("canceled", ignoreCase = true) == true
+      AppDiagnosticsLogger.log(
+        "StreamExtractor",
+        "Skipped slow/aborted embed $embedUrl (${e.message ?: "timeout"})",
+        isError = !isTimeoutOrCancel
+      )
       DirectStreamResolution()
     }
   }

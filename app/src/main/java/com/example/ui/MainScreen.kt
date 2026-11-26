@@ -246,15 +246,13 @@ fun MainScreen(
                 traktUsername = resolvedUsername
               )
             }
-            if (finalRes.upNextItems.isNotEmpty()) {
-              repository.mergeTraktProgressItems(finalRes.upNextItems)
-            }
-            repository.saveTraktCalendar(finalRes.calendarItems)
-            repository.saveTraktWatchlist(finalRes.watchlistItems)
+            repository.mergeTraktProgressItems(finalRes.upNextItems)
+            repository.saveTraktCalendar(emptyList())
+            repository.saveTraktWatchlist(emptyList())
             if (showToast) {
               Toast.makeText(
                 context,
-                "تمت مزامنة Trakt ✓ (${finalRes.upNextItems.size} متابعة • ${finalRes.calendarItems.size} جدول • ${finalRes.watchlistItems.size} قائمة)",
+                "تمت مزامنة Trakt ✓ (${finalRes.upNextItems.size} مسلسل في التالي للمشاهدة)",
                 Toast.LENGTH_SHORT
               ).show()
             }
@@ -294,7 +292,8 @@ fun MainScreen(
             if (updatedNext != null) {
               repository.replaceSingleUpNextItem(updatedNext)
             } else {
-              triggerFullTraktSync(showToast = false)
+              // No more aired unwatched episodes left for this show — remove from Up Next!
+              repository.removeUpNextItem(item.id)
             }
           } else if (showToast) {
             Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
@@ -1142,6 +1141,37 @@ fun MainScreen(
             portalRefererPageUrl = resolvedPortalWatchUrl,
             resetNativePlayer = true
           )
+          // Automatic SPA embed watchdog: if a dynamic embed (e.g. VidLink) does not emit a stream within 9s, auto-switch to the next direct server (e.g. VidSrc)
+          val fallbackServer = scraped.watchServers.firstOrNull {
+            it.isDirectEmbed &&
+              it.embedUrl != scraped.bestCleanPlayerUrl &&
+              !it.embedUrl.startsWith("topcinema-ajax://")
+          }
+          if (fallbackServer != null && scraped.bestCleanPlayerUrl.contains("vidlink.", ignoreCase = true)) {
+            scope.launch {
+              kotlinx.coroutines.delay(9000L)
+              if (!isHomeActive &&
+                  playNativeVideoUrl == null &&
+                  detectedVideoUrl.isNullOrBlank() &&
+                  currentUrl == scraped.bestCleanPlayerUrl
+              ) {
+                AppDiagnosticsLogger.log(
+                  "AutoFallback",
+                  "سيرفر ${bestServer?.name ?: "الأول"} تأخر في الاستجابة — التحويل تلقائياً إلى ${fallbackServer.name}"
+                )
+                activeServerName = fallbackServer.name
+                AppDiagnosticsLogger.activeServerName = fallbackServer.name
+                loadServerIntoWebView(
+                  targetWebView = webViewRef,
+                  targetServerUrl = fallbackServer.embedUrl,
+                  isDirectEmbed = true,
+                  portalRefererPageUrl = resolvedPortalWatchUrl,
+                  resetNativePlayer = false,
+                  forceReload = true
+                )
+              }
+            }
+          }
         } else {
           currentUrl = scraped.bestCleanPlayerUrl
           isCurrentUrlDirectEmbed = isDirect
@@ -2252,6 +2282,8 @@ fun MainScreen(
                       val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
                       if (updatedNext != null) {
                         repository.replaceSingleUpNextItem(updatedNext)
+                      } else if (matchedUpNext != null) {
+                        repository.removeUpNextItem(matchedUpNext.id)
                       }
                     }
                   }
@@ -2296,6 +2328,8 @@ fun MainScreen(
                         val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
                         if (updatedNext != null) {
                           repository.replaceSingleUpNextItem(updatedNext)
+                        } else if (matchedUpNext != null) {
+                          repository.removeUpNextItem(matchedUpNext.id)
                         }
                       }
                     }
@@ -2954,7 +2988,22 @@ fun MainScreen(
                 Toast.makeText(context, "جاري تشغيل: ${server.name}", Toast.LENGTH_SHORT).show()
               },
               onSelectSearchResult = { item, portal ->
-                navigateTo(item.url, portal, item.title, isGeneralBrowser = false, autoScrapeAndLoadEmbed = true)
+                val targetSeason = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val targetEpisode = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                val navTitle = if (targetEpisode > 0) {
+                  buildCleanEpisodeNavTitle(targetSeason, targetEpisode, item.title)
+                } else {
+                  item.title
+                }
+                navigateTo(
+                  url = item.url,
+                  portal = portal,
+                  title = navTitle,
+                  isGeneralBrowser = false,
+                  autoScrapeAndLoadEmbed = true,
+                  selectedSeasonNum = targetSeason,
+                  selectedEpisodeNum = targetEpisode
+                )
               },
               onSwitchPortalDirect = { portal ->
                 val url = if (lastSearchQuery.isNotBlank()) portal.buildSearchUrl(lastSearchQuery) else portal.homeUrl
@@ -3111,7 +3160,22 @@ fun MainScreen(
                 Toast.makeText(context, "جاري تشغيل: ${server.name}", Toast.LENGTH_SHORT).show()
               },
               onSelectSearchResult = { item, portal ->
-                navigateTo(item.url, portal, item.title, isGeneralBrowser = false, autoScrapeAndLoadEmbed = true)
+                val targetSeason = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val targetEpisode = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                val navTitle = if (targetEpisode > 0) {
+                  buildCleanEpisodeNavTitle(targetSeason, targetEpisode, item.title)
+                } else {
+                  item.title
+                }
+                navigateTo(
+                  url = item.url,
+                  portal = portal,
+                  title = navTitle,
+                  isGeneralBrowser = false,
+                  autoScrapeAndLoadEmbed = true,
+                  selectedSeasonNum = targetSeason,
+                  selectedEpisodeNum = targetEpisode
+                )
               },
               onSwitchPortalDirect = { portal ->
                 val url = if (lastSearchQuery.isNotBlank()) portal.buildSearchUrl(lastSearchQuery) else portal.homeUrl

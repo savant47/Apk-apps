@@ -509,28 +509,6 @@ fun HomeDashboardScreen(
         }
       }
 
-      // Home Trakt Upcoming Calendar Row (جدول الحلقات القادمة)
-      if (traktConnected && traktCalendar.isNotEmpty()) {
-        item {
-          HomeTraktCalendarSection(
-            items = traktCalendar,
-            onPlayItem = onPlayTraktCalendarItem,
-            onOpenTrakt = onOpenTrakt
-          )
-        }
-      }
-
-      // Home Trakt Watchlist Row (قائمتي في Trakt)
-      if (traktConnected && traktWatchlist.isNotEmpty()) {
-        item {
-          HomeTraktWatchlistSection(
-            items = traktWatchlist,
-            onPlayItem = onPlayTraktWatchlistItem,
-            onOpenTrakt = onOpenTrakt
-          )
-        }
-      }
-
       // Live Daily IMDb Status Strip & Manual Refresh (Clean BiDi-safe 2-line layout with isolated LTR date)
       item {
         val refreshInteraction = remember { MutableInteractionSource() }
@@ -3335,7 +3313,7 @@ private fun HomeTraktConnectBannerCard(
       }
 
       Text(
-        text = "اربط حسابك بكود التفعيل الرسمي لتظهر هنا حلقاتك القادمة وجدول الحلقات وقائمتك الخاصة تلقائياً مع استكمال المشاهدة.",
+        text = "اربط حسابك بكود التفعيل لتظهر هنا حلقات «التالي للمشاهدة» تلقائياً مرتبة بآخر مشاهدة مع استكمال المشاهدة.",
         color = Color(0xFFCBD5E1),
         fontSize = 13.5.sp,
         lineHeight = 20.sp

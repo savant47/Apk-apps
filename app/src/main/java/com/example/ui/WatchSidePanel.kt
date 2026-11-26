@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -141,8 +142,14 @@ fun WatchSidePanel(
 ) {
   var selectedPortalTab by remember(activePortal) { mutableStateOf(activePortal) }
   // 0 = Seasons & Episodes (if series) or Sources; 1 = Sources
-  var activeSubTab by remember(seriesStructure.episodes.isNotEmpty(), seriesStructure.seasons.isNotEmpty()) {
+  var activeSubTab by remember {
     mutableIntStateOf(if (seriesStructure.episodes.isNotEmpty() || seriesStructure.seasons.isNotEmpty()) 0 else 1)
+  }
+  // Automatically switch to Episodes tab whenever episodes are scraped for the current show/portal
+  LaunchedEffect(activeWatchPageUrl, seriesStructure.episodes.size, seriesStructure.seasons.size) {
+    if (seriesStructure.episodes.isNotEmpty() || seriesStructure.seasons.isNotEmpty()) {
+      activeSubTab = 0
+    }
   }
   var showServerSelectorModal by remember { mutableStateOf(false) }
 
@@ -178,7 +185,7 @@ fun WatchSidePanel(
           .fillMaxWidth()
           .fillMaxHeight()
           .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(5.dp)
       ) {
         // 1. Sleek Well-Proportioned Header (All controls D-Pad focusable with clear focus borders)
         Row(
@@ -299,7 +306,7 @@ fun WatchSidePanel(
           ),
           modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
+            .heightIn(min = if (isCompactMobileSheet) 42.dp else 48.dp)
             .scale(if (isServerSelectorFocused) 1.015f else 1.0f)
             .focusable(interactionSource = serverSelectorInteraction)
             .testTag("btn_open_server_selector_modal")
@@ -307,13 +314,13 @@ fun WatchSidePanel(
           Row(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(horizontal = 10.dp, vertical = 8.dp),
+              .padding(horizontal = 10.dp, vertical = if (isCompactMobileSheet) 5.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
           ) {
             Box(
               modifier = Modifier
-                .size(36.dp)
+                .size(if (isCompactMobileSheet) 30.dp else 36.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(if (isServerSelectorFocused) CinemaFocusGlow else CinemaSuccess.copy(alpha = 0.18f)),
               contentAlignment = Alignment.Center
@@ -322,30 +329,56 @@ fun WatchSidePanel(
                 imageVector = Icons.Default.Dns,
                 contentDescription = "اختيار السيرفر",
                 tint = if (isServerSelectorFocused) Color.Black else CinemaSuccess,
-                modifier = Modifier.size(19.dp)
+                modifier = Modifier.size(if (isCompactMobileSheet) 17.dp else 19.dp)
               )
             }
 
-            Column(
-              modifier = Modifier.weight(1f),
-              verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-              Text(
-                text = "السيرفر ($serverCount)",
-                color = if (isServerSelectorFocused) CinemaFocusGlow else Color.LightGray,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-              )
-              Text(
-                text = displayedServerLabel,
-                color = Color.White,
-                fontSize = 14.5.sp,
-                fontWeight = FontWeight.ExtraBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-              )
+            if (isCompactMobileSheet) {
+              Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Text(
+                  text = "السيرفر ($serverCount):",
+                  color = if (isServerSelectorFocused) CinemaFocusGlow else Color.LightGray,
+                  fontSize = 12.sp,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  softWrap = false
+                )
+                Text(
+                  text = displayedServerLabel,
+                  color = Color.White,
+                  fontSize = 13.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.weight(1f)
+                )
+              }
+            } else {
+              Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+              ) {
+                Text(
+                  text = "السيرفر ($serverCount)",
+                  color = if (isServerSelectorFocused) CinemaFocusGlow else Color.LightGray,
+                  fontSize = 12.sp,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                  text = displayedServerLabel,
+                  color = Color.White,
+                  fontSize = 14.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis
+                )
+              }
             }
 
             Surface(
@@ -357,14 +390,14 @@ fun WatchSidePanel(
               )
             ) {
               Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
               ) {
                 Text(
                   text = if (serverCount > 0) "تبديل" else "تحديث",
                   color = if (isServerSelectorFocused) Color.Black else CinemaAccent,
-                  fontSize = 13.sp,
+                  fontSize = 12.5.sp,
                   fontWeight = FontWeight.ExtraBold,
                   maxLines = 1,
                   softWrap = false
@@ -380,44 +413,43 @@ fun WatchSidePanel(
           }
         }
 
-        // 3. Auto-Detected Real Video Qualities Strip (FlowRow wrap on narrow mobile sheets so labels never clip)
-        if (isCompactMobileSheet && detectedQualities.isNotEmpty()) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .clip(RoundedCornerShape(8.dp))
-              .background(CinemaSurface)
-              .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-              .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-          ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              Icon(
-                imageVector = Icons.Default.HighQuality,
-                contentDescription = null,
-                tint = CinemaSuccess,
-                modifier = Modifier.size(16.dp)
-              )
-              Spacer(modifier = Modifier.width(5.dp))
-              Text(
-                text = "الجودة:",
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                softWrap = false
-              )
-            }
-            @OptIn(ExperimentalLayoutApi::class)
-            FlowRow(
-              horizontalArrangement = Arrangement.spacedBy(6.dp),
-              verticalArrangement = Arrangement.spacedBy(6.dp),
-              modifier = Modifier.fillMaxWidth()
+        // 3. Auto-Detected Real Video Qualities Strip (Single horizontal scrollable strip on both Mobile & TV so episodes below always have ample room)
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(CinemaSurface)
+            .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Icon(
+            imageVector = Icons.Default.HighQuality,
+            contentDescription = null,
+            tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
+            modifier = Modifier.size(16.dp)
+          )
+          Spacer(modifier = Modifier.width(5.dp))
+          Text(
+            text = "الجودة:",
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false
+          )
+          Spacer(modifier = Modifier.width(6.dp))
+          if (detectedQualities.isNotEmpty()) {
+            val qualityScope = rememberCoroutineScope()
+            LazyRow(
+              horizontalArrangement = Arrangement.spacedBy(5.dp),
+              modifier = Modifier.weight(1f)
             ) {
-              detectedQualities.forEach { qOption ->
+              items(detectedQualities, key = { it.id }) { qOption ->
                 val selected = currentQuality == qOption.id
                 val qInteraction = remember { MutableInteractionSource() }
                 val isFocused by qInteraction.collectIsFocusedAsState()
+                val bringIntoViewRequester = remember { BringIntoViewRequester() }
                 Surface(
                   onClick = { onSelectQuality(qOption) },
                   interactionSource = qInteraction,
@@ -436,124 +468,47 @@ fun WatchSidePanel(
                     }
                   ),
                   modifier = Modifier
-                    .heightIn(min = 38.dp)
+                    .heightIn(min = 34.dp)
+                    .bringIntoViewRequester(bringIntoViewRequester)
+                    .onFocusChanged { state ->
+                      if (state.isFocused) {
+                        qualityScope.launch { bringIntoViewRequester.bringIntoView() }
+                      }
+                    }
                     .focusable(interactionSource = qInteraction)
                     .testTag("quality_chip_${qOption.id}")
                 ) {
                   Box(
                     contentAlignment = Alignment.Center,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                   ) {
                     Text(
                       text = qOption.label,
                       color = if (selected || isFocused) Color.Black else Color.White,
-                      fontSize = 13.sp,
+                      fontSize = 12.5.sp,
                       fontWeight = if (selected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
                       maxLines = 1,
-                      overflow = TextOverflow.Ellipsis
+                      softWrap = false
                     )
                   }
                 }
               }
             }
-          }
-        } else {
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .clip(RoundedCornerShape(8.dp))
-              .background(CinemaSurface)
-              .border(1.dp, CinemaBorder, RoundedCornerShape(8.dp))
-              .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Icon(
-              imageVector = Icons.Default.HighQuality,
-              contentDescription = null,
-              tint = if (detectedQualities.isNotEmpty()) CinemaSuccess else CinemaSecondary,
-              modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-              text = "الجودة:",
-              color = Color.White,
-              fontSize = 13.sp,
-              fontWeight = FontWeight.Bold,
-              maxLines = 1,
-              softWrap = false
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            if (detectedQualities.isNotEmpty()) {
-              val qualityScope = rememberCoroutineScope()
-              LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                modifier = Modifier.weight(1f)
-              ) {
-                items(detectedQualities, key = { it.id }) { qOption ->
-                  val selected = currentQuality == qOption.id
-                  val qInteraction = remember { MutableInteractionSource() }
-                  val isFocused by qInteraction.collectIsFocusedAsState()
-                  val bringIntoViewRequester = remember { BringIntoViewRequester() }
-                  Surface(
-                    onClick = { onSelectQuality(qOption) },
-                    interactionSource = qInteraction,
-                    color = when {
-                      isFocused -> CinemaFocusGlow
-                      selected -> ClipboxWhite
-                      else -> CinemaDarkBackground
-                    },
-                    shape = RoundedCornerShape(7.dp),
-                    border = BorderStroke(
-                      width = if (isFocused) 2.dp else 1.dp,
-                      color = when {
-                        isFocused -> Color.White
-                        selected -> ClipboxWhite
-                        else -> CinemaSuccess.copy(alpha = 0.6f)
-                      }
-                    ),
-                    modifier = Modifier
-                      .heightIn(min = 38.dp)
-                      .bringIntoViewRequester(bringIntoViewRequester)
-                      .onFocusChanged { state ->
-                        if (state.isFocused) {
-                          qualityScope.launch { bringIntoViewRequester.bringIntoView() }
-                        }
-                      }
-                      .focusable(interactionSource = qInteraction)
-                      .testTag("quality_chip_${qOption.id}")
-                  ) {
-                    Box(
-                      contentAlignment = Alignment.Center,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                    ) {
-                      Text(
-                        text = qOption.label,
-                        color = if (selected || isFocused) Color.Black else Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = if (selected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        maxLines = 1,
-                        softWrap = false
-                      )
-                    }
-                  }
-                }
-              }
-            } else {
-              val savedLabel = when (currentQuality.lowercase()) {
-                "lowest" -> "توفير الباقة • جاري الفحص..."
-                "auto" -> "تلقائي • جاري الفحص..."
-                else -> "${currentQuality}p • جاري الفحص..."
-              }
-              Text(
-                text = savedLabel,
-                color = CinemaAccent,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-              )
+          } else {
+            val savedLabel = when (currentQuality.lowercase()) {
+              "lowest" -> "توفير الباقة • جاري الفحص..."
+              "auto" -> "تلقائي • جاري الفحص..."
+              else -> "${currentQuality}p • جاري الفحص..."
             }
+            Text(
+              text = savedLabel,
+              color = CinemaAccent,
+              fontSize = 12.5.sp,
+              fontWeight = FontWeight.SemiBold,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.weight(1f)
+            )
           }
         }
 
@@ -583,12 +538,12 @@ fun WatchSidePanel(
             ),
             modifier = Modifier
               .weight(1f)
-              .heightIn(min = 44.dp)
+              .heightIn(min = 40.dp)
               .focusable(interactionSource = tab0Interaction)
               .testTag("tab_seasons_episodes")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
               horizontalArrangement = Arrangement.Center,
               verticalAlignment = Alignment.CenterVertically
             ) {
@@ -631,12 +586,12 @@ fun WatchSidePanel(
             ),
             modifier = Modifier
               .weight(1f)
-              .heightIn(min = 44.dp)
+              .heightIn(min = 40.dp)
               .focusable(interactionSource = tab1Interaction)
               .testTag("tab_alternative_sources")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
               horizontalArrangement = Arrangement.Center,
               verticalAlignment = Alignment.CenterVertically
             ) {
@@ -659,7 +614,7 @@ fun WatchSidePanel(
           }
         }
 
-        // 5. Large, Expanded Content Area
+        // 5. Large, Expanded Content Area (Single unified scrollable grid so Seasons + Episodes never clip on compact mobile screens)
         Box(
           modifier = Modifier
             .fillMaxWidth()
@@ -667,137 +622,144 @@ fun WatchSidePanel(
             .clip(RoundedCornerShape(12.dp))
             .background(CinemaSurface)
             .border(1.dp, CinemaBorder, RoundedCornerShape(12.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
           if (activeSubTab == 0) {
             val contentScope = rememberCoroutineScope()
-            Column(
-              modifier = Modifier.fillMaxSize(),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              // Spacious Seasons Strip
-              if (seriesStructure.seasons.isNotEmpty()) {
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                  Text(
-                    text = "المواسم (${seriesStructure.seasons.size})",
-                    color = CinemaAccent,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.ExtraBold
-                  )
-                  Text(
-                    text = "الموسم ${seriesStructure.selectedSeasonNumber}",
-                    color = Color.LightGray,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
-                  )
-                }
+            val showNameForWatched = seriesTitleForWatched.ifBlank {
+              seriesStructure.seriesTitle.ifBlank { searchQuery }
+            }
+            val seasonsListState = rememberLazyListState()
+            LaunchedEffect(seriesStructure.selectedSeasonNumber, seriesStructure.seasons.size) {
+              val activeIdx = seriesStructure.seasons.indexOfFirst {
+                it.seasonNumber == seriesStructure.selectedSeasonNumber
+              }
+              if (activeIdx >= 0) {
+                try {
+                  seasonsListState.animateScrollToItem((activeIdx - 1).coerceAtLeast(0))
+                } catch (_: Throwable) {}
+              }
+            }
 
-                val seasonsListState = rememberLazyListState()
-                LaunchedEffect(seriesStructure.selectedSeasonNumber, seriesStructure.seasons.size) {
-                  val activeIdx = seriesStructure.seasons.indexOfFirst {
-                    it.seasonNumber == seriesStructure.selectedSeasonNumber
-                  }
-                  if (activeIdx >= 0) {
-                    try {
-                      seasonsListState.animateScrollToItem((activeIdx - 1).coerceAtLeast(0))
-                    } catch (_: Throwable) {}
-                  }
-                }
-                LazyRow(
-                  state = seasonsListState,
-                  horizontalArrangement = Arrangement.spacedBy(8.dp),
-                  modifier = Modifier.fillMaxWidth()
-                ) {
-                  items(seriesStructure.seasons, key = { "${it.seasonNumber}_${it.url}" }) { season ->
-                    val isSelected = season.seasonNumber == seriesStructure.selectedSeasonNumber
-                    val sInteraction = remember { MutableInteractionSource() }
-                    val isFocused by sInteraction.collectIsFocusedAsState()
-                    val bringIntoView = remember { BringIntoViewRequester() }
-                    Surface(
-                      onClick = { onSelectSeason(season) },
-                      interactionSource = sInteraction,
-                      color = when {
-                        isFocused -> CinemaFocusGlow
-                        isSelected -> CinemaPrimary
-                        else -> CinemaDarkBackground
-                      },
-                      shape = RoundedCornerShape(10.dp),
-                      border = BorderStroke(
-                        width = if (isFocused) 2.5.dp else 1.5.dp,
-                        color = when {
-                          isFocused -> Color.White
-                          isSelected -> ClipboxWhite
-                          else -> CinemaBorder
-                        }
-                      ),
-                      modifier = Modifier
-                        .heightIn(min = 46.dp)
-                        .bringIntoViewRequester(bringIntoView)
-                        .onFocusChanged { if (it.isFocused) contentScope.launch { bringIntoView.bringIntoView() } }
-                        .focusable(interactionSource = sInteraction)
-                        .testTag("season_chip_${season.seasonNumber}")
+            if (seriesStructure.seasons.isNotEmpty() || seriesStructure.episodes.isNotEmpty()) {
+              LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = if (isCompactMobileSheet) 98.dp else 116.dp),
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 8.dp)
+              ) {
+                // Full-width Seasons Header + Horizontal Seasons Strip inside the scrollable grid
+                if (seriesStructure.seasons.isNotEmpty()) {
+                  item(span = { GridItemSpan(maxLineSpan) }, key = "seasons_strip_header") {
+                    Column(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                      Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                       ) {
                         Text(
-                          text = season.title,
-                          color = if (isFocused) Color.Black else Color.White,
-                          fontSize = 14.5.sp,
-                          fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
-                          maxLines = 1,
-                          softWrap = false
+                          text = "المواسم (${seriesStructure.seasons.size})",
+                          color = CinemaAccent,
+                          fontSize = 13.5.sp,
+                          fontWeight = FontWeight.ExtraBold
                         )
+                        Text(
+                          text = "الموسم ${seriesStructure.selectedSeasonNumber}",
+                          color = Color.LightGray,
+                          fontSize = 12.5.sp,
+                          fontWeight = FontWeight.SemiBold
+                        )
+                      }
+
+                      LazyRow(
+                        state = seasonsListState,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                      ) {
+                        items(seriesStructure.seasons, key = { "${it.seasonNumber}_${it.url}" }) { season ->
+                          val isSelected = season.seasonNumber == seriesStructure.selectedSeasonNumber
+                          val sInteraction = remember { MutableInteractionSource() }
+                          val isFocused by sInteraction.collectIsFocusedAsState()
+                          val bringIntoView = remember { BringIntoViewRequester() }
+                          Surface(
+                            onClick = { onSelectSeason(season) },
+                            interactionSource = sInteraction,
+                            color = when {
+                              isFocused -> CinemaFocusGlow
+                              isSelected -> CinemaPrimary
+                              else -> CinemaDarkBackground
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(
+                              width = if (isFocused) 2.5.dp else 1.5.dp,
+                              color = when {
+                                isFocused -> Color.White
+                                isSelected -> ClipboxWhite
+                                else -> CinemaBorder
+                              }
+                            ),
+                            modifier = Modifier
+                              .heightIn(min = if (isCompactMobileSheet) 38.dp else 44.dp)
+                              .bringIntoViewRequester(bringIntoView)
+                              .onFocusChanged { if (it.isFocused) contentScope.launch { bringIntoView.bringIntoView() } }
+                              .focusable(interactionSource = sInteraction)
+                              .testTag("season_chip_${season.seasonNumber}")
+                          ) {
+                            Box(
+                              contentAlignment = Alignment.Center,
+                              modifier = Modifier.padding(horizontal = 13.dp, vertical = 6.dp)
+                            ) {
+                              Text(
+                                text = season.title,
+                                color = if (isFocused) Color.Black else Color.White,
+                                fontSize = 13.5.sp,
+                                fontWeight = if (isSelected || isFocused) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                maxLines = 1,
+                                softWrap = false
+                              )
+                            }
+                          }
+                        }
                       }
                     }
                   }
                 }
-              }
 
-              // Expanded Multi-Row Episodes Grid (50dp touch/focus targets + crisp D-Pad ring + Watched ✓ Badge)
-              if (seriesStructure.episodes.isNotEmpty()) {
-                val showNameForWatched = seriesTitleForWatched.ifBlank {
-                  seriesStructure.seriesTitle.ifBlank { searchQuery }
-                }
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                  Text(
-                    text = "الحلقات (${seriesStructure.episodes.size})",
-                    color = Color.White,
-                    fontSize = 14.5.sp,
-                    fontWeight = FontWeight.ExtraBold
-                  )
-                  SidePanelFocusPill(
-                    label = if (isCurrentEpisodeWatched) "تمت المشاهدة ✓" else "تمت المشاهدة",
-                    icon = Icons.Default.CheckCircle,
-                    containerColor = if (isCurrentEpisodeWatched) CinemaSuccess else CinemaSurfaceVariant,
-                    contentColor = Color.White,
-                    iconTint = if (isCurrentEpisodeWatched) Color.White else CinemaSuccess,
-                    borderColor = CinemaSuccess,
-                    onClick = onToggleCurrentEpisodeWatched,
-                    testTag = "btn_side_panel_mark_watched"
-                  )
-                }
+                // Full-width Episodes Header + Mark Watched Button
+                if (seriesStructure.episodes.isNotEmpty()) {
+                  item(span = { GridItemSpan(maxLineSpan) }, key = "episodes_grid_header") {
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                      Text(
+                        text = "الحلقات (${seriesStructure.episodes.size})",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.ExtraBold
+                      )
+                      SidePanelFocusPill(
+                        label = if (isCurrentEpisodeWatched) "تمت المشاهدة ✓" else "تمت المشاهدة",
+                        icon = Icons.Default.CheckCircle,
+                        containerColor = if (isCurrentEpisodeWatched) CinemaSuccess else CinemaSurfaceVariant,
+                        contentColor = Color.White,
+                        iconTint = if (isCurrentEpisodeWatched) Color.White else CinemaSuccess,
+                        borderColor = CinemaSuccess,
+                        onClick = onToggleCurrentEpisodeWatched,
+                        testTag = "btn_side_panel_mark_watched"
+                      )
+                    }
+                  }
 
-                LazyVerticalGrid(
-                  columns = GridCells.Adaptive(minSize = 116.dp),
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                  horizontalArrangement = Arrangement.spacedBy(8.dp),
-                  verticalArrangement = Arrangement.spacedBy(8.dp),
-                  contentPadding = PaddingValues(bottom = 4.dp)
-                ) {
                   items(seriesStructure.episodes, key = { "${it.episodeNumber}_${it.url}" }) { ep ->
-                    val isCurrentEp = activeWatchPageUrl == ep.url || currentUrl == ep.url
+                    val isCurrentEp = activeWatchPageUrl == ep.url ||
+                      currentUrl == ep.url ||
+                      (seriesStructure.currentEpisodeNumber > 0 && ep.episodeNumber == seriesStructure.currentEpisodeNumber)
                     val epWatchedKey = TvPreferencesRepository.buildEpisodeWatchedKey(
                       showTitle = showNameForWatched,
                       seasonNumber = ep.seasonNumber.coerceAtLeast(seriesStructure.selectedSeasonNumber.coerceAtLeast(1)),
@@ -828,7 +790,7 @@ fun WatchSidePanel(
                       ),
                       modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 50.dp)
+                        .heightIn(min = 46.dp)
                         .scale(if (isFocused) 1.03f else 1.0f)
                         .bringIntoViewRequester(bringIntoView)
                         .onFocusChanged { if (it.isFocused) contentScope.launch { bringIntoView.bringIntoView() } }
@@ -838,7 +800,7 @@ fun WatchSidePanel(
                       Row(
                         modifier = Modifier
                           .fillMaxWidth()
-                          .padding(horizontal = 10.dp, vertical = 9.dp),
+                          .padding(horizontal = 8.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
                       ) {
@@ -851,13 +813,13 @@ fun WatchSidePanel(
                             isWatchedEp -> CinemaSuccess
                             else -> CinemaAccent
                           },
-                          modifier = Modifier.size(17.dp)
+                          modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(5.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
                           text = "حلقة ${ep.episodeNumber}",
                           color = if (isFocused) Color.Black else Color.White,
-                          fontSize = 14.5.sp,
+                          fontSize = 14.sp,
                           fontWeight = FontWeight.ExtraBold,
                           maxLines = 1,
                           overflow = TextOverflow.Ellipsis,
@@ -866,25 +828,39 @@ fun WatchSidePanel(
                       }
                     }
                   }
+                } else {
+                  item(span = { GridItemSpan(maxLineSpan) }, key = "episodes_loading_placeholder") {
+                    Box(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                      contentAlignment = Alignment.Center
+                    ) {
+                      Text(
+                        text = if (isScrapingSeries) "جاري تحميل الحلقات..." else "اختر الموسم لعرض الحلقات",
+                        color = Color.LightGray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                      )
+                    }
+                  }
                 }
-              } else {
-                Box(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                  contentAlignment = Alignment.Center
-                ) {
-                  Text(
-                    text = if (isScrapingSeries) {
-                      "جاري تحميل الحلقات..."
-                    } else {
-                      "هذا فيلم، أو اختر من تبويب البوابات"
-                    },
-                    color = Color.LightGray,
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center
-                  )
-                }
+              }
+            } else {
+              Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+              ) {
+                Text(
+                  text = if (isScrapingSeries) {
+                    "جاري تحميل الحلقات..."
+                  } else {
+                    "هذا فيلم، أو اختر من تبويب البوابات"
+                  },
+                  color = Color.LightGray,
+                  fontSize = 14.sp,
+                  textAlign = TextAlign.Center
+                )
               }
             }
           } else {
@@ -986,7 +962,10 @@ fun WatchSidePanel(
                         .clickable(
                           interactionSource = rowInteraction,
                           indication = null
-                        ) { onSelectSearchResult(resultItem, selectedPortalTab) }
+                        ) {
+                          activeSubTab = 0
+                          onSelectSearchResult(resultItem, selectedPortalTab)
+                        }
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                         .testTag("source_result_${resultItem.id}"),
                       horizontalArrangement = Arrangement.SpaceBetween,

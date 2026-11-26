@@ -762,6 +762,48 @@ class TvWebViewClient(
               } catch(ec) {}
             }, true);
           }
+
+          // 5. Early Fetch / XHR Media Stream Sniffer (captures HLS/MP4 streams fetched inside SPA embeds like VidLink/VidSrc)
+          if (!window.__asserNetSnifferHooked) {
+            window.__asserNetSnifferHooked = true;
+            var notifyStreamUrl = function(candidateUrl) {
+              try {
+                if (!candidateUrl || typeof candidateUrl !== 'string') return;
+                var u = candidateUrl.trim();
+                if (u.indexOf('//') === 0) u = 'https:' + u;
+                if (u.indexOf('http') !== 0) return;
+                var lower = u.toLowerCase();
+                if ((lower.indexOf('.m3u8') !== -1 || lower.indexOf('.mp4') !== -1 || lower.indexOf('/m3u8') !== -1 || lower.indexOf('/mp/resource/') !== -1) &&
+                    lower.indexOf('.ts') === -1 &&
+                    lower.indexOf('/mp/bt/') === -1 &&
+                    window.__asserLastDetectedSrc !== u) {
+                  window.__asserLastDetectedSrc = u;
+                  if (window.AndroidTvBridge && typeof window.AndroidTvBridge.onVideoDetected === 'function') {
+                    window.AndroidTvBridge.onVideoDetected(u);
+                  }
+                }
+              } catch(es) {}
+            };
+            if (window.fetch) {
+              var origFetch = window.fetch;
+              window.fetch = function(input, init) {
+                try {
+                  var reqUrl = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
+                  notifyStreamUrl(reqUrl);
+                } catch(ef) {}
+                return origFetch.apply(this, arguments);
+              };
+            }
+            if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && window.XMLHttpRequest.prototype.open) {
+              var origOpen = window.XMLHttpRequest.prototype.open;
+              window.XMLHttpRequest.prototype.open = function(method, url) {
+                try {
+                  notifyStreamUrl(typeof url === 'string' ? url : String(url || ''));
+                } catch(ex) {}
+                return origOpen.apply(this, arguments);
+              };
+            }
+          }
         } catch(e) {}
       })();
     """.trimIndent()
@@ -946,7 +988,7 @@ class TvWebViewClient(
         // 5. Video Source & Real Quality Sniffer + Auto-Play Trigger to feed Native ExoPlayer Bridge
         function sniffVideoUrls() {
           try {
-            // Auto-start JWPlayer / Video.js / Plyr initial overlay once so the embed requests its .m3u8/.mp4 immediately
+            // Auto-start JWPlayer / Video.js / Plyr / VidLink / VidSrc initial overlay so the embed requests its .m3u8/.mp4 immediately
             if (!window.__asserAutoStartedEmbed) {
               if (window.jwplayer && typeof window.jwplayer === 'function') {
                 var jp = window.jwplayer();
@@ -955,10 +997,21 @@ class TvWebViewClient(
                   jp.play(true);
                 }
               }
-              var bigPlay = document.querySelector('.jw-display-icon-container .jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid');
+              var bigPlay = document.querySelector(
+                '.jw-display-icon-container .jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid, ' +
+                '.art-state, .btn-play, #play-button, .play-button, button[aria-label*="Play" i], [class*="play-btn" i]'
+              );
               if (bigPlay && !window.__asserAutoStartedEmbed) {
                 window.__asserAutoStartedEmbed = true;
                 bigPlay.click();
+              }
+              var pausedVid = document.querySelector('video');
+              if (pausedVid && pausedVid.paused && pausedVid.readyState >= 2 && !window.__asserAutoStartedEmbed) {
+                window.__asserAutoStartedEmbed = true;
+                var playPromise = pausedVid.play();
+                if (playPromise && typeof playPromise.catch === 'function') {
+                  playPromise.catch(function() {});
+                }
               }
             }
 

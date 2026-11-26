@@ -196,17 +196,6 @@ object TraktUrlParser {
   }
 }
 
-private enum class TraktHubSection(val titleAr: String) {
-  UP_NEXT("التالي للمشاهدة"),
-  CALENDAR("جدول الحلقات"),
-  WATCHLIST("قائمتي")
-}
-
-private enum class TraktSortMode(val label: String) {
-  RECENTLY_WATCHED("الأحدث مشاهدة"),
-  FEWEST_LEFT("الأقل متبقي")
-}
-
 private data class ActiveDeviceAuthState(
   val deviceCode: String,
   val userCode: String,
@@ -252,12 +241,8 @@ fun TraktPortalScreen(
   val isConnected by repository.traktConnectedFlow.collectAsState()
   val traktUsername by repository.traktUsernameFlow.collectAsState()
   val upNextItems by repository.upNextFlow.collectAsState()
-  val calendarItems by repository.traktCalendarFlow.collectAsState()
-  val watchlistItems by repository.traktWatchlistFlow.collectAsState()
   val traktKeysVersion by repository.traktKeysVersionFlow.collectAsState()
 
-  var activeSection by remember { mutableStateOf(TraktHubSection.UP_NEXT) }
-  var sortMode by remember { mutableStateOf(TraktSortMode.RECENTLY_WATCHED) }
   var selectedLaunchPortal by remember { mutableStateOf(StreamingPortal.WATCH_SERIES) }
   var markingItemId by remember { mutableStateOf<String?>(null) }
 
@@ -423,15 +408,10 @@ fun TraktPortalScreen(
     }
   }
 
-  val displayedUpNext = remember(upNextItems, sortMode) {
-    when (sortMode) {
-      TraktSortMode.RECENTLY_WATCHED -> upNextItems
-      TraktSortMode.FEWEST_LEFT -> upNextItems.sortedWith(
-        compareBy<UpNextItem> { item ->
-          if (item.totalCount > 0) (item.totalCount - item.watchedCount).coerceAtLeast(0)
-          else Int.MAX_VALUE
-        }.thenByDescending { it.updatedAtMs }
-      )
+  // Always strictly filtered to unwatched aired episodes and sorted by Trakt Most Recently Watched
+  val displayedUpNext = remember(upNextItems) {
+    upNextItems.filterNot { item ->
+      item.fromTrakt && item.totalCount > 0 && item.watchedCount >= item.totalCount
     }
   }
 
@@ -505,7 +485,7 @@ fun TraktPortalScreen(
               }
 
               Text(
-                text = "امسح رمز QR بهاتفك أو افتح رابط التفعيل وأدخل الكود الظاهر أدناه لربط حسابك تلقائياً وعرض حلقاتك القادمة وجدول العرض وقائمتك على الواجهة الرئيسية.",
+                text = "امسح رمز QR بهاتفك أو افتح رابط التفعيل وأدخل الكود الظاهر أدناه لربط حسابك وعرض قسم «التالي للمشاهدة» تلقائياً مرتباً بآخر مشاهدة.",
                 color = Color(0xFFCBD5E1),
                 fontSize = 14.sp,
                 lineHeight = 21.sp
@@ -696,7 +676,7 @@ fun TraktPortalScreen(
                 TraktFeatureHighlightRow(
                   icon = Icons.Default.Sync,
                   iconTint = Color(0xFF38BDF8),
-                  text = "متابعة حلقاتك القادمة وجدول العرض مباشرة داخل التطبيق"
+                  text = "عرض حلقاتك غير المشاهدة في «التالي للمشاهدة» مرتبة بآخر مشاهدة"
                 )
                 TraktFeatureHighlightRow(
                   icon = Icons.Default.CheckCircle,
@@ -838,182 +818,78 @@ fun TraktPortalScreen(
               }
             }
 
-            // Section Sub-Tabs: Up Next / Calendar / Watchlist
+            // Single Focused Section Header: Next to Watch ONLY (Sorted by Trakt Recently Watched)
             Row(
               modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
+              horizontalArrangement = Arrangement.SpaceBetween
             ) {
               TraktHubTabChip(
-                label = "التالي للمشاهدة (${upNextItems.size})",
+                label = "التالي للمشاهدة (${displayedUpNext.size})",
                 icon = Icons.Default.QueuePlayNext,
-                isActive = activeSection == TraktHubSection.UP_NEXT,
-                onClick = { activeSection = TraktHubSection.UP_NEXT },
+                isActive = true,
+                onClick = {},
                 testTag = "tab_trakt_up_next"
               )
-              TraktHubTabChip(
-                label = "جدول الحلقات (${calendarItems.size})",
-                icon = Icons.Default.CalendarMonth,
-                isActive = activeSection == TraktHubSection.CALENDAR,
-                onClick = { activeSection = TraktHubSection.CALENDAR },
-                testTag = "tab_trakt_calendar"
-              )
-              TraktHubTabChip(
-                label = "قائمتي (${watchlistItems.size})",
-                icon = Icons.Default.Bookmark,
-                isActive = activeSection == TraktHubSection.WATCHLIST,
-                onClick = { activeSection = TraktHubSection.WATCHLIST },
-                testTag = "tab_trakt_watchlist"
-              )
-
-              if (activeSection == TraktHubSection.UP_NEXT) {
-                TraktSortMode.values().forEach { mode ->
-                  val sel = sortMode == mode
-                  Surface(
-                    onClick = { sortMode = mode },
-                    color = if (sel) CinemaSurfaceVariant else CinemaDarkBackground,
-                    shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, if (sel) CinemaAccent else CinemaBorder),
-                    modifier = Modifier.heightIn(min = 36.dp)
-                  ) {
-                    Box(
-                      contentAlignment = Alignment.Center,
-                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                      Text(
-                        text = mode.label,
-                        color = if (sel) CinemaAccent else Color.LightGray,
-                        fontSize = 12.5.sp,
-                        fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.SemiBold,
-                        maxLines = 1,
-                        softWrap = false
-                      )
-                    }
-                  }
-                }
+              Surface(
+                color = CinemaDarkBackground,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, CinemaBorder)
+              ) {
+                Text(
+                  text = "مرتب بآخر مشاهدة",
+                  color = CinemaAccent,
+                  fontSize = 12.sp,
+                  fontWeight = FontWeight.Bold,
+                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
               }
             }
           }
         }
 
-        // Section Content
-        when (activeSection) {
-          TraktHubSection.UP_NEXT -> {
-            if (displayedUpNext.isEmpty()) {
-              TraktEmptySectionCard(
-                message = if (isSyncingNow) "جاري سحب حلقاتك من Trakt..." else "لا توجد حلقات قادمة حالياً في حسابك — اضغط «تحديث الآن»",
-                isLoading = isSyncingNow,
-                onSync = onTraktSyncNow,
-                modifier = Modifier.weight(1f)
-              )
-            } else {
-              LazyColumn(
-                modifier = Modifier
-                  .weight(1f)
-                  .fillMaxWidth()
-                  .testTag("trakt_next_to_watch_list"),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-              ) {
-                items(displayedUpNext, key = { it.id }) { item ->
-                  TraktNextToWatchRow(
-                    item = item,
-                    isMarkingWatched = markingItemId == item.id,
-                    onPlay = {
-                      onPlayTraktTarget(
-                        item.showTitle,
-                        item.seasonNumber,
-                        item.episodeNumber,
-                        false,
-                        selectedLaunchPortal
-                      )
-                    },
-                    onMarkWatched = {
-                      if (markingItemId != null) return@TraktNextToWatchRow
-                      markingItemId = item.id
-                      onMarkUpNextItemWatched(item)
-                      scope.launch {
-                        delay(800L)
-                        if (markingItemId == item.id) markingItemId = null
-                      }
-                    }
+        // Next to Watch List ONLY
+        if (displayedUpNext.isEmpty()) {
+          TraktEmptySectionCard(
+            message = if (isSyncingNow) "جاري سحب حلقاتك من Trakt..." else "لا توجد حلقات غير مشاهدة حالياً — اضغط «تحديث الآن»",
+            isLoading = isSyncingNow,
+            onSync = onTraktSyncNow,
+            modifier = Modifier.weight(1f)
+          )
+        } else {
+          LazyColumn(
+            modifier = Modifier
+              .weight(1f)
+              .fillMaxWidth()
+              .testTag("trakt_next_to_watch_list"),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+          ) {
+            items(displayedUpNext, key = { it.id }) { item ->
+              TraktNextToWatchRow(
+                item = item,
+                isMarkingWatched = markingItemId == item.id,
+                onPlay = {
+                  onPlayTraktTarget(
+                    item.showTitle,
+                    item.seasonNumber,
+                    item.episodeNumber,
+                    false,
+                    selectedLaunchPortal
                   )
+                },
+                onMarkWatched = {
+                  if (markingItemId != null) return@TraktNextToWatchRow
+                  markingItemId = item.id
+                  onMarkUpNextItemWatched(item)
+                  scope.launch {
+                    delay(800L)
+                    if (markingItemId == item.id) markingItemId = null
+                  }
                 }
-              }
-            }
-          }
-
-          TraktHubSection.CALENDAR -> {
-            if (calendarItems.isEmpty()) {
-              TraktEmptySectionCard(
-                message = if (isSyncingNow) "جاري تحميل جدول الحلقات..." else "لا توجد حلقات جديدة مجدولة خلال الـ 14 يوماً القادمة",
-                isLoading = isSyncingNow,
-                onSync = onTraktSyncNow,
-                modifier = Modifier.weight(1f)
               )
-            } else {
-              LazyColumn(
-                modifier = Modifier
-                  .weight(1f)
-                  .fillMaxWidth()
-                  .testTag("trakt_calendar_list"),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-              ) {
-                items(calendarItems, key = { it.id }) { cal ->
-                  TraktCalendarRow(
-                    item = cal,
-                    onPlay = {
-                      onPlayTraktTarget(
-                        cal.showTitle,
-                        cal.seasonNumber,
-                        cal.episodeNumber,
-                        false,
-                        selectedLaunchPortal
-                      )
-                    }
-                  )
-                }
-              }
-            }
-          }
-
-          TraktHubSection.WATCHLIST -> {
-            if (watchlistItems.isEmpty()) {
-              TraktEmptySectionCard(
-                message = if (isSyncingNow) "جاري تحميل قائمتك من Trakt..." else "قائمتك (Watchlist) فارغة حالياً على Trakt",
-                isLoading = isSyncingNow,
-                onSync = onTraktSyncNow,
-                modifier = Modifier.weight(1f)
-              )
-            } else {
-              LazyColumn(
-                modifier = Modifier
-                  .weight(1f)
-                  .fillMaxWidth()
-                  .testTag("trakt_watchlist_list"),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-              ) {
-                items(watchlistItems, key = { it.id }) { wl ->
-                  TraktWatchlistRow(
-                    item = wl,
-                    onPlay = {
-                      val isMovie = wl.mediaType == "movie"
-                      onPlayTraktTarget(
-                        wl.title,
-                        if (isMovie) null else 1,
-                        if (isMovie) null else 1,
-                        isMovie,
-                        selectedLaunchPortal
-                      )
-                    }
-                  )
-                }
-              }
             }
           }
         }

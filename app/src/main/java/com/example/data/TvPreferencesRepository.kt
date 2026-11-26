@@ -747,7 +747,7 @@ class TvPreferencesRepository(context: Context) {
       list.removeAt(idx)
     }
     list.add(0, updated)
-    saveUpNextQueue(list.take(80))
+    saveUpNextQueue(list.take(150))
   }
 
   private fun loadUpNextQueue() {
@@ -770,6 +770,11 @@ class TvPreferencesRepository(context: Context) {
           buildNormalizedContentKey(showTitle, null, null, isSeries = false)
         }
         if (seriesKey.isNotBlank() && !seenSeries.add(seriesKey)) continue
+        val watchedCount = obj.optInt("watchedCount", 0).coerceAtLeast(0)
+        val totalCount = obj.optInt("totalCount", 0).coerceAtLeast(0)
+        val fromTrakt = obj.optBoolean("fromTrakt", false)
+        // Never restore finished/caught-up Trakt shows (0 left) into Up Next
+        if (fromTrakt && totalCount > 0 && watchedCount >= totalCount) continue
         list.add(
           UpNextItem(
             id = obj.optString("id", UUID.randomUUID().toString()),
@@ -779,14 +784,14 @@ class TvPreferencesRepository(context: Context) {
             episodeNumber = e,
             episodeTitle = obj.optString("episodeTitle", ""),
             posterUrl = obj.optString("posterUrl", ""),
-            watchedCount = obj.optInt("watchedCount", 0).coerceAtLeast(0),
-            totalCount = obj.optInt("totalCount", 0).coerceAtLeast(0),
+            watchedCount = watchedCount,
+            totalCount = totalCount,
             traktSlug = obj.optString("traktSlug", ""),
             traktShowId = obj.optLong("traktShowId", 0L),
             imdbId = obj.optString("imdbId", ""),
             traktEpisodeUrl = obj.optString("traktEpisodeUrl", ""),
             traktEpisodeId = obj.optString("traktEpisodeId", ""),
-            fromTrakt = obj.optBoolean("fromTrakt", false),
+            fromTrakt = fromTrakt,
             preferredPortal = StreamingPortal.fromId(obj.optString("preferredPortal", StreamingPortal.WATCH_SERIES.id)),
             watchUrl = obj.optString("watchUrl", ""),
             updatedAtMs = obj.optLong("updatedAtMs", System.currentTimeMillis())
@@ -833,12 +838,13 @@ class TvPreferencesRepository(context: Context) {
    */
   @Synchronized
   fun mergeTraktProgressItems(traktItems: List<UpNextItem>) {
-    if (traktItems.isEmpty()) return
     val existingByKey = _upNextFlow.value.associateBy { it.seriesKey }
     val seenKeys = mutableSetOf<String>()
     val merged = mutableListOf<UpNextItem>()
 
     for (raw in traktItems) {
+      // Strictly keep only unwatched aired episodes (remaining > 0)
+      if (raw.totalCount > 0 && raw.watchedCount >= raw.totalCount) continue
       val key = raw.seriesKey.ifBlank {
         buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false)
       }
@@ -864,7 +870,7 @@ class TvPreferencesRepository(context: Context) {
     val now = System.currentTimeMillis()
     _traktLastSyncMsFlow.value = now
     prefs.edit().putLong(KEY_TRAKT_LAST_SYNC_MS, now).apply()
-    saveUpNextQueue(merged.take(80))
+    saveUpNextQueue(merged.take(150))
   }
 
   /**
@@ -921,7 +927,7 @@ class TvPreferencesRepository(context: Context) {
     if (item.totalCount <= 0 || nextWatchedCount < item.totalCount) {
       remaining.add(0, advancedItem)
     }
-    saveUpNextQueue(remaining.take(80))
+    saveUpNextQueue(remaining.take(150))
   }
 
   @Synchronized

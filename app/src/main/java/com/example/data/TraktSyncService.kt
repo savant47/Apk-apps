@@ -274,12 +274,85 @@ class TraktSyncService {
   }
 
   /**
-   * Performs a full official Trakt API v2 sync:
-   *  - Username (/users/settings)
-   *  - Up Next / Progress (/sync/watched/shows + /shows/{id}/progress/watched)
-   *  - Upcoming 14-day Calendar (/calendars/my/shows/{today}/14)
-   *  - Watchlist Shows & Movies (/sync/watchlist/shows + /movies)
-   *  - Poster enrichment via lightweight public TVMaze lookup (zero API key needed)
+   * Parses Trakt ISO-8601 UTC timestamps (e.g. "2026-11-26T18:20:00.000Z") into epoch milliseconds.
+   */
+  private fun parseIsoUtcMs(iso: String): Long {
+    val clean = iso.trim()
+    if (clean.isBlank()) return 0L
+    val patterns = listOf(
+      "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+      "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    )
+    for (p in patterns) {
+      try {
+        val sdf = SimpleDateFormat(p, Locale.US).apply {
+          timeZone = java.util.TimeZone.getTimeZone("UTC")
+        }
+        val parsed = sdf.parse(clean)
+        if (parsed != null) return parsed.time
+      } catch (_: Exception) {}
+    }
+    return 0L
+  }
+
+  /**
+   * Fetches Trakt IDs of shows hidden from watched progress or dropped by the user,
+   * so they never appear in "Next to Watch" (matching Showly).
+   */
+  private fun fetchHiddenShowIds(clientId: String, accessToken: String): Set<Long> {
+    val hidden = mutableSetOf<Long>()
+    val endpoints = listOf(
+      "$API_BASE/users/hidden/progress_watched?type=show&limit=100",
+      "$API_BASE/users/hidden/dropped?type=show&limit=100"
+    )
+    for (url in endpoints) {
+      try {
+        val req = buildTraktRequest(url, clientId, accessToken).get().build()
+        client.newCall(req).execute().use { resp ->
+          if (!resp.isSuccessful) return@use
+          val arr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+          for (i in 0 until arr.length()) {
+            val id = arr.optJSONObject(i)?.optJSONObject("show")?.optJSONObject("ids")?.optLong("trakt", 0L) ?: 0L
+            if (id > 0L) hidden.add(id)
+          }
+        }
+      } catch (_: Exception) {}
+    }
+    return hidden
+  }
+
+  private data class CandidateShowStub(
+    val traktId: Long,
+    val slug: String,
+    val imdbId: String,
+    val title: String,
+    val sortTimestampMs: Long,
+    val fromWatchlistOnly: Boolean
+  )
+
+  private data class RawUpNextProgress(
+    val traktShowId: Long,
+    val slug: String,
+    val imdbId: String,
+    val showTitle: String,
+    val seasonNumber: Int,
+    val episodeNumber: Int,
+    val episodeTitle: String,
+    val epTraktId: String,
+    val watchedCount: Int,
+    val airedCount: Int,
+    val sortTimestampMs: Long
+  )
+
+  /**
+   * Performs a complete official Trakt API v2 "Next to Watch" (Progress) sync matching Showly:
+   *  - Fetches ALL watched shows (/sync/watched/shows) + Watchlist shows (/sync/watchlist/shows)
+   *  - Excludes hidden/dropped shows (/users/hidden/progress_watched + /users/hidden/dropped)
+   *  - Keeps ONLY shows that have at least 1 already-aired unwatched episode (aired > 0 && completed < aired)
+   *    — NEVER includes finished (0 left) or unaired/upcoming shows!
+   *  - Sorts strictly by most recently watched on Trakt (watched shows by last_watched_at DESC,
+   *    followed by unwatched aired watchlist shows by listed_at DESC)
+   *  - Resolves show posters only for the surviving Up Next shows for fast sync performance.
    */
   suspend fun syncFullAccountData(
     clientId: String,
@@ -290,7 +363,7 @@ class TraktSyncService {
     }
 
     try {
-      // 1. Validate token & fetch watched shows
+      // 1. Validate token & fetch ALL watched shows
       val watchedReq = buildTraktRequest(
         "$API_BASE/sync/watched/shows?extended=noseasons",
         clientId,
@@ -309,75 +382,135 @@ class TraktSyncService {
 
       coroutineScope {
         val usernameDeferred = async { fetchUserProfile(clientId, accessToken) }
-        val calendarDeferred = async { fetchCalendar(clientId, accessToken) }
-        val watchlistDeferred = async { fetchWatchlist(clientId, accessToken) }
+        val hiddenIdsDeferred = async { fetchHiddenShowIds(clientId, accessToken) }
+        val watchlistShowsDeferred = async {
+          try {
+            val wlReq = buildTraktRequest("$API_BASE/sync/watchlist/shows", clientId, accessToken).get().build()
+            client.newCall(wlReq).execute().use { resp ->
+              if (resp.isSuccessful) JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+              else JSONArray()
+            }
+          } catch (_: Exception) {
+            JSONArray()
+          }
+        }
 
-        // Sort watched shows by most recently watched and fetch progress for top 28 active shows
-        data class WatchedShowStub(
-          val traktId: Long,
-          val slug: String,
-          val imdbId: String,
-          val title: String,
-          val lastWatchedAt: String,
-          val orderIndex: Int
-        )
+        val hiddenIds = hiddenIdsDeferred.await()
+        val watchlistArray = watchlistShowsDeferred.await()
 
-        val stubs = mutableListOf<WatchedShowStub>()
+        val seenIds = mutableSetOf<Long>()
+        val watchedStubs = mutableListOf<CandidateShowStub>()
         for (i in 0 until watchedArray.length()) {
           val entry = watchedArray.optJSONObject(i) ?: continue
           val showObj = entry.optJSONObject("show") ?: continue
           val ids = showObj.optJSONObject("ids") ?: continue
           val traktId = ids.optLong("trakt", 0L)
           val title = showObj.optString("title", "").trim()
-          if (traktId <= 0L || title.isBlank()) continue
-          stubs.add(
-            WatchedShowStub(
+          if (traktId <= 0L || title.isBlank() || traktId in hiddenIds || !seenIds.add(traktId)) continue
+          val lastWatchedMs = parseIsoUtcMs(entry.optString("last_watched_at", ""))
+            .takeIf { it > 0L }
+            ?: parseIsoUtcMs(entry.optString("last_updated_at", ""))
+          watchedStubs.add(
+            CandidateShowStub(
               traktId = traktId,
               slug = ids.optString("slug", "").trim(),
               imdbId = ids.optString("imdb", "").trim(),
               title = title,
-              lastWatchedAt = entry.optString("last_watched_at", ""),
-              orderIndex = i
+              sortTimestampMs = lastWatchedMs,
+              fromWatchlistOnly = false
             )
           )
         }
 
-        val sortedStubs = stubs
-          .sortedByDescending { it.lastWatchedAt }
-          .take(28)
+        val watchlistStubs = mutableListOf<CandidateShowStub>()
+        for (i in 0 until watchlistArray.length()) {
+          val entry = watchlistArray.optJSONObject(i) ?: continue
+          val showObj = entry.optJSONObject("show") ?: continue
+          val ids = showObj.optJSONObject("ids") ?: continue
+          val traktId = ids.optLong("trakt", 0L)
+          val title = showObj.optString("title", "").trim()
+          if (traktId <= 0L || title.isBlank() || traktId in hiddenIds || !seenIds.add(traktId)) continue
+          val listedAtMs = parseIsoUtcMs(entry.optString("listed_at", ""))
+          watchlistStubs.add(
+            CandidateShowStub(
+              traktId = traktId,
+              slug = ids.optString("slug", "").trim(),
+              imdbId = ids.optString("imdb", "").trim(),
+              title = title,
+              sortTimestampMs = listedAtMs,
+              fromWatchlistOnly = true
+            )
+          )
+        }
 
-        val semaphore = Semaphore(5)
-        val upNextDeferreds = sortedStubs.mapIndexed { idx, stub ->
+        val allCandidates = buildList {
+          addAll(watchedStubs.sortedByDescending { it.sortTimestampMs }.take(150))
+          addAll(watchlistStubs.sortedByDescending { it.sortTimestampMs }.take(80))
+        }
+
+        val progressSemaphore = Semaphore(8)
+        val rawResults = allCandidates.map { stub ->
           async {
-            semaphore.withPermit {
-              fetchShowProgress(
+            progressSemaphore.withPermit {
+              fetchShowProgressRaw(
                 clientId = clientId,
                 accessToken = accessToken,
-                traktShowId = stub.traktId,
-                slug = stub.slug,
-                imdbId = stub.imdbId,
-                showTitle = stub.title,
-                orderIndex = idx
+                stub = stub
               )
             }
           }
-        }
+        }.awaitAll().filterNotNull()
 
-        val upNextItems = upNextDeferreds.awaitAll().filterNotNull()
+        // Sort strictly like Showly "Recently Watched":
+        // 1. Shows with watched episodes (completed > 0) sorted by Trakt last_watched_at DESC
+        // 2. Unwatched watchlist shows with aired episodes (completed == 0) sorted by listed_at DESC
+        val orderedRaw = rawResults.sortedWith(
+          compareByDescending<RawUpNextProgress> { it.watchedCount > 0 }
+            .thenByDescending { it.sortTimestampMs }
+        )
+
+        // Resolve posters concurrently ONLY for surviving unwatched shows
+        val posterSemaphore = Semaphore(8)
+        val baseNowMs = System.currentTimeMillis()
+        val upNextItems = orderedRaw.mapIndexed { idx, raw ->
+          async {
+            val poster = posterSemaphore.withPermit {
+              resolveShowPoster(raw.imdbId, raw.showTitle)
+            }
+            UpNextItem(
+              id = "trakt_${raw.traktShowId}",
+              seriesKey = TvPreferencesRepository.buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false),
+              showTitle = raw.showTitle,
+              seasonNumber = raw.seasonNumber,
+              episodeNumber = raw.episodeNumber,
+              episodeTitle = raw.episodeTitle,
+              posterUrl = poster,
+              watchedCount = raw.watchedCount,
+              totalCount = raw.airedCount,
+              traktSlug = raw.slug,
+              traktShowId = raw.traktShowId,
+              imdbId = raw.imdbId,
+              traktEpisodeUrl = if (raw.slug.isNotBlank()) "https://trakt.tv/shows/${raw.slug}/seasons/${raw.seasonNumber}/episodes/${raw.episodeNumber}" else "",
+              traktEpisodeId = raw.epTraktId,
+              fromTrakt = true,
+              preferredPortal = StreamingPortal.WATCH_SERIES,
+              updatedAtMs = baseNowMs - (idx * 1000L)
+            )
+          }
+        }.awaitAll()
+
         val username = usernameDeferred.await()
-        val calendarItems = calendarDeferred.await()
-        val watchlistItems = watchlistDeferred.await()
 
         AppDiagnosticsLogger.log(
           "TraktAPI",
-          "Synced Trakt @$username: upNext=${upNextItems.size}, calendar=${calendarItems.size}, watchlist=${watchlistItems.size}"
+          "Synced Trakt @$username: checked=${allCandidates.size} (watched=${watchedStubs.size}, wl=${watchlistStubs.size}, hidden=${hiddenIds.size}) -> activeUpNext=${upNextItems.size}"
         )
 
         TraktFullSyncResult.Success(
           username = username,
           upNextItems = upNextItems,
-          calendarItems = calendarItems,
-          watchlistItems = watchlistItems
+          calendarItems = emptyList(),
+          watchlistItems = emptyList()
         )
       }
     } catch (e: Exception) {
@@ -386,177 +519,98 @@ class TraktSyncService {
     }
   }
 
-  private suspend fun fetchShowProgress(
+  /**
+   * Fetches a single show's Trakt watched progress and STRICTLY filters to shows with
+   * at least one already-aired unwatched episode (`aired > 0 && completed < aired`).
+   * Finished shows (`0 left`) and upcoming unaired shows return null immediately.
+   */
+  private suspend fun fetchShowProgressRaw(
     clientId: String,
     accessToken: String,
-    traktShowId: Long,
-    slug: String,
-    imdbId: String,
-    showTitle: String,
-    orderIndex: Int
-  ): UpNextItem? {
-    return try {
-      val req = buildTraktRequest(
-        "$API_BASE/shows/$traktShowId/progress/watched?hidden=false&specials=false&count_specials=false",
-        clientId,
-        accessToken
-      ).get().build()
+    stub: CandidateShowStub
+  ): RawUpNextProgress? {
+    val url = "$API_BASE/shows/${stub.traktId}/progress/watched?hidden=false&specials=false&count_specials=false"
+    for (attempt in 0..1) {
+      try {
+        val req = buildTraktRequest(url, clientId, accessToken).get().build()
+        val statusAndBody = client.newCall(req).execute().use { resp ->
+          resp.code to resp.body?.string().orEmpty()
+        }
+        val code = statusAndBody.first
+        val body = statusAndBody.second
+        if (code == 429 && attempt == 0) {
+          kotlinx.coroutines.delay(650L)
+          continue
+        }
+        if (code !in 200..299 || body.isBlank()) return null
 
-      client.newCall(req).execute().use { resp ->
-        if (!resp.isSuccessful) return null
-        val obj = JSONObject(resp.body?.string().orEmpty())
-        val nextEp = obj.optJSONObject("next_episode") ?: return null
-        val season = nextEp.optInt("season", 0)
-        val epNum = nextEp.optInt("number", 0)
-        if (season <= 0 || epNum <= 0) return null
-
+        val obj = JSONObject(body)
         val aired = obj.optInt("aired", 0).coerceAtLeast(0)
         val completed = obj.optInt("completed", 0).coerceAtLeast(0)
-        val epTitle = nextEp.optString("title", "").trim()
-        val epTraktId = nextEp.optJSONObject("ids")?.optLong("trakt", 0L)
-          ?.takeIf { it > 0L }?.toString().orEmpty()
-        val poster = resolveShowPoster(imdbId, showTitle)
 
-        UpNextItem(
-          id = "trakt_$traktShowId",
-          seriesKey = TvPreferencesRepository.buildNormalizedContentKey(showTitle, null, null, isSeries = false),
-          showTitle = showTitle,
+        // STRICT FILTER: Must have aired episodes AND at least 1 unwatched aired episode!
+        // Excludes finished shows (35/35, 14/14, 30/30 -> 0 left) and unaired upcoming premieres (0/0).
+        if (aired <= 0 || completed >= aired) return null
+
+        val nextEp = obj.optJSONObject("next_episode")
+        var season = nextEp?.optInt("season", 0) ?: 0
+        var epNum = nextEp?.optInt("number", 0) ?: 0
+        var epTitle = nextEp?.optString("title", "").orEmpty().trim()
+        var epTraktId = nextEp?.optJSONObject("ids")?.optLong("trakt", 0L)
+          ?.takeIf { it > 0L }?.toString().orEmpty()
+
+        // Fallback: if next_episode is missing despite completed < aired, find first unwatched aired episode in seasons
+        if (season <= 0 || epNum <= 0) {
+          val seasonsArr = obj.optJSONArray("seasons")
+          if (seasonsArr != null) {
+            outer@ for (si in 0 until seasonsArr.length()) {
+              val sObj = seasonsArr.optJSONObject(si) ?: continue
+              val sNum = sObj.optInt("number", 0)
+              val sAired = sObj.optInt("aired", 0)
+              val sCompleted = sObj.optInt("completed", 0)
+              if (sNum <= 0 || sAired <= 0 || sCompleted >= sAired) continue
+              val epsArr = sObj.optJSONArray("episodes") ?: continue
+              for (ei in 0 until epsArr.length()) {
+                val eObj = epsArr.optJSONObject(ei) ?: continue
+                if (!eObj.optBoolean("completed", false)) {
+                  val eNum = eObj.optInt("number", 0)
+                  if (eNum > 0) {
+                    season = sNum
+                    epNum = eNum
+                    break@outer
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (season <= 0 || epNum <= 0) return null
+
+        val progressLastWatchedMs = parseIsoUtcMs(obj.optString("last_watched_at", ""))
+        val finalSortMs = if (completed > 0) {
+          maxOf(stub.sortTimestampMs, progressLastWatchedMs)
+        } else {
+          stub.sortTimestampMs
+        }
+
+        return RawUpNextProgress(
+          traktShowId = stub.traktId,
+          slug = stub.slug,
+          imdbId = stub.imdbId,
+          showTitle = stub.title,
           seasonNumber = season,
           episodeNumber = epNum,
           episodeTitle = epTitle,
-          posterUrl = poster,
+          epTraktId = epTraktId,
           watchedCount = completed,
-          totalCount = aired,
-          traktSlug = slug,
-          traktShowId = traktShowId,
-          imdbId = imdbId,
-          traktEpisodeUrl = if (slug.isNotBlank()) "https://trakt.tv/shows/$slug/seasons/$season/episodes/$epNum" else "",
-          traktEpisodeId = epTraktId,
-          fromTrakt = true,
-          preferredPortal = StreamingPortal.WATCH_SERIES,
-          updatedAtMs = System.currentTimeMillis() - (orderIndex * 20L)
+          airedCount = aired,
+          sortTimestampMs = finalSortMs
         )
+      } catch (_: Exception) {
+        return null
       }
-    } catch (_: Exception) {
-      null
     }
-  }
-
-  private suspend fun fetchCalendar(
-    clientId: String,
-    accessToken: String
-  ): List<TraktCalendarItem> {
-    return try {
-      val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-      val req = buildTraktRequest(
-        "$API_BASE/calendars/my/shows/$today/14",
-        clientId,
-        accessToken
-      ).get().build()
-
-      val arr = client.newCall(req).execute().use { resp ->
-        if (!resp.isSuccessful) return emptyList()
-        JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
-      }
-
-      val results = mutableListOf<TraktCalendarItem>()
-      val count = minOf(arr.length(), 20)
-      for (i in 0 until count) {
-        val obj = arr.optJSONObject(i) ?: continue
-        val show = obj.optJSONObject("show") ?: continue
-        val ep = obj.optJSONObject("episode") ?: continue
-        val showIds = show.optJSONObject("ids")
-        val epIds = ep.optJSONObject("ids")
-        val showTitle = show.optString("title", "").trim()
-        val season = ep.optInt("season", 0)
-        val epNum = ep.optInt("number", 0)
-        if (showTitle.isBlank() || season <= 0 || epNum <= 0) continue
-
-        val traktShowId = showIds?.optLong("trakt", 0L) ?: 0L
-        val imdbId = showIds?.optString("imdb", "").orEmpty().trim()
-        val poster = resolveShowPoster(imdbId, showTitle)
-        results.add(
-          TraktCalendarItem(
-            id = "cal_${traktShowId}_s${season}e${epNum}_$i",
-            showTitle = showTitle,
-            seasonNumber = season,
-            episodeNumber = epNum,
-            episodeTitle = ep.optString("title", "").trim(),
-            firstAiredIso = obj.optString("first_aired", "").trim(),
-            posterUrl = poster,
-            traktShowId = traktShowId,
-            traktEpisodeId = epIds?.optLong("trakt", 0L)?.takeIf { it > 0L }?.toString().orEmpty(),
-            imdbId = imdbId
-          )
-        )
-      }
-      results
-    } catch (_: Exception) {
-      emptyList()
-    }
-  }
-
-  private suspend fun fetchWatchlist(
-    clientId: String,
-    accessToken: String
-  ): List<TraktWatchlistItem> {
-    val results = mutableListOf<TraktWatchlistItem>()
-    try {
-      // Shows watchlist
-      val showsReq = buildTraktRequest("$API_BASE/sync/watchlist/shows", clientId, accessToken).get().build()
-      client.newCall(showsReq).execute().use { resp ->
-        if (resp.isSuccessful) {
-          val arr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
-          for (i in 0 until minOf(arr.length(), 20)) {
-            val show = arr.optJSONObject(i)?.optJSONObject("show") ?: continue
-            val ids = show.optJSONObject("ids")
-            val title = show.optString("title", "").trim()
-            val traktId = ids?.optLong("trakt", 0L) ?: 0L
-            val imdbId = ids?.optString("imdb", "").orEmpty().trim()
-            if (title.isBlank()) continue
-            results.add(
-              TraktWatchlistItem(
-                id = "wl_show_${traktId}_$i",
-                title = title,
-                mediaType = "show",
-                year = show.optInt("year", 0).takeIf { it > 1900 }?.toString().orEmpty(),
-                posterUrl = resolveShowPoster(imdbId, title),
-                traktId = traktId,
-                imdbId = imdbId
-              )
-            )
-          }
-        }
-      }
-
-      // Movies watchlist
-      val moviesReq = buildTraktRequest("$API_BASE/sync/watchlist/movies", clientId, accessToken).get().build()
-      client.newCall(moviesReq).execute().use { resp ->
-        if (resp.isSuccessful) {
-          val arr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
-          for (i in 0 until minOf(arr.length(), 15)) {
-            val movie = arr.optJSONObject(i)?.optJSONObject("movie") ?: continue
-            val ids = movie.optJSONObject("ids")
-            val title = movie.optString("title", "").trim()
-            val traktId = ids?.optLong("trakt", 0L) ?: 0L
-            val imdbId = ids?.optString("imdb", "").orEmpty().trim()
-            if (title.isBlank()) continue
-            results.add(
-              TraktWatchlistItem(
-                id = "wl_movie_${traktId}_$i",
-                title = title,
-                mediaType = "movie",
-                year = movie.optInt("year", 0).takeIf { it > 1900 }?.toString().orEmpty(),
-                posterUrl = "",
-                traktId = traktId,
-                imdbId = imdbId
-              )
-            )
-          }
-        }
-      }
-    } catch (_: Exception) {}
-    return results
+    return null
   }
 
   /**
@@ -620,6 +674,7 @@ class TraktSyncService {
   /**
    * Immediately fetches the updated next_episode for a single show right after marking an episode watched
    * so season rollovers (e.g., S01E10 -> S02E01) and real episode titles appear immediately.
+   * Returns null if all aired episodes of this show are now watched (so UI removes it from Up Next).
    */
   suspend fun fetchSingleShowNextUp(
     clientId: String,
@@ -627,17 +682,38 @@ class TraktSyncService {
     item: UpNextItem
   ): UpNextItem? = withContext(Dispatchers.IO) {
     if (clientId.isBlank() || accessToken.isBlank() || item.traktShowId <= 0L) return@withContext null
-    fetchShowProgress(
+    val raw = fetchShowProgressRaw(
       clientId = clientId,
       accessToken = accessToken,
-      traktShowId = item.traktShowId,
-      slug = item.traktSlug,
-      imdbId = item.imdbId,
-      showTitle = item.showTitle,
-      orderIndex = 0
-    )?.copy(
-      posterUrl = item.posterUrl.ifBlank { resolveShowPoster(item.imdbId, item.showTitle) },
-      preferredPortal = item.preferredPortal
+      stub = CandidateShowStub(
+        traktId = item.traktShowId,
+        slug = item.traktSlug,
+        imdbId = item.imdbId,
+        title = item.showTitle,
+        sortTimestampMs = System.currentTimeMillis(),
+        fromWatchlistOnly = false
+      )
+    ) ?: return@withContext null
+
+    val poster = item.posterUrl.ifBlank { resolveShowPoster(raw.imdbId, raw.showTitle) }
+    UpNextItem(
+      id = "trakt_${raw.traktShowId}",
+      seriesKey = TvPreferencesRepository.buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false),
+      showTitle = raw.showTitle,
+      seasonNumber = raw.seasonNumber,
+      episodeNumber = raw.episodeNumber,
+      episodeTitle = raw.episodeTitle,
+      posterUrl = poster,
+      watchedCount = raw.watchedCount,
+      totalCount = raw.airedCount,
+      traktSlug = raw.slug,
+      traktShowId = raw.traktShowId,
+      imdbId = raw.imdbId,
+      traktEpisodeUrl = if (raw.slug.isNotBlank()) "https://trakt.tv/shows/${raw.slug}/seasons/${raw.seasonNumber}/episodes/${raw.episodeNumber}" else "",
+      traktEpisodeId = raw.epTraktId,
+      fromTrakt = true,
+      preferredPortal = item.preferredPortal,
+      updatedAtMs = System.currentTimeMillis()
     )
   }
 
