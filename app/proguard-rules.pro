@@ -7,13 +7,16 @@
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
--keep class com.example.ui.TvPlayerBridge { *; }
--keepclassmembers class com.example.ui.TvPlayerBridge {
+-keep class com.example.tv.TvPlayerBridge { *; }
+-keepclassmembers class com.example.tv.TvPlayerBridge {
     public *;
 }
 
-# Keep Kotlin data models & enums used in JSON / preferences / Compose state
+# Keep Kotlin data models, Room DB entities/DAOs, & enums used in JSON / preferences / Compose state
 -keep class com.example.model.** { *; }
+-keep class com.example.data.db.** { *; }
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
 -keep class com.example.data.PlaybackProgressRecord { *; }
 -keep class com.example.data.AppDisplayMode { *; }
 

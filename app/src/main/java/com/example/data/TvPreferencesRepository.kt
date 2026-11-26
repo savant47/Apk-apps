@@ -8,6 +8,8 @@ import com.example.model.HistoryEntry
 import com.example.model.StreamingPortal
 import com.example.model.SubtitleEdgeStyle
 import com.example.model.SubtitleStyleConfig
+import com.example.model.TraktCalendarItem
+import com.example.model.TraktWatchlistItem
 import com.example.model.UpNextItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -73,8 +75,17 @@ class TvPreferencesRepository(context: Context) {
   private val _traktUsernameFlow = MutableStateFlow("")
   val traktUsernameFlow: StateFlow<String> = _traktUsernameFlow.asStateFlow()
 
+  private val _traktConnectedFlow = MutableStateFlow(false)
+  val traktConnectedFlow: StateFlow<Boolean> = _traktConnectedFlow.asStateFlow()
+
   private val _traktLastSyncMsFlow = MutableStateFlow(0L)
   val traktLastSyncMsFlow: StateFlow<Long> = _traktLastSyncMsFlow.asStateFlow()
+
+  private val _traktCalendarFlow = MutableStateFlow<List<TraktCalendarItem>>(emptyList())
+  val traktCalendarFlow: StateFlow<List<TraktCalendarItem>> = _traktCalendarFlow.asStateFlow()
+
+  private val _traktWatchlistFlow = MutableStateFlow<List<TraktWatchlistItem>>(emptyList())
+  val traktWatchlistFlow: StateFlow<List<TraktWatchlistItem>> = _traktWatchlistFlow.asStateFlow()
 
   init {
     loadBookmarks()
@@ -88,9 +99,12 @@ class TvPreferencesRepository(context: Context) {
     _blockedAdsCountFlow.value = prefs.getInt(KEY_BLOCKED_ADS_COUNT, 0).coerceAtLeast(0)
     _audioBoostPercentFlow.value = prefs.getInt(KEY_AUDIO_BOOST_PERCENT, 100).coerceIn(0, 300)
     _traktUsernameFlow.value = prefs.getString(KEY_TRAKT_USERNAME, "") ?: ""
+    _traktConnectedFlow.value = !(prefs.getString(KEY_TRAKT_ACCESS_TOKEN, "") ?: "").isBlank()
     _traktLastSyncMsFlow.value = prefs.getLong(KEY_TRAKT_LAST_SYNC_MS, 0L)
     loadWatchedEpisodes()
     loadUpNextQueue()
+    loadTraktCalendar()
+    loadTraktWatchlist()
     loadPortals()
     AppDiagnosticsLogger.log(
       "Prefs",
@@ -477,48 +491,185 @@ class TvPreferencesRepository(context: Context) {
   }
 
   // =========================================================================
-  // TRAKT ACCOUNT SESSION & REAL PROGRESS SYNC (Zero-Startup-WebView Cookie Store)
+  // OFFICIAL TRAKT API v2 OAUTH CREDENTIALS & LOCAL CACHE (Zero WebView)
   // =========================================================================
 
   @Synchronized
-  fun saveTraktSession(
-    cookie: String = "",
-    username: String = "",
-    csrfToken: String = ""
+  fun saveTraktAppKeys(clientId: String, clientSecret: String) {
+    prefs.edit()
+      .putString(KEY_TRAKT_CLIENT_ID, clientId.trim())
+      .putString(KEY_TRAKT_CLIENT_SECRET, clientSecret.trim())
+      .apply()
+  }
+
+  @Synchronized
+  fun saveTraktOAuthCredentials(
+    clientId: String = "",
+    clientSecret: String = "",
+    accessToken: String = "",
+    refreshToken: String = "",
+    expiresAtMs: Long = 0L,
+    username: String = ""
   ) {
     val editor = prefs.edit()
-    if (cookie.isNotBlank()) {
-      editor.putString(KEY_TRAKT_COOKIE, cookie.trim())
+    if (clientId.isNotBlank()) editor.putString(KEY_TRAKT_CLIENT_ID, clientId.trim())
+    if (clientSecret.isNotBlank()) editor.putString(KEY_TRAKT_CLIENT_SECRET, clientSecret.trim())
+    if (accessToken.isNotBlank()) {
+      editor.putString(KEY_TRAKT_ACCESS_TOKEN, accessToken.trim())
+      _traktConnectedFlow.value = true
     }
+    if (refreshToken.isNotBlank()) editor.putString(KEY_TRAKT_REFRESH_TOKEN, refreshToken.trim())
+    if (expiresAtMs > 0L) editor.putLong(KEY_TRAKT_TOKEN_EXPIRES_AT_MS, expiresAtMs)
     if (username.isNotBlank()) {
       val cleanUser = username.trim()
       _traktUsernameFlow.value = cleanUser
       editor.putString(KEY_TRAKT_USERNAME, cleanUser)
     }
-    if (csrfToken.isNotBlank()) {
-      editor.putString(KEY_TRAKT_CSRF_TOKEN, csrfToken.trim())
-    }
     editor.apply()
   }
 
-  fun getTraktCookie(): String = prefs.getString(KEY_TRAKT_COOKIE, "") ?: ""
-
+  fun getTraktClientId(): String = prefs.getString(KEY_TRAKT_CLIENT_ID, "") ?: ""
+  fun getTraktClientSecret(): String = prefs.getString(KEY_TRAKT_CLIENT_SECRET, "") ?: ""
+  fun getTraktAccessToken(): String = prefs.getString(KEY_TRAKT_ACCESS_TOKEN, "") ?: ""
+  fun getTraktRefreshToken(): String = prefs.getString(KEY_TRAKT_REFRESH_TOKEN, "") ?: ""
+  fun getTraktTokenExpiresAtMs(): Long = prefs.getLong(KEY_TRAKT_TOKEN_EXPIRES_AT_MS, 0L)
+  fun isTraktConnected(): Boolean = _traktConnectedFlow.value && getTraktAccessToken().isNotBlank() && getTraktClientId().isNotBlank()
   fun getTraktUsername(): String = _traktUsernameFlow.value.ifBlank {
     prefs.getString(KEY_TRAKT_USERNAME, "") ?: ""
   }
 
-  fun getTraktCsrfToken(): String = prefs.getString(KEY_TRAKT_CSRF_TOKEN, "") ?: ""
+  @Synchronized
+  fun disconnectTrakt(clearAppKeys: Boolean = false) {
+    _traktUsernameFlow.value = ""
+    _traktConnectedFlow.value = false
+    _traktLastSyncMsFlow.value = 0L
+    _traktCalendarFlow.value = emptyList()
+    _traktWatchlistFlow.value = emptyList()
+    val editor = prefs.edit()
+      .remove(KEY_TRAKT_ACCESS_TOKEN)
+      .remove(KEY_TRAKT_REFRESH_TOKEN)
+      .remove(KEY_TRAKT_TOKEN_EXPIRES_AT_MS)
+      .remove(KEY_TRAKT_USERNAME)
+      .remove(KEY_TRAKT_LAST_SYNC_MS)
+      .remove(KEY_TRAKT_CALENDAR_JSON)
+      .remove(KEY_TRAKT_WATCHLIST_JSON)
+    if (clearAppKeys) {
+      editor.remove(KEY_TRAKT_CLIENT_ID).remove(KEY_TRAKT_CLIENT_SECRET)
+    }
+    editor.apply()
+    // Keep non-Trakt local items only
+    saveUpNextQueue(_upNextFlow.value.filterNot { it.fromTrakt })
+  }
 
   @Synchronized
-  fun clearTraktSession() {
-    _traktUsernameFlow.value = ""
-    _traktLastSyncMsFlow.value = 0L
-    prefs.edit()
-      .remove(KEY_TRAKT_COOKIE)
-      .remove(KEY_TRAKT_USERNAME)
-      .remove(KEY_TRAKT_CSRF_TOKEN)
-      .remove(KEY_TRAKT_LAST_SYNC_MS)
-      .apply()
+  fun saveTraktCalendar(items: List<TraktCalendarItem>) {
+    _traktCalendarFlow.value = items
+    val arr = JSONArray()
+    for (item in items) {
+      arr.put(
+        JSONObject().apply {
+          put("id", item.id)
+          put("showTitle", item.showTitle)
+          put("seasonNumber", item.seasonNumber)
+          put("episodeNumber", item.episodeNumber)
+          put("episodeTitle", item.episodeTitle)
+          put("firstAiredIso", item.firstAiredIso)
+          put("posterUrl", item.posterUrl)
+          put("traktShowId", item.traktShowId)
+          put("traktEpisodeId", item.traktEpisodeId)
+          put("imdbId", item.imdbId)
+        }
+      )
+    }
+    prefs.edit().putString(KEY_TRAKT_CALENDAR_JSON, arr.toString()).apply()
+  }
+
+  private fun loadTraktCalendar() {
+    val raw = prefs.getString(KEY_TRAKT_CALENDAR_JSON, null) ?: return
+    val list = mutableListOf<TraktCalendarItem>()
+    try {
+      val arr = JSONArray(raw)
+      for (i in 0 until arr.length()) {
+        val obj = arr.getJSONObject(i)
+        val title = obj.optString("showTitle", "").trim()
+        if (title.isBlank()) continue
+        list.add(
+          TraktCalendarItem(
+            id = obj.optString("id", "cal_$i"),
+            showTitle = title,
+            seasonNumber = obj.optInt("seasonNumber", 1).coerceAtLeast(1),
+            episodeNumber = obj.optInt("episodeNumber", 1).coerceAtLeast(1),
+            episodeTitle = obj.optString("episodeTitle", ""),
+            firstAiredIso = obj.optString("firstAiredIso", ""),
+            posterUrl = obj.optString("posterUrl", ""),
+            traktShowId = obj.optLong("traktShowId", 0L),
+            traktEpisodeId = obj.optString("traktEpisodeId", ""),
+            imdbId = obj.optString("imdbId", "")
+          )
+        )
+      }
+    } catch (_: Exception) {}
+    _traktCalendarFlow.value = list
+  }
+
+  @Synchronized
+  fun saveTraktWatchlist(items: List<TraktWatchlistItem>) {
+    _traktWatchlistFlow.value = items
+    val arr = JSONArray()
+    for (item in items) {
+      arr.put(
+        JSONObject().apply {
+          put("id", item.id)
+          put("title", item.title)
+          put("mediaType", item.mediaType)
+          put("year", item.year)
+          put("posterUrl", item.posterUrl)
+          put("traktId", item.traktId)
+          put("imdbId", item.imdbId)
+        }
+      )
+    }
+    prefs.edit().putString(KEY_TRAKT_WATCHLIST_JSON, arr.toString()).apply()
+  }
+
+  private fun loadTraktWatchlist() {
+    val raw = prefs.getString(KEY_TRAKT_WATCHLIST_JSON, null) ?: return
+    val list = mutableListOf<TraktWatchlistItem>()
+    try {
+      val arr = JSONArray(raw)
+      for (i in 0 until arr.length()) {
+        val obj = arr.getJSONObject(i)
+        val title = obj.optString("title", "").trim()
+        if (title.isBlank()) continue
+        list.add(
+          TraktWatchlistItem(
+            id = obj.optString("id", "wl_$i"),
+            title = title,
+            mediaType = obj.optString("mediaType", "show"),
+            year = obj.optString("year", ""),
+            posterUrl = obj.optString("posterUrl", ""),
+            traktId = obj.optLong("traktId", 0L),
+            imdbId = obj.optString("imdbId", "")
+          )
+        )
+      }
+    } catch (_: Exception) {}
+    _traktWatchlistFlow.value = list
+  }
+
+  @Synchronized
+  fun replaceSingleUpNextItem(updated: UpNextItem) {
+    val list = _upNextFlow.value.toMutableList()
+    val idx = list.indexOfFirst {
+      (updated.traktShowId > 0L && it.traktShowId == updated.traktShowId) ||
+        (updated.seriesKey.isNotBlank() && it.seriesKey == updated.seriesKey) ||
+        it.id == updated.id
+    }
+    if (idx >= 0) {
+      list.removeAt(idx)
+    }
+    list.add(0, updated)
+    saveUpNextQueue(list.take(80))
   }
 
   private fun loadUpNextQueue() {
@@ -553,6 +704,8 @@ class TvPreferencesRepository(context: Context) {
             watchedCount = obj.optInt("watchedCount", 0).coerceAtLeast(0),
             totalCount = obj.optInt("totalCount", 0).coerceAtLeast(0),
             traktSlug = obj.optString("traktSlug", ""),
+            traktShowId = obj.optLong("traktShowId", 0L),
+            imdbId = obj.optString("imdbId", ""),
             traktEpisodeUrl = obj.optString("traktEpisodeUrl", ""),
             traktEpisodeId = obj.optString("traktEpisodeId", ""),
             fromTrakt = obj.optBoolean("fromTrakt", false),
@@ -582,6 +735,8 @@ class TvPreferencesRepository(context: Context) {
           put("watchedCount", item.watchedCount)
           put("totalCount", item.totalCount)
           put("traktSlug", item.traktSlug)
+          put("traktShowId", item.traktShowId)
+          put("imdbId", item.imdbId)
           put("traktEpisodeUrl", item.traktEpisodeUrl)
           put("traktEpisodeId", item.traktEpisodeId)
           put("fromTrakt", item.fromTrakt)
@@ -1140,10 +1295,15 @@ class TvPreferencesRepository(context: Context) {
     private const val KEY_AUDIO_BOOST_PERCENT = "audio_boost_percent_v1"
     private const val KEY_WATCHED_EPISODES_JSON = "watched_episodes_json_v1"
     private const val KEY_UP_NEXT_JSON = "up_next_queue_json_v1"
-    private const val KEY_TRAKT_COOKIE = "trakt_session_cookie_v1"
+    private const val KEY_TRAKT_CLIENT_ID = "trakt_client_id_v2"
+    private const val KEY_TRAKT_CLIENT_SECRET = "trakt_client_secret_v2"
+    private const val KEY_TRAKT_ACCESS_TOKEN = "trakt_access_token_v2"
+    private const val KEY_TRAKT_REFRESH_TOKEN = "trakt_refresh_token_v2"
+    private const val KEY_TRAKT_TOKEN_EXPIRES_AT_MS = "trakt_token_expires_at_ms_v2"
     private const val KEY_TRAKT_USERNAME = "trakt_username_v1"
-    private const val KEY_TRAKT_CSRF_TOKEN = "trakt_csrf_token_v1"
     private const val KEY_TRAKT_LAST_SYNC_MS = "trakt_last_sync_ms_v1"
+    private const val KEY_TRAKT_CALENDAR_JSON = "trakt_calendar_json_v2"
+    private const val KEY_TRAKT_WATCHLIST_JSON = "trakt_watchlist_json_v2"
     private const val KEY_GITHUB_REPO = "github_repo_slug"
     private const val KEY_GITHUB_TOKEN = "github_pat_token"
     private const val KEY_SUB_TEXT_COLOR = "subtitle_text_color_argb"

@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LiveTv
@@ -73,6 +74,8 @@ fun TvNavBar(
   onOpenHistory: () -> Unit,
   onToggleControlMode: () -> Unit,
   onOpenModeDialog: () -> Unit,
+  accountDisplayName: String = "",
+  onOpenAccountDialog: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
   Box(
@@ -117,7 +120,7 @@ fun TvNavBar(
         )
       }
 
-      // 2b. Trakt Portal Tab Button
+      // 2b. Trakt Tab Button
       item {
         TvNavUtilityButton(
           label = "Trakt",
@@ -126,6 +129,19 @@ fun TvNavBar(
           activeColor = Color(0xFFED1C24),
           onClick = onGoToTrakt,
           testTag = "btn_nav_trakt"
+        )
+      }
+
+      // 2c. Local Email/Password Account Button
+      item {
+        val isSignedIn = accountDisplayName.isNotBlank()
+        TvNavUtilityButton(
+          label = if (isSignedIn) accountDisplayName.take(12) else "حسابي",
+          icon = Icons.Default.AccountCircle,
+          isActive = isSignedIn,
+          activeColor = Color(0xFF10B981),
+          onClick = onOpenAccountDialog,
+          testTag = "btn_nav_account"
         )
       }
 

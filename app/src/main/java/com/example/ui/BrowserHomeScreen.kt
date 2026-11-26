@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Clear
@@ -109,6 +110,8 @@ fun AppMainTabSwitcherBar(
   onOpenAdBlock: () -> Unit,
   onOpenUpdate: () -> Unit = {},
   onOpenDiagnostics: () -> Unit = {},
+  accountDisplayName: String = "",
+  onOpenAccount: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
   val configuration = LocalConfiguration.current
@@ -188,6 +191,13 @@ fun AppMainTabSwitcherBar(
             }
           }
 
+          CompactTopIconBtn(
+            icon = Icons.Default.AccountCircle,
+            tint = if (accountDisplayName.isNotBlank()) CinemaSuccess else Color(0xFF38BDF8),
+            contentDescription = if (accountDisplayName.isNotBlank()) "حسابي: $accountDisplayName" else "تسجيل الدخول",
+            onClick = onOpenAccount,
+            testTag = "top_chip_account"
+          )
           CompactTopIconBtn(
             icon = Icons.Default.SystemUpdate,
             tint = CinemaSuccess,
@@ -336,6 +346,13 @@ fun AppMainTabSwitcherBar(
           .weight(1f, fill = false)
           .horizontalScroll(rememberScrollState())
       ) {
+        QuickTopUtilityChip(
+          label = if (accountDisplayName.isNotBlank()) accountDisplayName.take(10) else "حسابي",
+          icon = Icons.Default.AccountCircle,
+          tint = if (accountDisplayName.isNotBlank()) CinemaSuccess else Color(0xFF38BDF8),
+          onClick = onOpenAccount,
+          testTag = "top_chip_account"
+        )
         QuickTopUtilityChip(
           label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس ✓" else "الماوس",
           icon = Icons.Default.Mouse,

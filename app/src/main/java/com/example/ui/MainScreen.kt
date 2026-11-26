@@ -81,9 +81,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.example.data.AppDiagnosticsLogger
 import com.example.data.AppDisplayMode
 import com.example.data.SearchAndSubtitlesService
-import com.example.data.TraktSyncResult
+import com.example.data.TraktFullSyncResult
 import com.example.data.TraktSyncService
 import com.example.data.TvPreferencesRepository
+import com.example.data.db.AccountAuthRepository
+import com.example.data.db.UserAccountEntity
 import com.example.model.AppMainTab
 import com.example.model.ControlMode
 import com.example.model.ScrapedEpisodeItem
@@ -150,6 +152,8 @@ fun MainScreen(
   val scope = rememberCoroutineScope()
   val searchService = remember { SearchAndSubtitlesService() }
   val traktSyncService = remember { TraktSyncService() }
+  val accountRepository = remember { AccountAuthRepository(context.applicationContext) }
+  val currentAccount by accountRepository.currentAccountFlow.collectAsState()
 
   // Display Mode & Dialogs
   val displayMode by repository.displayModeFlow.collectAsState()
@@ -162,6 +166,165 @@ fun MainScreen(
   var showQualityDialog by remember { mutableStateOf(false) }
   var showUpdateDialog by remember { mutableStateOf(false) }
   var showDiagnosticsDialog by remember { mutableStateOf(false) }
+  var showAccountDialog by remember { mutableStateOf(false) }
+  var isSyncingTrakt by remember { mutableStateOf(false) }
+
+  suspend fun getValidTraktCredentials(forceRefresh: Boolean = false): Pair<String, String>? {
+    val clientId = repository.getTraktClientId().trim()
+    val clientSecret = repository.getTraktClientSecret().trim()
+    var accessToken = repository.getTraktAccessToken().trim()
+    val refreshToken = repository.getTraktRefreshToken().trim()
+    val expiresAtMs = repository.getTraktTokenExpiresAtMs()
+    if (clientId.isBlank() || accessToken.isBlank()) return null
+
+    val isExpiredOrNear = expiresAtMs > 0L && System.currentTimeMillis() >= (expiresAtMs - 5 * 60_000L)
+    if ((forceRefresh || isExpiredOrNear) && clientSecret.isNotBlank() && refreshToken.isNotBlank()) {
+      val refreshed = traktSyncService.refreshAccessToken(clientId, clientSecret, refreshToken)
+      if (refreshed != null) {
+        accessToken = refreshed.accessToken
+        val currentUsername = repository.getTraktUsername()
+        repository.saveTraktOAuthCredentials(
+          clientId = clientId,
+          clientSecret = clientSecret,
+          accessToken = refreshed.accessToken,
+          refreshToken = refreshed.refreshToken,
+          expiresAtMs = refreshed.expiresAtMs,
+          username = currentUsername
+        )
+        accountRepository.saveTraktConfigForCurrentAccount(
+          clientId = clientId,
+          clientSecret = clientSecret,
+          accessToken = refreshed.accessToken,
+          refreshToken = refreshed.refreshToken,
+          expiresAtMs = refreshed.expiresAtMs,
+          traktUsername = currentUsername
+        )
+      }
+    }
+    return clientId to accessToken
+  }
+
+  fun triggerFullTraktSync(showToast: Boolean = true) {
+    if (isSyncingTrakt) return
+    scope.launch {
+      isSyncingTrakt = true
+      try {
+        var creds = getValidTraktCredentials(forceRefresh = false)
+        if (creds == null) {
+          if (showToast) {
+            Toast.makeText(context, "يرجى ربط حساب Trakt بالكود أولاً", Toast.LENGTH_SHORT).show()
+          }
+          return@launch
+        }
+        var result = traktSyncService.syncFullAccountData(creds.first, creds.second)
+        if (result is TraktFullSyncResult.Unauthorized) {
+          val refreshedCreds = getValidTraktCredentials(forceRefresh = true)
+          if (refreshedCreds != null) {
+            creds = refreshedCreds
+            result = traktSyncService.syncFullAccountData(refreshedCreds.first, refreshedCreds.second)
+          }
+        }
+        when (val finalRes = result) {
+          is TraktFullSyncResult.Success -> {
+            val resolvedUsername = finalRes.username.ifBlank { repository.getTraktUsername() }
+            if (resolvedUsername.isNotBlank()) {
+              repository.saveTraktOAuthCredentials(
+                clientId = repository.getTraktClientId(),
+                clientSecret = repository.getTraktClientSecret(),
+                accessToken = repository.getTraktAccessToken(),
+                refreshToken = repository.getTraktRefreshToken(),
+                expiresAtMs = repository.getTraktTokenExpiresAtMs(),
+                username = resolvedUsername
+              )
+              accountRepository.saveTraktConfigForCurrentAccount(
+                clientId = repository.getTraktClientId(),
+                clientSecret = repository.getTraktClientSecret(),
+                accessToken = repository.getTraktAccessToken(),
+                refreshToken = repository.getTraktRefreshToken(),
+                expiresAtMs = repository.getTraktTokenExpiresAtMs(),
+                traktUsername = resolvedUsername
+              )
+            }
+            if (finalRes.upNextItems.isNotEmpty()) {
+              repository.mergeTraktProgressItems(finalRes.upNextItems)
+            }
+            repository.saveTraktCalendar(finalRes.calendarItems)
+            repository.saveTraktWatchlist(finalRes.watchlistItems)
+            if (showToast) {
+              Toast.makeText(
+                context,
+                "تمت مزامنة Trakt ✓ (${finalRes.upNextItems.size} متابعة • ${finalRes.calendarItems.size} جدول • ${finalRes.watchlistItems.size} قائمة)",
+                Toast.LENGTH_SHORT
+              ).show()
+            }
+          }
+          is TraktFullSyncResult.Unauthorized -> {
+            if (showToast) {
+              Toast.makeText(context, "انتهت صلاحية جلسة Trakt — يرجى إعادة الربط بالكود", Toast.LENGTH_LONG).show()
+            }
+          }
+          is TraktFullSyncResult.Error -> {
+            if (showToast) {
+              Toast.makeText(context, finalRes.message, Toast.LENGTH_SHORT).show()
+            }
+          }
+        }
+      } finally {
+        isSyncingTrakt = false
+      }
+    }
+  }
+
+  fun markUpNextItemWatchedOfficial(item: UpNextItem, showToast: Boolean = true) {
+    val epLabel = "S%02dE%02d".format(java.util.Locale.US, item.seasonNumber, item.episodeNumber)
+    // 1. Advance immediately in local cache for instant feedback
+    repository.advanceUpNextItemLocally(item)
+    // 2. Two-way official Trakt API v2 sync (POST /sync/history + fetch next_episode)
+    if (repository.isTraktConnected()) {
+      scope.launch {
+        val creds = getValidTraktCredentials(forceRefresh = false)
+        if (creds != null) {
+          val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, item)
+          if (synced) {
+            if (showToast) {
+              Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
+            }
+            val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, item)
+            if (updatedNext != null) {
+              repository.replaceSingleUpNextItem(updatedNext)
+            } else {
+              triggerFullTraktSync(showToast = false)
+            }
+          } else if (showToast) {
+            Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+          }
+        }
+      }
+    } else if (showToast) {
+      Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  // Restore saved Trakt tokens from active Room account if needed, and run lightweight background refresh when stale
+  LaunchedEffect(currentAccount?.id) {
+    val acc = currentAccount
+    if (acc != null && acc.traktAccessToken.isNotBlank() && acc.traktClientId.isNotBlank() && !repository.isTraktConnected()) {
+      repository.saveTraktOAuthCredentials(
+        clientId = acc.traktClientId,
+        clientSecret = acc.traktClientSecret,
+        accessToken = acc.traktAccessToken,
+        refreshToken = acc.traktRefreshToken,
+        expiresAtMs = acc.traktTokenExpiresAtMs,
+        username = acc.traktUsername
+      )
+    }
+    if (repository.isTraktConnected()) {
+      val staleMs = System.currentTimeMillis() - repository.traktLastSyncMsFlow.value
+      if (staleMs > 15 * 60_000L || repository.upNextFlow.value.isEmpty()) {
+        triggerFullTraktSync(showToast = false)
+      }
+    }
+  }
 
   val currentVideoQuality by repository.preferredQualityFlow.collectAsState()
   val currentVideoResizeMode by repository.videoResizeModeFlow.collectAsState()
@@ -1314,7 +1477,10 @@ fun MainScreen(
         cursorY = y
       },
       onBackHandled = {
-        if (showDiagnosticsDialog) {
+        if (showAccountDialog) {
+          showAccountDialog = false
+          true
+        } else if (showDiagnosticsDialog) {
           showDiagnosticsDialog = false
           true
         } else if (showUpdateDialog) {
@@ -1368,7 +1534,8 @@ fun MainScreen(
   DisposableEffect(activity) {
     val keyEventProvider = activity as? KeyEventProvider
     keyEventProvider?.setKeyEventCallback { event ->
-      val anyModalOpen = showDiagnosticsDialog ||
+      val anyModalOpen = showAccountDialog ||
+        showDiagnosticsDialog ||
         showUpdateDialog ||
         showDisplayModeDialog ||
         showFavoritesDialog ||
@@ -1390,7 +1557,9 @@ fun MainScreen(
   }
 
   BackHandler {
-    if (showDiagnosticsDialog) {
+    if (showAccountDialog) {
+      showAccountDialog = false
+    } else if (showDiagnosticsDialog) {
       showDiagnosticsDialog = false
     } else if (showUpdateDialog) {
       showUpdateDialog = false
@@ -2052,8 +2221,7 @@ fun MainScreen(
                 nextEpisodeWatchUrl = nextEpisodeItem?.url ?: "",
                 autoEnqueueNext = true
               )
-              val cookie = repository.getTraktCookie()
-              if (cookie.isNotBlank()) {
+              if (repository.isTraktConnected()) {
                 val showKey = TvPreferencesRepository.buildNormalizedContentKey(activeShowCleanForWatched, null, null, isSeries = false)
                 val matchedUpNext = repository.upNextFlow.value.firstOrNull {
                   (showKey.isNotBlank() && it.seriesKey == showKey) ||
@@ -2070,17 +2238,14 @@ fun MainScreen(
                   episodeNumber = activeEpNumResolved
                 )
                 scope.launch {
-                  val synced = traktSyncService.markEpisodeWatchedOnTrakt(
-                    item = itemForSync,
-                    cookieHeader = cookie,
-                    csrfTokenHint = repository.getTraktCsrfToken(),
-                    usernameHint = repository.getTraktUsername()
-                  )
-                  if (synced) {
-                    val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
-                    if (refreshed is TraktSyncResult.Success && refreshed.items.isNotEmpty()) {
-                      repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
-                      repository.mergeTraktProgressItems(refreshed.items)
+                  val creds = getValidTraktCredentials(forceRefresh = false)
+                  if (creds != null) {
+                    val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, itemForSync)
+                    if (synced) {
+                      val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
+                      if (updatedNext != null) {
+                        repository.replaceSingleUpNextItem(updatedNext)
+                      }
                     }
                   }
                 }
@@ -2100,8 +2265,7 @@ fun MainScreen(
                   nextEpisodeWatchUrl = nextEpisodeItem?.url ?: "",
                   autoEnqueueNext = true
                 )
-                val cookie = repository.getTraktCookie()
-                if (cookie.isNotBlank()) {
+                if (repository.isTraktConnected()) {
                   val showKey = TvPreferencesRepository.buildNormalizedContentKey(activeShowCleanForWatched, null, null, isSeries = false)
                   val matchedUpNext = repository.upNextFlow.value.firstOrNull {
                     (showKey.isNotBlank() && it.seriesKey == showKey) ||
@@ -2118,17 +2282,14 @@ fun MainScreen(
                     episodeNumber = activeEpNumResolved
                   )
                   scope.launch {
-                    val synced = traktSyncService.markEpisodeWatchedOnTrakt(
-                      item = itemForSync,
-                      cookieHeader = cookie,
-                      csrfTokenHint = repository.getTraktCsrfToken(),
-                      usernameHint = repository.getTraktUsername()
-                    )
-                    if (synced) {
-                      val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
-                      if (refreshed is TraktSyncResult.Success && refreshed.items.isNotEmpty()) {
-                        repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
-                        repository.mergeTraktProgressItems(refreshed.items)
+                    val creds = getValidTraktCredentials(forceRefresh = false)
+                    if (creds != null) {
+                      val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, itemForSync)
+                      if (synced) {
+                        val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
+                        if (updatedNext != null) {
+                          repository.replaceSingleUpNextItem(updatedNext)
+                        }
                       }
                     }
                   }
@@ -2428,6 +2589,8 @@ fun MainScreen(
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
           },
           onOpenModeDialog = { showDisplayModeDialog = true },
+          accountDisplayName = currentAccount?.displayName.orEmpty(),
+          onOpenAccountDialog = { showAccountDialog = true },
           modifier = if (displayMode == AppDisplayMode.MOBILE) Modifier.navigationBarsPadding() else Modifier
         )
       }
@@ -2457,7 +2620,9 @@ fun MainScreen(
           onOpenHistory = { showHistoryDialog = true },
           onOpenAdBlock = { showAdBlockDialog = true },
           onOpenUpdate = { showUpdateDialog = true },
-          onOpenDiagnostics = { showDiagnosticsDialog = true }
+          onOpenDiagnostics = { showDiagnosticsDialog = true },
+          accountDisplayName = currentAccount?.displayName.orEmpty(),
+          onOpenAccount = { showAccountDialog = true }
         )
 
         fun resolveAndLaunchShowEpisode(
@@ -2596,36 +2761,37 @@ fun MainScreen(
                 )
               },
               onMarkUpNextItemWatched = { item ->
-                val epLabel = "S%02dE%02d".format(java.util.Locale.US, item.seasonNumber, item.episodeNumber)
-                // 1. Immediately advance locally so UI feels instant
-                repository.advanceUpNextItemLocally(item)
-                // 2. Two-way sync back to user's real Trakt account & pull the real next episode title/counts
-                val cookie = repository.getTraktCookie()
-                if (cookie.isNotBlank()) {
-                  scope.launch {
-                    val synced = traktSyncService.markEpisodeWatchedOnTrakt(
-                      item = item,
-                      cookieHeader = cookie,
-                      csrfTokenHint = repository.getTraktCsrfToken(),
-                      usernameHint = repository.getTraktUsername()
-                    )
-                    if (synced) {
-                      Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
-                      val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
-                      if (refreshed is TraktSyncResult.Success) {
-                        repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
-                        if (refreshed.items.isNotEmpty()) {
-                          repository.mergeTraktProgressItems(refreshed.items)
-                        }
-                      }
-                    } else {
-                      Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
-                    }
-                  }
-                } else {
-                  Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+                markUpNextItemWatchedOfficial(item, showToast = true)
+              },
+              onTraktSyncNow = {
+                triggerFullTraktSync(showToast = true)
+              },
+              onTraktCredentialsSaved = { clientId, clientSecret, accessToken, refreshToken, expiresAtMs, username ->
+                scope.launch {
+                  accountRepository.saveTraktConfigForCurrentAccount(
+                    clientId = clientId,
+                    clientSecret = clientSecret,
+                    accessToken = accessToken,
+                    refreshToken = refreshToken,
+                    expiresAtMs = expiresAtMs,
+                    traktUsername = username
+                  )
+                }
+                triggerFullTraktSync(showToast = true)
+              },
+              onTraktDisconnected = {
+                scope.launch {
+                  accountRepository.saveTraktConfigForCurrentAccount(
+                    clientId = repository.getTraktClientId(),
+                    clientSecret = repository.getTraktClientSecret(),
+                    accessToken = "",
+                    refreshToken = "",
+                    expiresAtMs = 0L,
+                    traktUsername = ""
+                  )
                 }
               },
+              isSyncingNow = isSyncingTrakt,
               modifier = Modifier.weight(1f)
             )
           }
@@ -2663,33 +2829,28 @@ fun MainScreen(
                 )
               },
               onMarkUpNextWatched = { item ->
-                val epLabel = "S%02dE%02d".format(java.util.Locale.US, item.seasonNumber, item.episodeNumber)
-                repository.advanceUpNextItemLocally(item)
-                val cookie = repository.getTraktCookie()
-                if (cookie.isNotBlank()) {
-                  scope.launch {
-                    val synced = traktSyncService.markEpisodeWatchedOnTrakt(
-                      item = item,
-                      cookieHeader = cookie,
-                      csrfTokenHint = repository.getTraktCsrfToken(),
-                      usernameHint = repository.getTraktUsername()
-                    )
-                    if (synced) {
-                      Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
-                      val refreshed = traktSyncService.fetchProgressViaCookie(cookie, repository.getTraktUsername())
-                      if (refreshed is TraktSyncResult.Success) {
-                        repository.saveTraktSession(username = refreshed.username, csrfToken = refreshed.csrfToken)
-                        if (refreshed.items.isNotEmpty()) {
-                          repository.mergeTraktProgressItems(refreshed.items)
-                        }
-                      }
-                    } else {
-                      Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
-                    }
-                  }
-                } else {
-                  Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
-                }
+                markUpNextItemWatchedOfficial(item, showToast = true)
+              },
+              onPlayTraktCalendarItem = { calItem ->
+                resolveAndLaunchShowEpisode(
+                  showTitle = calItem.showTitle,
+                  seasonNumber = calItem.seasonNumber,
+                  episodeNumber = calItem.episodeNumber,
+                  isMovie = false,
+                  preferredPortal = StreamingPortal.WATCH_SERIES
+                )
+              },
+              onPlayTraktWatchlistItem = { wlItem ->
+                resolveAndLaunchShowEpisode(
+                  showTitle = wlItem.title,
+                  seasonNumber = if (wlItem.mediaType == "movie") null else 1,
+                  episodeNumber = if (wlItem.mediaType == "movie") null else 1,
+                  isMovie = wlItem.mediaType == "movie",
+                  preferredPortal = StreamingPortal.WATCH_SERIES
+                )
+              },
+              onSyncTraktFromHome = {
+                triggerFullTraktSync(showToast = true)
               },
               onResumeHistory = { entry ->
                 lastSearchQuery = entry.title
@@ -3260,6 +3421,43 @@ fun MainScreen(
   if (showDiagnosticsDialog) {
     DiagnosticsLogDialog(
       onDismiss = { showDiagnosticsDialog = false }
+    )
+  }
+
+  if (showAccountDialog) {
+    AccountAuthDialog(
+      accountRepository = accountRepository,
+      onAccountAuthenticated = { acc: UserAccountEntity ->
+        if (acc.traktClientId.isNotBlank() && acc.traktAccessToken.isNotBlank()) {
+          repository.saveTraktOAuthCredentials(
+            clientId = acc.traktClientId,
+            clientSecret = acc.traktClientSecret,
+            accessToken = acc.traktAccessToken,
+            refreshToken = acc.traktRefreshToken,
+            expiresAtMs = acc.traktTokenExpiresAtMs,
+            username = acc.traktUsername
+          )
+          triggerFullTraktSync(showToast = false)
+        } else if (acc.traktClientId.isNotBlank()) {
+          repository.saveTraktAppKeys(acc.traktClientId, acc.traktClientSecret)
+        } else if (repository.isTraktConnected()) {
+          // Persist currently linked Trakt credentials into this newly logged-in account
+          scope.launch {
+            accountRepository.saveTraktConfigForCurrentAccount(
+              clientId = repository.getTraktClientId(),
+              clientSecret = repository.getTraktClientSecret(),
+              accessToken = repository.getTraktAccessToken(),
+              refreshToken = repository.getTraktRefreshToken(),
+              expiresAtMs = repository.getTraktTokenExpiresAtMs(),
+              traktUsername = repository.getTraktUsername()
+            )
+          }
+        }
+      },
+      onAccountLoggedOut = {
+        repository.disconnectTrakt()
+      },
+      onDismiss = { showAccountDialog = false }
     )
   }
   }

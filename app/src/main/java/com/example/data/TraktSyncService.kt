@@ -1,9 +1,15 @@
 package com.example.data
 
 import com.example.model.StreamingPortal
+import com.example.model.TraktCalendarItem
+import com.example.model.TraktWatchlistItem
 import com.example.model.UpNextItem
-import com.example.ui.TraktUrlParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -11,684 +17,665 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
-import java.util.UUID
+import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-sealed class TraktSyncResult {
-  data class Success(
-    val items: List<UpNextItem>,
-    val username: String,
-    val csrfToken: String
-  ) : TraktSyncResult()
-
-  data object NotLoggedIn : TraktSyncResult()
-  data class Error(val message: String) : TraktSyncResult()
-}
-
-data class TraktDomExtractionPayload(
-  val username: String,
-  val csrfToken: String,
-  val pageUrl: String,
-  val items: List<UpNextItem>
+data class TraktOAuthTokens(
+  val accessToken: String,
+  val refreshToken: String,
+  val expiresAtMs: Long
 )
 
+sealed class TraktDeviceCodeResult {
+  data class Success(
+    val deviceCode: String,
+    val userCode: String,
+    val verificationUrl: String,
+    val expiresInSec: Int,
+    val intervalSec: Int
+  ) : TraktDeviceCodeResult()
+
+  data class Error(val message: String) : TraktDeviceCodeResult()
+}
+
+sealed class TraktTokenPollResult {
+  data class Authorized(val tokens: TraktOAuthTokens) : TraktTokenPollResult()
+  data object Pending : TraktTokenPollResult()
+  data object SlowDown : TraktTokenPollResult()
+  data object Expired : TraktTokenPollResult()
+  data object Denied : TraktTokenPollResult()
+  data class Error(val message: String) : TraktTokenPollResult()
+}
+
+sealed class TraktFullSyncResult {
+  data class Success(
+    val username: String,
+    val upNextItems: List<UpNextItem>,
+    val calendarItems: List<TraktCalendarItem>,
+    val watchlistItems: List<TraktWatchlistItem>
+  ) : TraktFullSyncResult()
+
+  data object Unauthorized : TraktFullSyncResult()
+  data class Error(val message: String) : TraktFullSyncResult()
+}
+
+/**
+ * Official Trakt.tv API v2 Client (OAuth Device Code Flow + Progress + Calendar + Watchlist + Scrobble/Watched Sync).
+ * Runs 100% over lightweight OkHttp JSON calls — ZERO WebView, ZERO Chromium RAM overhead.
+ */
 class TraktSyncService {
 
   private val client: OkHttpClient by lazy {
     SearchAndSubtitlesService.buildSslTolerantHttpClient()
       .newBuilder()
       .followRedirects(true)
-      .followSslRedirects(true)
       .connectTimeout(12, TimeUnit.SECONDS)
-      .readTimeout(15, TimeUnit.SECONDS)
+      .readTimeout(16, TimeUnit.SECONDS)
       .writeTimeout(12, TimeUnit.SECONDS)
       .build()
   }
 
-  private val desktopUa =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+  private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+  private val posterCache = ConcurrentHashMap<String, String>()
 
-  /**
-   * Parses the JSON string emitted by the Trakt WebView DOM extractor bridge.
-   */
-  fun parseDomExtractionJson(rawJson: String): TraktDomExtractionPayload {
-    return try {
-      val root = JSONObject(rawJson)
-      val username = root.optString("username", "").trim()
-      val csrfToken = root.optString("csrfToken", "").trim()
-      val pageUrl = root.optString("pageUrl", "").trim()
-      val arr = root.optJSONArray("items") ?: JSONArray()
-      val parsed = mutableListOf<UpNextItem>()
-      val seenSlugs = mutableSetOf<String>()
-
-      for (i in 0 until arr.length()) {
-        val obj = arr.optJSONObject(i) ?: continue
-        val slug = obj.optString("slug", "").trim().lowercase()
-        val showTitle = obj.optString("showTitle", "").trim()
-          .ifBlank { if (slug.isNotBlank()) TraktUrlParser.slugToTitle(slug) else "" }
-        val season = obj.optInt("season", 0)
-        val episode = obj.optInt("episode", 0)
-        if (showTitle.isBlank() || season <= 0 || episode <= 0) continue
-
-        val dedupKey = slug.ifBlank {
-          TvPreferencesRepository.buildNormalizedContentKey(showTitle, null, null, isSeries = false)
+  private fun buildTraktRequest(
+    url: String,
+    clientId: String,
+    accessToken: String = ""
+  ): Request.Builder {
+    return Request.Builder()
+      .url(url)
+      .header("Content-Type", "application/json")
+      .header("Accept", "application/json")
+      .header("trakt-api-version", "2")
+      .header("trakt-api-key", clientId.trim())
+      .header("User-Agent", "AsserTV/Android")
+      .apply {
+        if (accessToken.isNotBlank()) {
+          header("Authorization", "Bearer ${accessToken.trim()}")
         }
-        if (dedupKey.isNotBlank() && !seenSlugs.add(dedupKey)) continue
-
-        val epTitle = cleanEpisodeTitle(obj.optString("episodeTitle", ""), season, episode)
-        val poster = normalizePosterUrl(obj.optString("posterUrl", ""))
-        val watched = obj.optInt("watchedCount", 0).coerceAtLeast(0)
-        val total = obj.optInt("totalCount", 0).coerceAtLeast(0)
-        val epUrl = obj.optString("episodeUrl", "").trim().ifBlank {
-          if (slug.isNotBlank()) "https://trakt.tv/shows/$slug/seasons/$season/episodes/$episode" else ""
-        }
-        val epId = obj.optString("episodeId", "").trim()
-
-        parsed.add(
-          UpNextItem(
-            id = "trakt_${dedupKey.ifBlank { UUID.randomUUID().toString() }}",
-            seriesKey = TvPreferencesRepository.buildNormalizedContentKey(showTitle, null, null, isSeries = false),
-            showTitle = showTitle,
-            seasonNumber = season,
-            episodeNumber = episode,
-            episodeTitle = epTitle,
-            posterUrl = poster,
-            watchedCount = watched,
-            totalCount = total,
-            traktSlug = slug,
-            traktEpisodeUrl = epUrl,
-            traktEpisodeId = epId,
-            fromTrakt = true,
-            preferredPortal = StreamingPortal.WATCH_SERIES,
-            updatedAtMs = System.currentTimeMillis() - (i * 10L)
-          )
-        )
       }
-
-      TraktDomExtractionPayload(
-        username = username,
-        csrfToken = csrfToken,
-        pageUrl = pageUrl,
-        items = parsed
-      )
-    } catch (e: Exception) {
-      AppDiagnosticsLogger.log("TraktSync", "DOM JSON parse error: ${e.message}", isError = true)
-      TraktDomExtractionPayload("", "", "", emptyList())
-    }
   }
 
   /**
-   * Fetches the user's real Trakt Progress ("Up Next to Watch") page using their saved WebView session cookie.
-   * Runs purely over OkHttp + Jsoup (Zero WebView RAM overhead on Android 9 TV!).
+   * Step 1 of Official Trakt OAuth Device Flow:
+   * Requests a user activation code (`ABCD1234`) & verification URL (`https://trakt.tv/activate`).
    */
-  suspend fun fetchProgressViaCookie(
-    cookieHeader: String,
-    usernameHint: String = ""
-  ): TraktSyncResult = withContext(Dispatchers.IO) {
-    if (cookieHeader.isBlank()) {
-      return@withContext TraktSyncResult.NotLoggedIn
+  suspend fun requestDeviceCode(clientId: String): TraktDeviceCodeResult = withContext(Dispatchers.IO) {
+    val cleanClientId = clientId.trim()
+    if (cleanClientId.isBlank()) {
+      return@withContext TraktDeviceCodeResult.Error("يرجى إدخال Trakt Client ID أولاً")
     }
     try {
-      val targetUrls = buildList {
-        if (usernameHint.isNotBlank()) {
-          add("https://trakt.tv/users/${usernameHint.trim()}/progress")
-        }
-        add("https://trakt.tv/users/me/progress")
-        add("https://trakt.tv/dashboard")
-      }
-
-      var lastError = ""
-      for (targetUrl in targetUrls) {
-        val req = Request.Builder()
-          .url(targetUrl)
-          .header("Cookie", cookieHeader)
-          .header("User-Agent", desktopUa)
-          .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-          .header("Accept-Language", "en-US,en;q=0.9")
-          .header("Referer", "https://trakt.tv/dashboard")
-          .build()
-
-        client.newCall(req).execute().use { resp ->
-          val finalUrl = resp.request.url.toString()
-          if (finalUrl.contains("/auth/signin", ignoreCase = true) ||
-            finalUrl.contains("/login", ignoreCase = true) ||
-            resp.code == 401 || resp.code == 403
-          ) {
-            return@withContext TraktSyncResult.NotLoggedIn
-          }
-          if (!resp.isSuccessful) {
-            lastError = "HTTP ${resp.code}"
-            return@use
-          }
-          val html = resp.body?.string().orEmpty()
-          if (html.isBlank()) return@use
-
-          val doc = Jsoup.parse(html, finalUrl)
-          val csrfToken = doc.selectFirst("meta[name=csrf-token]")?.attr("content")?.trim().orEmpty()
-          val username = extractUsernameFromDoc(doc, finalUrl).ifBlank { usernameHint }
-          val items = parseProgressFromDocument(doc)
-          if (items.isNotEmpty() || finalUrl.contains("/progress", ignoreCase = true)) {
-            AppDiagnosticsLogger.log(
-              "TraktSync",
-              "Synced ${items.size} shows from $finalUrl (user=$username)"
-            )
-            return@withContext TraktSyncResult.Success(
-              items = items,
-              username = username,
-              csrfToken = csrfToken
-            )
-          }
-        }
-      }
-      TraktSyncResult.Error(lastError.ifBlank { "لم يتم العثور على حلقات في صفحة Progress" })
-    } catch (e: Exception) {
-      AppDiagnosticsLogger.log("TraktSync", "Cookie sync failed: ${e.message}", isError = true)
-      TraktSyncResult.Error(e.message ?: "خطأ في الاتصال بـ Trakt")
-    }
-  }
-
-  /**
-   * Marks an episode as Watched directly on the user's Trakt account using their session cookie + CSRF token.
-   */
-  suspend fun markEpisodeWatchedOnTrakt(
-    item: UpNextItem,
-    cookieHeader: String,
-    csrfTokenHint: String = "",
-    usernameHint: String = ""
-  ): Boolean = withContext(Dispatchers.IO) {
-    if (cookieHeader.isBlank()) return@withContext false
-    val slug = item.traktSlug.ifBlank {
-      TraktUrlParser.parse(item.traktEpisodeUrl)?.slug.orEmpty()
-    }.ifBlank {
-      item.showTitle.lowercase()
-        .replace(Regex("[^a-z0-9]+"), "-")
-        .trim('-')
-    }
-    if (slug.isBlank()) return@withContext false
-
-    val epUrl = item.traktEpisodeUrl.ifBlank {
-      "https://trakt.tv/shows/$slug/seasons/${item.seasonNumber}/episodes/${item.episodeNumber}"
-    }
-
-    try {
-      // 1. Fetch fresh CSRF token & real watch action path/episode ID from the episode page
-      var csrfToken = csrfTokenHint
-      var episodeId = item.traktEpisodeId
-      var discoveredWatchPath = ""
-
-      val pageReq = Request.Builder()
-        .url(epUrl)
-        .header("Cookie", cookieHeader)
-        .header("User-Agent", desktopUa)
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+      val body = JSONObject().put("client_id", cleanClientId).toString().toRequestBody(jsonMediaType)
+      val req = buildTraktRequest("$API_BASE/oauth/device/code", cleanClientId)
+        .post(body)
         .build()
 
-      client.newCall(pageReq).execute().use { resp ->
-        val finalUrl = resp.request.url.toString()
-        if (finalUrl.contains("/auth/signin", ignoreCase = true) || resp.code == 401) {
-          return@withContext false
-        }
-        val html = resp.body?.string().orEmpty()
-        if (html.isNotBlank()) {
-          val doc = Jsoup.parse(html, finalUrl)
-          val metaCsrf = doc.selectFirst("meta[name=csrf-token]")?.attr("content")?.trim().orEmpty()
-          if (metaCsrf.isNotBlank()) csrfToken = metaCsrf
-
-          val idEl = doc.selectFirst("[data-episode-id], [data-type=episode][data-id], .watch[data-id]")
-          val foundId = idEl?.attr("data-episode-id")?.ifBlank { idEl.attr("data-id") }.orEmpty().trim()
-          if (foundId.isNotBlank()) episodeId = foundId
-
-          val watchBtn = doc.selectFirst("a.watch[href], form[action*='/watch']")
-          val rawAction = watchBtn?.attr("href")?.ifBlank { watchBtn.attr("action") }.orEmpty().trim()
-          if (rawAction.isNotBlank() && rawAction != "#") {
-            discoveredWatchPath = if (rawAction.startsWith("http")) rawAction else "https://trakt.tv$rawAction"
+      client.newCall(req).execute().use { resp ->
+        val raw = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) {
+          val errMsg = when (resp.code) {
+            401, 403 -> "مفتاح Trakt Client ID غير صحيح — تأكد من نسخه بشكل كامل"
+            429 -> "طلبات كثيرة مؤقتاً — انتظر ثوانٍ ثم حاول مجدداً"
+            else -> "فشل توليد الكود (HTTP ${resp.code})"
           }
+          return@withContext TraktDeviceCodeResult.Error(errMsg)
         }
+        val obj = JSONObject(raw)
+        val deviceCode = obj.optString("device_code", "").trim()
+        val userCode = obj.optString("user_code", "").trim()
+        val verificationUrl = obj.optString("verification_url", "https://trakt.tv/activate").trim()
+        val expiresIn = obj.optInt("expires_in", 600).coerceIn(60, 1800)
+        val interval = obj.optInt("interval", 5).coerceIn(3, 15)
+
+        if (deviceCode.isBlank() || userCode.isBlank()) {
+          return@withContext TraktDeviceCodeResult.Error("استجابة غير مكتملة من Trakt")
+        }
+        AppDiagnosticsLogger.log("TraktAPI", "Generated official Trakt device code successfully")
+        TraktDeviceCodeResult.Success(
+          deviceCode = deviceCode,
+          userCode = userCode,
+          verificationUrl = verificationUrl,
+          expiresInSec = expiresIn,
+          intervalSec = interval
+        )
       }
+    } catch (e: Exception) {
+      AppDiagnosticsLogger.log("TraktAPI", "Device code error: ${e.message}", isError = true)
+      TraktDeviceCodeResult.Error("تعذر الاتصال بـ Trakt: ${e.message ?: "تحقق من الإنترنت"}")
+    }
+  }
 
-      if (csrfToken.isBlank() && usernameHint.isNotBlank()) {
-        val progReq = Request.Builder()
-          .url("https://trakt.tv/users/$usernameHint/progress")
-          .header("Cookie", cookieHeader)
-          .header("User-Agent", desktopUa)
-          .build()
-        client.newCall(progReq).execute().use { r ->
-          val html = r.body?.string().orEmpty()
-          if (html.isNotBlank()) {
-            csrfToken = Jsoup.parse(html).selectFirst("meta[name=csrf-token]")?.attr("content")?.trim().orEmpty()
-          }
-        }
-      }
+  /**
+   * Step 2 of Official Trakt OAuth Device Flow:
+   * Polls until the user enters the code at trakt.tv/activate and approves access.
+   */
+  suspend fun pollDeviceToken(
+    clientId: String,
+    clientSecret: String,
+    deviceCode: String
+  ): TraktTokenPollResult = withContext(Dispatchers.IO) {
+    try {
+      val payload = JSONObject()
+        .put("code", deviceCode.trim())
+        .put("client_id", clientId.trim())
+        .put("client_secret", clientSecret.trim())
+        .toString()
+        .toRequestBody(jsonMediaType)
 
-      val candidateEndpoints = buildList {
-        if (discoveredWatchPath.isNotBlank()) add(discoveredWatchPath)
-        add("https://trakt.tv/shows/$slug/seasons/${item.seasonNumber}/episodes/${item.episodeNumber}/watch")
-        if (episodeId.isNotBlank()) {
-          add("https://trakt.tv/episodes/$episodeId/watch")
-        }
-      }.distinct()
+      val req = buildTraktRequest("$API_BASE/oauth/device/token", clientId)
+        .post(payload)
+        .build()
 
-      val jsonBody = """{"watched_at":"now"}""".toRequestBody("application/json; charset=utf-8".toMediaType())
-
-      for (endpoint in candidateEndpoints) {
-        val postReq = Request.Builder()
-          .url(endpoint)
-          .post(jsonBody)
-          .header("Cookie", cookieHeader)
-          .header("User-Agent", desktopUa)
-          .header("Accept", "application/json, text/javascript, */*; q=0.01")
-          .header("X-Requested-With", "XMLHttpRequest")
-          .header("Origin", "https://trakt.tv")
-          .header("Referer", epUrl)
-          .apply {
-            if (csrfToken.isNotBlank()) {
-              header("X-CSRF-Token", csrfToken)
+      client.newCall(req).execute().use { resp ->
+        val raw = resp.body?.string().orEmpty()
+        when (resp.code) {
+          200 -> {
+            val obj = JSONObject(raw)
+            val accessToken = obj.optString("access_token", "").trim()
+            val refreshToken = obj.optString("refresh_token", "").trim()
+            val expiresInSec = obj.optLong("expires_in", 7_776_000L) // ~90 days default
+            val expiresAtMs = System.currentTimeMillis() + (expiresInSec * 1000L)
+            if (accessToken.isBlank()) {
+              TraktTokenPollResult.Error("لم يتم استلام رمز الوصول من Trakt")
+            } else {
+              AppDiagnosticsLogger.log("TraktAPI", "Trakt OAuth Device authorization succeeded")
+              TraktTokenPollResult.Authorized(
+                TraktOAuthTokens(
+                  accessToken = accessToken,
+                  refreshToken = refreshToken,
+                  expiresAtMs = expiresAtMs
+                )
+              )
             }
           }
-          .build()
-
-        client.newCall(postReq).execute().use { resp ->
-          AppDiagnosticsLogger.log(
-            "TraktSync",
-            "POST $endpoint -> HTTP ${resp.code}"
-          )
-          if (resp.isSuccessful || resp.code == 201 || resp.code == 204) {
-            return@withContext true
-          }
+          400 -> TraktTokenPollResult.Pending
+          404, 410 -> TraktTokenPollResult.Expired
+          409 -> TraktTokenPollResult.Expired
+          418 -> TraktTokenPollResult.Denied
+          429 -> TraktTokenPollResult.SlowDown
+          401, 403 -> TraktTokenPollResult.Error("تأكد من صحة Client ID و Client Secret")
+          else -> TraktTokenPollResult.Error("خطأ أثناء التحقق (HTTP ${resp.code})")
         }
       }
-      false
     } catch (e: Exception) {
-      AppDiagnosticsLogger.log("TraktSync", "markWatched error: ${e.message}", isError = true)
-      false
+      TraktTokenPollResult.Error(e.message ?: "خطأ في الشبكة")
     }
   }
 
-  private fun extractUsernameFromDoc(doc: Document, finalUrl: String): String {
-    val urlMatch = Regex("""/users/([^/?#]+)/""", RegexOption.IGNORE_CASE).find(finalUrl)
-    val fromUrl = urlMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
-    if (fromUrl.isNotBlank() && !fromUrl.equals("me", ignoreCase = true)) {
-      return fromUrl
-    }
-    val userLinks = doc.select("a[href^='/users/']")
-    for (link in userLinks) {
-      val href = link.attr("href")
-      val m = Regex("""^/users/([^/?#]+)""").find(href)
-      val candidate = m?.groupValues?.getOrNull(1)?.trim().orEmpty()
-      if (candidate.isNotBlank() && !candidate.equals("me", ignoreCase = true) && !candidate.equals("settings", ignoreCase = true)) {
-        return candidate
+  /**
+   * Refreshes an expired Trakt OAuth access_token silently using the stored refresh_token.
+   */
+  suspend fun refreshAccessToken(
+    clientId: String,
+    clientSecret: String,
+    refreshToken: String
+  ): TraktOAuthTokens? = withContext(Dispatchers.IO) {
+    if (clientId.isBlank() || clientSecret.isBlank() || refreshToken.isBlank()) return@withContext null
+    try {
+      val payload = JSONObject()
+        .put("refresh_token", refreshToken.trim())
+        .put("client_id", clientId.trim())
+        .put("client_secret", clientSecret.trim())
+        .put("redirect_uri", REDIRECT_URI_OOB)
+        .put("grant_type", "refresh_token")
+        .toString()
+        .toRequestBody(jsonMediaType)
+
+      val req = buildTraktRequest("$API_BASE/oauth/token", clientId)
+        .post(payload)
+        .build()
+
+      client.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return@withContext null
+        val obj = JSONObject(resp.body?.string().orEmpty())
+        val access = obj.optString("access_token", "").trim()
+        val refresh = obj.optString("refresh_token", refreshToken).trim()
+        val expiresInSec = obj.optLong("expires_in", 7_776_000L)
+        if (access.isBlank()) null
+        else TraktOAuthTokens(access, refresh, System.currentTimeMillis() + expiresInSec * 1000L)
       }
+    } catch (_: Exception) {
+      null
     }
-    return ""
   }
 
-  private fun parseProgressFromDocument(doc: Document): List<UpNextItem> {
-    val results = mutableListOf<UpNextItem>()
-    val seenSlugs = mutableSetOf<String>()
+  /**
+   * Fetches the authenticated user's real Trakt username via GET /users/settings.
+   */
+  suspend fun fetchUserProfile(clientId: String, accessToken: String): String = withContext(Dispatchers.IO) {
+    try {
+      val req = buildTraktRequest("$API_BASE/users/settings", clientId, accessToken).get().build()
+      client.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return@withContext ""
+        val obj = JSONObject(resp.body?.string().orEmpty())
+        val user = obj.optJSONObject("user")
+        user?.optString("username", "").orEmpty().trim()
+          .ifBlank { user?.optString("name", "").orEmpty().trim() }
+      }
+    } catch (_: Exception) {
+      ""
+    }
+  }
 
-    // Strategy 1: Standard Trakt Progress & Dashboard Up Next cards
-    val epLinks = doc.select("a[href*='/shows/'][href*='/seasons/'][href*='/episodes/']")
-    for ((index, epLink) in epLinks.withIndex()) {
-      val href = epLink.absUrl("href").ifBlank { "https://trakt.tv" + epLink.attr("href") }
-      val parsed = TraktUrlParser.parse(href) ?: continue
-      val season = parsed.seasonNumber ?: continue
-      val episode = parsed.episodeNumber ?: continue
-      val slug = parsed.slug.lowercase()
-      if (slug.isBlank() || !seenSlugs.add(slug)) continue
+  /**
+   * Performs a full official Trakt API v2 sync:
+   *  - Username (/users/settings)
+   *  - Up Next / Progress (/sync/watched/shows + /shows/{id}/progress/watched)
+   *  - Upcoming 14-day Calendar (/calendars/my/shows/{today}/14)
+   *  - Watchlist Shows & Movies (/sync/watchlist/shows + /movies)
+   *  - Poster enrichment via lightweight public TVMaze lookup (zero API key needed)
+   */
+  suspend fun syncFullAccountData(
+    clientId: String,
+    accessToken: String
+  ): TraktFullSyncResult = withContext(Dispatchers.IO) {
+    if (clientId.isBlank() || accessToken.isBlank()) {
+      return@withContext TraktFullSyncResult.Unauthorized
+    }
 
-      val card = findEnclosingCard(epLink)
+    try {
+      // 1. Validate token & fetch watched shows
+      val watchedReq = buildTraktRequest(
+        "$API_BASE/sync/watched/shows?extended=noseasons",
+        clientId,
+        accessToken
+      ).get().build()
 
-      val showTitle = extractShowTitleFromCard(card, slug)
-        .ifBlank { parsed.showTitle }
-      val rawEpTitle = extractEpisodeTitleFromCard(card, epLink)
-      val epTitle = cleanEpisodeTitle(rawEpTitle, season, episode)
-      val posterUrl = extractPosterFromCard(card)
-      val (watched, total) = extractProgressCountsFromCard(card)
-      val episodeId = card?.selectFirst("[data-episode-id]")?.attr("data-episode-id")
-        ?.ifBlank { card.attr("data-episode-id") }
-        .orEmpty()
+      val watchedArray = client.newCall(watchedReq).execute().use { resp ->
+        if (resp.code == 401 || resp.code == 403) {
+          return@withContext TraktFullSyncResult.Unauthorized
+        }
+        if (!resp.isSuccessful) {
+          return@withContext TraktFullSyncResult.Error("تعذر جلب بيانات Trakt (HTTP ${resp.code})")
+        }
+        JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+      }
 
-      results.add(
+      coroutineScope {
+        val usernameDeferred = async { fetchUserProfile(clientId, accessToken) }
+        val calendarDeferred = async { fetchCalendar(clientId, accessToken) }
+        val watchlistDeferred = async { fetchWatchlist(clientId, accessToken) }
+
+        // Sort watched shows by most recently watched and fetch progress for top 28 active shows
+        data class WatchedShowStub(
+          val traktId: Long,
+          val slug: String,
+          val imdbId: String,
+          val title: String,
+          val lastWatchedAt: String,
+          val orderIndex: Int
+        )
+
+        val stubs = mutableListOf<WatchedShowStub>()
+        for (i in 0 until watchedArray.length()) {
+          val entry = watchedArray.optJSONObject(i) ?: continue
+          val showObj = entry.optJSONObject("show") ?: continue
+          val ids = showObj.optJSONObject("ids") ?: continue
+          val traktId = ids.optLong("trakt", 0L)
+          val title = showObj.optString("title", "").trim()
+          if (traktId <= 0L || title.isBlank()) continue
+          stubs.add(
+            WatchedShowStub(
+              traktId = traktId,
+              slug = ids.optString("slug", "").trim(),
+              imdbId = ids.optString("imdb", "").trim(),
+              title = title,
+              lastWatchedAt = entry.optString("last_watched_at", ""),
+              orderIndex = i
+            )
+          )
+        }
+
+        val sortedStubs = stubs
+          .sortedByDescending { it.lastWatchedAt }
+          .take(28)
+
+        val semaphore = Semaphore(5)
+        val upNextDeferreds = sortedStubs.mapIndexed { idx, stub ->
+          async {
+            semaphore.withPermit {
+              fetchShowProgress(
+                clientId = clientId,
+                accessToken = accessToken,
+                traktShowId = stub.traktId,
+                slug = stub.slug,
+                imdbId = stub.imdbId,
+                showTitle = stub.title,
+                orderIndex = idx
+              )
+            }
+          }
+        }
+
+        val upNextItems = upNextDeferreds.awaitAll().filterNotNull()
+        val username = usernameDeferred.await()
+        val calendarItems = calendarDeferred.await()
+        val watchlistItems = watchlistDeferred.await()
+
+        AppDiagnosticsLogger.log(
+          "TraktAPI",
+          "Synced Trakt @$username: upNext=${upNextItems.size}, calendar=${calendarItems.size}, watchlist=${watchlistItems.size}"
+        )
+
+        TraktFullSyncResult.Success(
+          username = username,
+          upNextItems = upNextItems,
+          calendarItems = calendarItems,
+          watchlistItems = watchlistItems
+        )
+      }
+    } catch (e: Exception) {
+      AppDiagnosticsLogger.log("TraktAPI", "Full sync error: ${e.message}", isError = true)
+      TraktFullSyncResult.Error("خطأ في المزامنة: ${e.message ?: "تحقق من الاتصال"}")
+    }
+  }
+
+  private suspend fun fetchShowProgress(
+    clientId: String,
+    accessToken: String,
+    traktShowId: Long,
+    slug: String,
+    imdbId: String,
+    showTitle: String,
+    orderIndex: Int
+  ): UpNextItem? {
+    return try {
+      val req = buildTraktRequest(
+        "$API_BASE/shows/$traktShowId/progress/watched?hidden=false&specials=false&count_specials=false",
+        clientId,
+        accessToken
+      ).get().build()
+
+      client.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return null
+        val obj = JSONObject(resp.body?.string().orEmpty())
+        val nextEp = obj.optJSONObject("next_episode") ?: return null
+        val season = nextEp.optInt("season", 0)
+        val epNum = nextEp.optInt("number", 0)
+        if (season <= 0 || epNum <= 0) return null
+
+        val aired = obj.optInt("aired", 0).coerceAtLeast(0)
+        val completed = obj.optInt("completed", 0).coerceAtLeast(0)
+        val epTitle = nextEp.optString("title", "").trim()
+        val epTraktId = nextEp.optJSONObject("ids")?.optLong("trakt", 0L)
+          ?.takeIf { it > 0L }?.toString().orEmpty()
+        val poster = resolveShowPoster(imdbId, showTitle)
+
         UpNextItem(
-          id = "trakt_$slug",
+          id = "trakt_$traktShowId",
           seriesKey = TvPreferencesRepository.buildNormalizedContentKey(showTitle, null, null, isSeries = false),
           showTitle = showTitle,
           seasonNumber = season,
-          episodeNumber = episode,
+          episodeNumber = epNum,
           episodeTitle = epTitle,
-          posterUrl = posterUrl,
-          watchedCount = watched,
-          totalCount = total,
+          posterUrl = poster,
+          watchedCount = completed,
+          totalCount = aired,
           traktSlug = slug,
-          traktEpisodeUrl = href,
-          traktEpisodeId = episodeId,
+          traktShowId = traktShowId,
+          imdbId = imdbId,
+          traktEpisodeUrl = if (slug.isNotBlank()) "https://trakt.tv/shows/$slug/seasons/$season/episodes/$epNum" else "",
+          traktEpisodeId = epTraktId,
           fromTrakt = true,
           preferredPortal = StreamingPortal.WATCH_SERIES,
-          updatedAtMs = System.currentTimeMillis() - (index * 10L)
+          updatedAtMs = System.currentTimeMillis() - (orderIndex * 20L)
         )
-      )
+      }
+    } catch (_: Exception) {
+      null
     }
+  }
 
+  private suspend fun fetchCalendar(
+    clientId: String,
+    accessToken: String
+  ): List<TraktCalendarItem> {
+    return try {
+      val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+      val req = buildTraktRequest(
+        "$API_BASE/calendars/my/shows/$today/14",
+        clientId,
+        accessToken
+      ).get().build()
+
+      val arr = client.newCall(req).execute().use { resp ->
+        if (!resp.isSuccessful) return emptyList()
+        JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+      }
+
+      val results = mutableListOf<TraktCalendarItem>()
+      val count = minOf(arr.length(), 20)
+      for (i in 0 until count) {
+        val obj = arr.optJSONObject(i) ?: continue
+        val show = obj.optJSONObject("show") ?: continue
+        val ep = obj.optJSONObject("episode") ?: continue
+        val showIds = show.optJSONObject("ids")
+        val epIds = ep.optJSONObject("ids")
+        val showTitle = show.optString("title", "").trim()
+        val season = ep.optInt("season", 0)
+        val epNum = ep.optInt("number", 0)
+        if (showTitle.isBlank() || season <= 0 || epNum <= 0) continue
+
+        val traktShowId = showIds?.optLong("trakt", 0L) ?: 0L
+        val imdbId = showIds?.optString("imdb", "").orEmpty().trim()
+        val poster = resolveShowPoster(imdbId, showTitle)
+        results.add(
+          TraktCalendarItem(
+            id = "cal_${traktShowId}_s${season}e${epNum}_$i",
+            showTitle = showTitle,
+            seasonNumber = season,
+            episodeNumber = epNum,
+            episodeTitle = ep.optString("title", "").trim(),
+            firstAiredIso = obj.optString("first_aired", "").trim(),
+            posterUrl = poster,
+            traktShowId = traktShowId,
+            traktEpisodeId = epIds?.optLong("trakt", 0L)?.takeIf { it > 0L }?.toString().orEmpty(),
+            imdbId = imdbId
+          )
+        )
+      }
+      results
+    } catch (_: Exception) {
+      emptyList()
+    }
+  }
+
+  private suspend fun fetchWatchlist(
+    clientId: String,
+    accessToken: String
+  ): List<TraktWatchlistItem> {
+    val results = mutableListOf<TraktWatchlistItem>()
+    try {
+      // Shows watchlist
+      val showsReq = buildTraktRequest("$API_BASE/sync/watchlist/shows", clientId, accessToken).get().build()
+      client.newCall(showsReq).execute().use { resp ->
+        if (resp.isSuccessful) {
+          val arr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+          for (i in 0 until minOf(arr.length(), 20)) {
+            val show = arr.optJSONObject(i)?.optJSONObject("show") ?: continue
+            val ids = show.optJSONObject("ids")
+            val title = show.optString("title", "").trim()
+            val traktId = ids?.optLong("trakt", 0L) ?: 0L
+            val imdbId = ids?.optString("imdb", "").orEmpty().trim()
+            if (title.isBlank()) continue
+            results.add(
+              TraktWatchlistItem(
+                id = "wl_show_${traktId}_$i",
+                title = title,
+                mediaType = "show",
+                year = show.optInt("year", 0).takeIf { it > 1900 }?.toString().orEmpty(),
+                posterUrl = resolveShowPoster(imdbId, title),
+                traktId = traktId,
+                imdbId = imdbId
+              )
+            )
+          }
+        }
+      }
+
+      // Movies watchlist
+      val moviesReq = buildTraktRequest("$API_BASE/sync/watchlist/movies", clientId, accessToken).get().build()
+      client.newCall(moviesReq).execute().use { resp ->
+        if (resp.isSuccessful) {
+          val arr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+          for (i in 0 until minOf(arr.length(), 15)) {
+            val movie = arr.optJSONObject(i)?.optJSONObject("movie") ?: continue
+            val ids = movie.optJSONObject("ids")
+            val title = movie.optString("title", "").trim()
+            val traktId = ids?.optLong("trakt", 0L) ?: 0L
+            val imdbId = ids?.optString("imdb", "").orEmpty().trim()
+            if (title.isBlank()) continue
+            results.add(
+              TraktWatchlistItem(
+                id = "wl_movie_${traktId}_$i",
+                title = title,
+                mediaType = "movie",
+                year = movie.optInt("year", 0).takeIf { it > 1900 }?.toString().orEmpty(),
+                posterUrl = "",
+                traktId = traktId,
+                imdbId = imdbId
+              )
+            )
+          }
+        }
+      }
+    } catch (_: Exception) {}
     return results
   }
 
-  private fun findEnclosingCard(el: Element): Element? {
-    var curr: Element? = el.parent()
-    var best: Element? = el.parent()
-    var steps = 0
-    while (curr != null && steps < 6) {
-      val cls = curr.className().lowercase()
-      val tag = curr.tagName().lowercase()
-      if (cls.contains("grid-item") ||
-        cls.contains("progress-wrapper") ||
-        cls.contains("fanart") ||
-        cls.contains("up-next") ||
-        curr.hasAttr("data-show-id") ||
-        curr.hasAttr("data-episode-id") ||
-        tag == "article" ||
-        tag == "li"
-      ) {
-        return curr
+  /**
+   * Marks an episode as watched directly on the user's Trakt account via POST /sync/history.
+   */
+  suspend fun markEpisodeWatched(
+    clientId: String,
+    accessToken: String,
+    item: UpNextItem
+  ): Boolean = withContext(Dispatchers.IO) {
+    if (clientId.isBlank() || accessToken.isBlank()) return@withContext false
+    try {
+      val watchedAtIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("UTC")
+      }.format(Date())
+
+      val bodyJson = JSONObject()
+      val epTraktIdLong = item.traktEpisodeId.toLongOrNull() ?: 0L
+      if (epTraktIdLong > 0L) {
+        bodyJson.put(
+          "episodes",
+          JSONArray().put(
+            JSONObject()
+              .put("watched_at", watchedAtIso)
+              .put("ids", JSONObject().put("trakt", epTraktIdLong))
+          )
+        )
+      } else {
+        val showObj = JSONObject().put("title", item.showTitle)
+        val idsObj = JSONObject()
+        if (item.traktShowId > 0L) idsObj.put("trakt", item.traktShowId)
+        if (item.traktSlug.isNotBlank()) idsObj.put("slug", item.traktSlug)
+        if (item.imdbId.isNotBlank()) idsObj.put("imdb", item.imdbId)
+        if (idsObj.length() > 0) showObj.put("ids", idsObj)
+
+        val epObj = JSONObject()
+          .put("number", item.episodeNumber)
+          .put("watched_at", watchedAtIso)
+        val seasonObj = JSONObject()
+          .put("number", item.seasonNumber)
+          .put("episodes", JSONArray().put(epObj))
+        showObj.put("seasons", JSONArray().put(seasonObj))
+
+        bodyJson.put("shows", JSONArray().put(showObj))
       }
-      if (curr.select("img").isNotEmpty()) {
-        best = curr
+
+      val req = buildTraktRequest("$API_BASE/sync/history", clientId, accessToken)
+        .post(bodyJson.toString().toRequestBody(jsonMediaType))
+        .build()
+
+      client.newCall(req).execute().use { resp ->
+        AppDiagnosticsLogger.log("TraktAPI", "POST /sync/history -> HTTP ${resp.code}")
+        resp.isSuccessful || resp.code == 201
       }
-      curr = curr.parent()
-      steps++
+    } catch (e: Exception) {
+      AppDiagnosticsLogger.log("TraktAPI", "markEpisodeWatched failed: ${e.message}", isError = true)
+      false
     }
-    return best
   }
 
-  private fun extractShowTitleFromCard(card: Element?, slug: String): String {
-    if (card == null) return ""
-    val selectors = listOf(
-      "h3 a",
-      "h3",
-      ".titles h3",
-      "a[href='/shows/$slug']",
-      "a[href$='/shows/$slug']",
-      ".show-title"
+  /**
+   * Immediately fetches the updated next_episode for a single show right after marking an episode watched
+   * so season rollovers (e.g., S01E10 -> S02E01) and real episode titles appear immediately.
+   */
+  suspend fun fetchSingleShowNextUp(
+    clientId: String,
+    accessToken: String,
+    item: UpNextItem
+  ): UpNextItem? = withContext(Dispatchers.IO) {
+    if (clientId.isBlank() || accessToken.isBlank() || item.traktShowId <= 0L) return@withContext null
+    fetchShowProgress(
+      clientId = clientId,
+      accessToken = accessToken,
+      traktShowId = item.traktShowId,
+      slug = item.traktSlug,
+      imdbId = item.imdbId,
+      showTitle = item.showTitle,
+      orderIndex = 0
+    )?.copy(
+      posterUrl = item.posterUrl.ifBlank { resolveShowPoster(item.imdbId, item.showTitle) },
+      preferredPortal = item.preferredPortal
     )
-    for (sel in selectors) {
-      val text = card.selectFirst(sel)?.text()?.trim().orEmpty()
-      if (text.isNotBlank() && !text.matches(Regex("""^\d+x\d+.*""", RegexOption.IGNORE_CASE))) {
-        return text
+  }
+
+  /**
+   * Resolves a real high-res show poster via TVMaze's free public API (no API key required)
+   * using IMDb ID first, then title fallback, with in-memory caching.
+   */
+  private fun resolveShowPoster(imdbId: String, showTitle: String): String {
+    val cacheKey = imdbId.ifBlank { showTitle.lowercase(Locale.US) }
+    posterCache[cacheKey]?.let { return it }
+
+    val candidateUrls = buildList {
+      if (imdbId.startsWith("tt")) {
+        add("https://api.tvmaze.com/lookup/shows?imdb=${URLEncoder.encode(imdbId, "UTF-8")}")
+      }
+      if (showTitle.isNotBlank()) {
+        add("https://api.tvmaze.com/singlesearch/shows?q=${URLEncoder.encode(showTitle, "UTF-8")}")
       }
     }
-    val imgAlt = card.selectFirst("img[alt]")?.attr("alt")?.trim().orEmpty()
-    if (imgAlt.isNotBlank() && imgAlt.length < 80) return imgAlt
+
+    for (url in candidateUrls) {
+      try {
+        val req = Request.Builder()
+          .url(url)
+          .header("Accept", "application/json")
+          .build()
+        client.newCall(req).execute().use { resp ->
+          if (!resp.isSuccessful) return@use
+          val obj = JSONObject(resp.body?.string().orEmpty())
+          val img = obj.optJSONObject("image")
+          val poster = img?.optString("medium", "")?.ifBlank { img.optString("original", "") }.orEmpty().trim()
+          if (poster.startsWith("http")) {
+            val httpsPoster = poster.replaceFirst("http://", "https://")
+            posterCache[cacheKey] = httpsPoster
+            return httpsPoster
+          }
+        }
+      } catch (_: Exception) {}
+    }
+
+    posterCache[cacheKey] = ""
     return ""
-  }
-
-  private fun extractEpisodeTitleFromCard(card: Element?, epLink: Element): String {
-    val linkText = epLink.text().trim()
-    if (linkText.isNotBlank() && !linkText.equals("watch", ignoreCase = true)) {
-      return linkText
-    }
-    if (card == null) return ""
-    val selectors = listOf(
-      ".main-title",
-      "h4 a",
-      ".titles h4",
-      ".episode-title",
-      ".titles h5"
-    )
-    for (sel in selectors) {
-      val text = card.selectFirst(sel)?.text()?.trim().orEmpty()
-      if (text.isNotBlank()) return text
-    }
-    return ""
-  }
-
-  private fun extractPosterFromCard(card: Element?): String {
-    if (card == null) return ""
-    val imgs = card.select("img")
-    for (img in imgs) {
-      val candidates = listOf(
-        img.attr("data-original"),
-        img.attr("data-src"),
-        img.absUrl("src"),
-        img.attr("src")
-      )
-      for (c in candidates) {
-        val norm = normalizePosterUrl(c)
-        if (norm.isNotBlank()) return norm
-      }
-    }
-    return ""
-  }
-
-  private fun extractProgressCountsFromCard(card: Element?): Pair<Int, Int> {
-    if (card == null) return 0 to 0
-    val dataWatched = card.attr("data-watched").toIntOrNull()
-    val dataTotal = card.attr("data-total").toIntOrNull()
-    if (dataWatched != null && dataTotal != null && dataTotal > 0) {
-      return dataWatched to dataTotal
-    }
-
-    val text = card.text()
-    // Matches "25/145", "25 / 145", "25 of 145"
-    Regex("""(\d{1,4})\s*(?:/|of)\s*(\d{1,4})""", RegexOption.IGNORE_CASE).find(text)?.let { m ->
-      val w = m.groupValues[1].toIntOrNull() ?: 0
-      val t = m.groupValues[2].toIntOrNull() ?: 0
-      if (t in 1..9999 && w <= t) {
-        return w to t
-      }
-    }
-    // Matches "25 watched" + "120 left"
-    val wMatch = Regex("""(\d{1,4})\s+watched""", RegexOption.IGNORE_CASE).find(text)
-    val lMatch = Regex("""(\d{1,4})\s+(?:left|remaining|episodes?\s+left)""", RegexOption.IGNORE_CASE).find(text)
-    if (wMatch != null && lMatch != null) {
-      val w = wMatch.groupValues[1].toIntOrNull() ?: 0
-      val l = lMatch.groupValues[1].toIntOrNull() ?: 0
-      if (w + l > 0) return w to (w + l)
-    }
-
-    // Percentage fallback from progress bar width (e.g., "width: 65%")
-    val pctEl = card.selectFirst(".progress-bar, [aria-valuenow]")
-    val pct = pctEl?.attr("aria-valuenow")?.toIntOrNull()
-      ?: Regex("""width\s*:\s*(\d{1,3})%""").find(pctEl?.attr("style").orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()
-    if (pct != null && pct in 0..100) {
-      return pct to 100
-    }
-    return 0 to 0
-  }
-
-  private fun cleanEpisodeTitle(raw: String, season: Int, episode: Int): String {
-    return raw
-      .replace(Regex("""^\s*(?:S?0?$season\s*[xXeE.]\s*0?$episode|S\d{1,2}\s*\.?\s*E\d{1,3}|\d{1,2}x\d{1,3})\s*[-–:•]?\s*""", RegexOption.IGNORE_CASE), "")
-      .replace(Regex("""\s+"""), " ")
-      .trim()
-  }
-
-  private fun normalizePosterUrl(raw: String): String {
-    val trimmed = raw.trim()
-    if (trimmed.isBlank()) return ""
-    val lower = trimmed.lowercase()
-    if (lower.startsWith("data:") ||
-      lower.contains("placeholder") ||
-      lower.contains("blank.gif") ||
-      lower.contains("avatar") ||
-      lower.contains("gravatar")
-    ) {
-      return ""
-    }
-    return when {
-      trimmed.startsWith("//") -> "https:$trimmed"
-      trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-      trimmed.startsWith("/") -> "https://trakt.tv$trimmed"
-      else -> ""
-    }
   }
 
   companion object {
-    /**
-     * Injected into the live logged-in Trakt WebView to extract all Next-to-Watch Progress items
-     * straight from the rendered DOM (including dynamically hydrated React/Turbo cards).
-     */
-    const val TRAKT_DOM_EXTRACTOR_JS = """
-      (function() {
-        try {
-          var csrfMeta = document.querySelector('meta[name="csrf-token"]');
-          var csrfToken = csrfMeta ? (csrfMeta.getAttribute('content') || '') : '';
-          var username = '';
-          var pathMatch = window.location.pathname.match(/^\/users\/([^\/?#]+)/i);
-          if (pathMatch && pathMatch[1] && pathMatch[1].toLowerCase() !== 'me') {
-            username = pathMatch[1];
-          }
-          if (!username) {
-            var userLinks = document.querySelectorAll('a[href^="/users/"]');
-            for (var u = 0; u < userLinks.length; u++) {
-              var um = (userLinks[u].getAttribute('href') || '').match(/^\/users\/([^\/?#]+)/i);
-              if (um && um[1] && um[1].toLowerCase() !== 'me' && um[1].toLowerCase() !== 'settings') {
-                username = um[1];
-                break;
-              }
-            }
-          }
-
-          var items = [];
-          var seen = {};
-          var epLinks = document.querySelectorAll('a[href*="/shows/"][href*="/seasons/"][href*="/episodes/"]');
-
-          for (var i = 0; i < epLinks.length; i++) {
-            var a = epLinks[i];
-            var href = a.href || a.getAttribute('href') || '';
-            var m = href.match(/\/shows\/([^\/?#]+)\/seasons\/(\d+)\/episodes\/(\d+)/i);
-            if (!m) continue;
-            var slug = m[1].toLowerCase();
-            var season = parseInt(m[2], 10);
-            var episode = parseInt(m[3], 10);
-            if (!slug || !season || !episode || seen[slug]) continue;
-            seen[slug] = true;
-
-            // Walk up to find the card wrapper
-            var card = a.closest('.grid-item, .progress-wrapper, .fanart, [data-show-id], [data-episode-id], article, li') || a.parentElement;
-            if (card && !card.querySelector('img') && card.parentElement) {
-              card = card.parentElement;
-            }
-
-            // Show title
-            var showTitle = '';
-            if (card) {
-              var titleEl = card.querySelector('h3 a, h3, .titles h3, a[href="/shows/' + slug + '"], .show-title');
-              if (titleEl) showTitle = (titleEl.innerText || titleEl.textContent || '').trim();
-              if (!showTitle) {
-                var altImg = card.querySelector('img[alt]');
-                if (altImg) showTitle = (altImg.getAttribute('alt') || '').trim();
-              }
-            }
-
-            // Episode title
-            var episodeTitle = (a.innerText || a.textContent || '').trim();
-            if ((!episodeTitle || episodeTitle.toLowerCase() === 'watch') && card) {
-              var epEl = card.querySelector('.main-title, h4 a, .titles h4, .episode-title, .titles h5');
-              if (epEl) episodeTitle = (epEl.innerText || epEl.textContent || '').trim();
-            }
-
-            // Poster URL
-            var posterUrl = '';
-            if (card) {
-              var imgs = card.querySelectorAll('img');
-              for (var k = 0; k < imgs.length; k++) {
-                var img = imgs[k];
-                var cand = img.getAttribute('data-original') || img.getAttribute('data-src') || img.currentSrc || img.src || '';
-                if (cand && cand.indexOf('data:') !== 0 && cand.indexOf('placeholder') === -1 && cand.indexOf('blank.gif') === -1 && cand.indexOf('avatar') === -1) {
-                  posterUrl = cand;
-                  break;
-                }
-              }
-              if (!posterUrl) {
-                var bgEl = card.querySelector('[style*="background-image"]');
-                if (bgEl) {
-                  var bgm = (bgEl.getAttribute('style') || '').match(/url\(['"]?([^'")]+)['"]?\)/i);
-                  if (bgm && bgm[1]) posterUrl = bgm[1];
-                }
-              }
-            }
-
-            // Watched / Total progress counts
-            var watchedCount = 0;
-            var totalCount = 0;
-            if (card) {
-              var dw = parseInt(card.getAttribute('data-watched') || '', 10);
-              var dt = parseInt(card.getAttribute('data-total') || '', 10);
-              if (!isNaN(dw) && !isNaN(dt) && dt > 0) {
-                watchedCount = dw;
-                totalCount = dt;
-              } else {
-                var txt = (card.innerText || card.textContent || '');
-                var frac = txt.match(/(\d{1,4})\s*(?:\/|of)\s*(\d{1,4})/i);
-                if (frac) {
-                  var w = parseInt(frac[1], 10);
-                  var t = parseInt(frac[2], 10);
-                  if (t > 0 && w <= t) {
-                    watchedCount = w;
-                    totalCount = t;
-                  }
-                } else {
-                  var wm = txt.match(/(\d{1,4})\s+watched/i);
-                  var lm = txt.match(/(\d{1,4})\s+(?:left|remaining)/i);
-                  if (wm && lm) {
-                    watchedCount = parseInt(wm[1], 10);
-                    totalCount = watchedCount + parseInt(lm[1], 10);
-                  } else {
-                    var bar = card.querySelector('.progress-bar, [aria-valuenow]');
-                    if (bar) {
-                      var av = parseInt(bar.getAttribute('aria-valuenow') || '', 10);
-                      if (!isNaN(av)) {
-                        watchedCount = av;
-                        totalCount = 100;
-                      } else {
-                        var sm = (bar.getAttribute('style') || '').match(/width\s*:\s*(\d{1,3})%/i);
-                        if (sm) {
-                          watchedCount = parseInt(sm[1], 10);
-                          totalCount = 100;
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-
-            var episodeId = '';
-            if (card) {
-              var idEl = card.querySelector('[data-episode-id]') || card;
-              episodeId = idEl.getAttribute('data-episode-id') || '';
-            }
-
-            items.push({
-              slug: slug,
-              showTitle: showTitle,
-              season: season,
-              episode: episode,
-              episodeTitle: episodeTitle,
-              posterUrl: posterUrl,
-              watchedCount: watchedCount,
-              totalCount: totalCount,
-              episodeUrl: href.indexOf('http') === 0 ? href : ('https://trakt.tv' + href),
-              episodeId: episodeId
-            });
-          }
-
-          var payload = JSON.stringify({
-            username: username,
-            csrfToken: csrfToken,
-            pageUrl: window.location.href || '',
-            items: items
-          });
-          if (window.AsserTraktBridge && typeof window.AsserTraktBridge.onTraktExtracted === 'function') {
-            window.AsserTraktBridge.onTraktExtracted(payload);
-          }
-          return items.length;
-        } catch (e) {
-          return -1;
-        }
-      })();
-    """
+    const val API_BASE = "https://api.trakt.tv"
+    const val REDIRECT_URI_OOB = "urn:ietf:wg:oauth:2.0:oob"
+    const val TRAKT_CREATE_APP_URL = "https://trakt.tv/oauth/applications/new"
+    const val TRAKT_ACTIVATE_URL = "https://trakt.tv/activate"
   }
 }

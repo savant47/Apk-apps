@@ -143,12 +143,37 @@ data class UpNextItem(
   val watchedCount: Int = 0,
   val totalCount: Int = 0,
   val traktSlug: String = "",
+  val traktShowId: Long = 0L,
+  val imdbId: String = "",
   val traktEpisodeUrl: String = "",
   val traktEpisodeId: String = "",
   val fromTrakt: Boolean = false,
   val preferredPortal: StreamingPortal = StreamingPortal.WATCH_SERIES,
   val watchUrl: String = "",
   val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+data class TraktCalendarItem(
+  val id: String,
+  val showTitle: String,
+  val seasonNumber: Int,
+  val episodeNumber: Int,
+  val episodeTitle: String = "",
+  val firstAiredIso: String = "",
+  val posterUrl: String = "",
+  val traktShowId: Long = 0L,
+  val traktEpisodeId: String = "",
+  val imdbId: String = ""
+)
+
+data class TraktWatchlistItem(
+  val id: String,
+  val title: String,
+  val mediaType: String = "show", // "show" or "movie"
+  val year: String = "",
+  val posterUrl: String = "",
+  val traktId: Long = 0L,
+  val imdbId: String = ""
 )
 
 data class TraktParsedLink(
@@ -159,5 +184,6 @@ data class TraktParsedLink(
   val isMovie: Boolean,
   val originalUrl: String
 )
+
 
 

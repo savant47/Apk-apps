@@ -42,6 +42,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
@@ -59,6 +61,7 @@ import androidx.compose.material.icons.filled.QueuePlayNext
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Tv
@@ -133,6 +136,8 @@ import com.example.model.CatalogMediaItem
 import com.example.model.HistoryEntry
 import com.example.model.SearchResultItem
 import com.example.model.StreamingPortal
+import com.example.model.TraktCalendarItem
+import com.example.model.TraktWatchlistItem
 import com.example.model.UpNextItem
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
@@ -177,6 +182,9 @@ fun HomeDashboardScreen(
   onOpenTrakt: () -> Unit = {},
   onPlayUpNext: (UpNextItem) -> Unit = {},
   onMarkUpNextWatched: ((UpNextItem) -> Unit)? = null,
+  onPlayTraktCalendarItem: (TraktCalendarItem) -> Unit = {},
+  onPlayTraktWatchlistItem: (TraktWatchlistItem) -> Unit = {},
+  onSyncTraktFromHome: () -> Unit = {},
   onResumeHistory: ((HistoryEntry) -> Unit)? = null,
   modifier: Modifier = Modifier,
   searchService: SearchAndSubtitlesService = remember { SearchAndSubtitlesService() }
@@ -210,6 +218,10 @@ fun HomeDashboardScreen(
 
   val history by repository.historyFlow.collectAsState()
   val upNextQueue by repository.upNextFlow.collectAsState()
+  val traktConnected by repository.traktConnectedFlow.collectAsState()
+  val traktUsername by repository.traktUsernameFlow.collectAsState()
+  val traktCalendar by repository.traktCalendarFlow.collectAsState()
+  val traktWatchlist by repository.traktWatchlistFlow.collectAsState()
   val displayMode by repository.displayModeFlow.collectAsState()
 
   // Load Live Daily Catalog via single lightweight pass after first frame paints
@@ -434,6 +446,15 @@ fun HomeDashboardScreen(
         }
       }
 
+      // Home Trakt Integration Banner (when Trakt is NOT linked yet — matches user's design!)
+      if (!traktConnected) {
+        item {
+          HomeTraktConnectBannerCard(
+            onConnectClick = onOpenTrakt
+          )
+        }
+      }
+
       // Up Next Queue Row (التالي للمشاهدة) — Real Trakt Synced & Local Auto-Tracked Next Episodes
       if (upNextQueue.isNotEmpty()) {
         item {
@@ -448,6 +469,8 @@ fun HomeDashboardScreen(
               }
             },
             onOpenTrakt = onOpenTrakt,
+            onSyncTrakt = if (traktConnected) onSyncTraktFromHome else null,
+            traktUsername = if (traktConnected) traktUsername else "",
             onDeleteItem = { item ->
               repository.removeUpNextItem(item.id)
             },
@@ -483,6 +506,28 @@ fun HomeDashboardScreen(
             onClearAll = {
               repository.clearHistory()
             }
+          )
+        }
+      }
+
+      // Home Trakt Upcoming Calendar Row (جدول الحلقات القادمة)
+      if (traktConnected && traktCalendar.isNotEmpty()) {
+        item {
+          HomeTraktCalendarSection(
+            items = traktCalendar,
+            onPlayItem = onPlayTraktCalendarItem,
+            onOpenTrakt = onOpenTrakt
+          )
+        }
+      }
+
+      // Home Trakt Watchlist Row (قائمتي في Trakt)
+      if (traktConnected && traktWatchlist.isNotEmpty()) {
+        item {
+          HomeTraktWatchlistSection(
+            items = traktWatchlist,
+            onPlayItem = onPlayTraktWatchlistItem,
+            onOpenTrakt = onOpenTrakt
           )
         }
       }
@@ -2911,6 +2956,8 @@ fun UpNextQueueSection(
   onPlayItem: (UpNextItem) -> Unit,
   onMarkWatched: (UpNextItem) -> Unit,
   onOpenTrakt: () -> Unit = {},
+  onSyncTrakt: (() -> Unit)? = null,
+  traktUsername: String = "",
   onDeleteItem: (UpNextItem) -> Unit,
   onClearAll: () -> Unit
 ) {
@@ -2936,10 +2983,12 @@ fun UpNextQueueSection(
           modifier = Modifier.size(22.dp)
         )
         Text(
-          text = "التالي للمشاهدة",
+          text = if (traktUsername.isNotBlank()) "التالي للمشاهدة (@$traktUsername)" else "التالي للمشاهدة",
           color = Color.White,
-          fontSize = 19.sp,
-          fontWeight = FontWeight.ExtraBold
+          fontSize = 18.sp,
+          fontWeight = FontWeight.ExtraBold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
         )
         Surface(
           color = CinemaSuccess.copy(alpha = 0.2f),
@@ -2960,6 +3009,27 @@ fun UpNextQueueSection(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
+        if (onSyncTrakt != null) {
+          Surface(
+            onClick = onSyncTrakt,
+            color = CinemaSurface,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.7f)),
+            modifier = Modifier
+              .heightIn(min = 34.dp)
+              .testTag("btn_sync_trakt_from_home")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              Icon(Icons.Default.Sync, contentDescription = "مزامنة", tint = CinemaSuccess, modifier = Modifier.size(15.dp))
+              Text("تحديث", color = CinemaSuccess, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
+            }
+          }
+        }
+
         Surface(
           onClick = onOpenTrakt,
           color = CinemaSurfaceVariant,
@@ -2975,7 +3045,7 @@ fun UpNextQueueSection(
             horizontalArrangement = Arrangement.spacedBy(4.dp)
           ) {
             Icon(Icons.Default.TrackChanges, contentDescription = null, tint = CinemaPrimary, modifier = Modifier.size(15.dp))
-            Text("جدول Trakt", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
+            Text("Trakt", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
           }
         }
 
@@ -3235,6 +3305,306 @@ fun UpNextQueueSection(
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun HomeTraktConnectBannerCard(
+  onConnectClick: () -> Unit
+) {
+  Surface(
+    shape = RoundedCornerShape(18.dp),
+    border = BorderStroke(1.5.dp, Color(0xFF7F1D1D)),
+    color = Color.Transparent,
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(18.dp))
+      .background(
+        Brush.horizontalGradient(
+          colors = listOf(Color(0xFF141820), Color(0xFF2D1218))
+        )
+      )
+      .testTag("home_trakt_connect_banner")
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        Box(
+          modifier = Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFED1C24)),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = Icons.Default.QueuePlayNext,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(26.dp)
+          )
+        }
+
+        Column(
+          modifier = Modifier.weight(1f),
+          verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+          Text(
+            text = "اربط حسابك على Trakt بالكود",
+            color = Color.White,
+            fontSize = 17.5.sp,
+            fontWeight = FontWeight.Black
+          )
+          Surface(
+            color = Color(0x1F10B981),
+            shape = RoundedCornerShape(50),
+            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.65f))
+          ) {
+            Text(
+              text = "كاش محلي + متابعة تلقائية",
+              color = Color(0xFF34D399),
+              fontSize = 11.5.sp,
+              fontWeight = FontWeight.ExtraBold,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+            )
+          }
+        }
+      }
+
+      Text(
+        text = "اربط حسابك بكود التفعيل الرسمي لتظهر هنا حلقاتك القادمة وجدول الحلقات وقائمتك الخاصة تلقائياً مع استكمال المشاهدة.",
+        color = Color(0xFFCBD5E1),
+        fontSize = 13.5.sp,
+        lineHeight = 20.sp
+      )
+
+      Button(
+        onClick = onConnectClick,
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED1C24)),
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 11.dp),
+        modifier = Modifier
+          .heightIn(min = 46.dp)
+          .testTag("btn_home_connect_trakt_code")
+      ) {
+        Icon(Icons.Default.Key, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("ربط Trakt بالكود", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
+      }
+    }
+  }
+}
+
+@Composable
+private fun HomeTraktCalendarSection(
+  items: List<TraktCalendarItem>,
+  onPlayItem: (TraktCalendarItem) -> Unit,
+  onOpenTrakt: () -> Unit
+) {
+  val context = LocalContext.current
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("home_trakt_calendar_section")
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(21.dp))
+        Text("جدول الحلقات القادمة", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+      }
+      Surface(
+        onClick = onOpenTrakt,
+        color = CinemaSurface,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, CinemaBorder)
+      ) {
+        Text(
+          text = "الكل (${items.size})",
+          color = CinemaAccent,
+          fontSize = 12.5.sp,
+          fontWeight = FontWeight.Bold,
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+      }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    LazyRow(
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      contentPadding = PaddingValues(horizontal = 4.dp)
+    ) {
+      items(items.take(15), key = { it.id }) { cal ->
+        val sPad = cal.seasonNumber.toString().padStart(2, '0')
+        val ePad = cal.episodeNumber.toString().padStart(2, '0')
+        Surface(
+          onClick = { onPlayItem(cal) },
+          color = CinemaSurface,
+          shape = RoundedCornerShape(14.dp),
+          border = BorderStroke(1.dp, CinemaBorder),
+          modifier = Modifier.width(230.dp)
+        ) {
+          Row(
+            modifier = Modifier.padding(9.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            if (cal.posterUrl.isNotBlank()) {
+              AsyncImage(
+                model = remember(cal.posterUrl) {
+                  ImageRequest.Builder(context)
+                    .data(cal.posterUrl)
+                    .size(140, 200)
+                    .allowHardware(Build.VERSION.SDK_INT > Build.VERSION_CODES.P)
+                    .crossfade(false)
+                    .build()
+                },
+                contentDescription = cal.showTitle,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                  .width(50.dp)
+                  .height(74.dp)
+                  .clip(RoundedCornerShape(8.dp))
+              )
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              Text(
+                text = cal.firstAiredIso.take(10),
+                color = CinemaAccent,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.ExtraBold
+              )
+              Text(
+                text = cal.showTitle,
+                color = Color.White,
+                fontSize = 14.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+              CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Text(
+                  text = "S.$sPad E.$ePad",
+                  color = Color.LightGray,
+                  fontSize = 12.5.sp,
+                  fontWeight = FontWeight.Bold
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun HomeTraktWatchlistSection(
+  items: List<TraktWatchlistItem>,
+  onPlayItem: (TraktWatchlistItem) -> Unit,
+  onOpenTrakt: () -> Unit
+) {
+  val context = LocalContext.current
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .testTag("home_trakt_watchlist_section")
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(Icons.Default.Bookmark, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(21.dp))
+        Text("قائمتي في Trakt", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+      }
+      Surface(
+        onClick = onOpenTrakt,
+        color = CinemaSurface,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, CinemaBorder)
+      ) {
+        Text(
+          text = "الكل (${items.size})",
+          color = Color(0xFF38BDF8),
+          fontSize = 12.5.sp,
+          fontWeight = FontWeight.Bold,
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+      }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    LazyRow(
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      contentPadding = PaddingValues(horizontal = 4.dp)
+    ) {
+      items(items.take(15), key = { it.id }) { wl ->
+        val isMovie = wl.mediaType == "movie"
+        Surface(
+          onClick = { onPlayItem(wl) },
+          color = CinemaSurface,
+          shape = RoundedCornerShape(14.dp),
+          border = BorderStroke(1.dp, CinemaBorder),
+          modifier = Modifier.width(195.dp)
+        ) {
+          Row(
+            modifier = Modifier.padding(9.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            if (wl.posterUrl.isNotBlank()) {
+              AsyncImage(
+                model = remember(wl.posterUrl) {
+                  ImageRequest.Builder(context)
+                    .data(wl.posterUrl)
+                    .size(140, 200)
+                    .allowHardware(Build.VERSION.SDK_INT > Build.VERSION_CODES.P)
+                    .crossfade(false)
+                    .build()
+                },
+                contentDescription = wl.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                  .width(48.dp)
+                  .height(70.dp)
+                  .clip(RoundedCornerShape(8.dp))
+              )
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              Text(
+                text = if (isMovie) "فيلم • ${wl.year}" else "مسلسل • ${wl.year}",
+                color = if (isMovie) CinemaPrimary else Color(0xFF38BDF8),
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1
+              )
+              Text(
+                text = wl.title,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+              )
             }
           }
         }
