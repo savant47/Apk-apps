@@ -246,25 +246,29 @@ fun MainScreen(
                 traktUsername = resolvedUsername
               )
             }
-            repository.mergeTraktProgressItems(finalRes.upNextItems)
+            repository.mergeTraktProgressItems(finalRes.upNextItems, finalRes.stats)
             repository.saveTraktCalendar(emptyList())
             repository.saveTraktWatchlist(emptyList())
             if (showToast) {
+              val s = finalRes.stats
               Toast.makeText(
                 context,
-                "تمت مزامنة Trakt ✓ (${finalRes.upNextItems.size} مسلسل في التالي للمشاهدة)",
-                Toast.LENGTH_SHORT
+                "تمت المزامنة ✓ (المسحوب ${s.totalWatchedFetched} • المكتمل المستبعد ${s.completedFilteredCount} • الصافي ${finalRes.upNextItems.size})",
+                Toast.LENGTH_LONG
               ).show()
             }
           }
           is TraktFullSyncResult.Unauthorized -> {
+            val errMsg = "انتهت صلاحية جلسة Trakt — يرجى إعادة الربط بالكود"
+            repository.setTraktLastSyncError(errMsg)
             if (showToast) {
-              Toast.makeText(context, "انتهت صلاحية جلسة Trakt — يرجى إعادة الربط بالكود", Toast.LENGTH_LONG).show()
+              Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
             }
           }
           is TraktFullSyncResult.Error -> {
+            repository.setTraktLastSyncError(finalRes.message)
             if (showToast) {
-              Toast.makeText(context, finalRes.message, Toast.LENGTH_SHORT).show()
+              Toast.makeText(context, finalRes.message, Toast.LENGTH_LONG).show()
             }
           }
         }

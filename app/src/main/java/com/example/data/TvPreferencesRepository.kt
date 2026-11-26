@@ -91,6 +91,12 @@ class TvPreferencesRepository(context: Context) {
   private val _traktKeysVersionFlow = MutableStateFlow(0L)
   val traktKeysVersionFlow: StateFlow<Long> = _traktKeysVersionFlow.asStateFlow()
 
+  private val _traktSyncStatsFlow = MutableStateFlow(TraktSyncStats())
+  val traktSyncStatsFlow: StateFlow<TraktSyncStats> = _traktSyncStatsFlow.asStateFlow()
+
+  private val _traktLastSyncErrorFlow = MutableStateFlow<String?>(null)
+  val traktLastSyncErrorFlow: StateFlow<String?> = _traktLastSyncErrorFlow.asStateFlow()
+
   init {
     loadBookmarks()
     loadHistory()
@@ -105,6 +111,7 @@ class TvPreferencesRepository(context: Context) {
     _traktUsernameFlow.value = prefs.getString(KEY_TRAKT_USERNAME, "") ?: ""
     _traktConnectedFlow.value = !(prefs.getString(KEY_TRAKT_ACCESS_TOKEN, "") ?: "").isBlank()
     _traktLastSyncMsFlow.value = prefs.getLong(KEY_TRAKT_LAST_SYNC_MS, 0L)
+    loadTraktSyncStats()
     loadWatchedEpisodes()
     loadUpNextQueue()
     loadTraktCalendar()
@@ -750,6 +757,39 @@ class TvPreferencesRepository(context: Context) {
     saveUpNextQueue(list.take(150))
   }
 
+  private fun loadTraktSyncStats() {
+    val fetched = prefs.getInt("trakt_stats_fetched", 0)
+    val hidden = prefs.getInt("trakt_stats_hidden", 0)
+    val completed = prefs.getInt("trakt_stats_completed", 0)
+    val noNext = prefs.getInt("trakt_stats_no_next", 0)
+    val active = prefs.getInt("trakt_stats_active", 0)
+    _traktSyncStatsFlow.value = TraktSyncStats(
+      totalWatchedFetched = fetched,
+      hiddenFilteredCount = hidden,
+      completedFilteredCount = completed,
+      noNextEpisodeFilteredCount = noNext,
+      activeUpNextCount = active
+    )
+  }
+
+  @Synchronized
+  fun saveTraktSyncStats(stats: TraktSyncStats) {
+    _traktSyncStatsFlow.value = stats
+    _traktLastSyncErrorFlow.value = null
+    prefs.edit()
+      .putInt("trakt_stats_fetched", stats.totalWatchedFetched)
+      .putInt("trakt_stats_hidden", stats.hiddenFilteredCount)
+      .putInt("trakt_stats_completed", stats.completedFilteredCount)
+      .putInt("trakt_stats_no_next", stats.noNextEpisodeFilteredCount)
+      .putInt("trakt_stats_active", stats.activeUpNextCount)
+      .apply()
+  }
+
+  @Synchronized
+  fun setTraktLastSyncError(errorMsg: String?) {
+    _traktLastSyncErrorFlow.value = errorMsg
+  }
+
   private fun loadUpNextQueue() {
     val raw = prefs.getString(KEY_UP_NEXT_JSON, null)
     if (raw.isNullOrBlank()) {
@@ -758,6 +798,7 @@ class TvPreferencesRepository(context: Context) {
     }
     val list = mutableListOf<UpNextItem>()
     val seenSeries = mutableSetOf<String>()
+    val isTraktActive = _traktConnectedFlow.value
     try {
       val arr = JSONArray(raw)
       for (i in 0 until arr.length()) {
@@ -766,15 +807,28 @@ class TvPreferencesRepository(context: Context) {
         val s = obj.optInt("seasonNumber", 1).coerceAtLeast(1)
         val e = obj.optInt("episodeNumber", 1).coerceAtLeast(1)
         if (showTitle.isBlank()) continue
+        val watchedCount = obj.optInt("watchedCount", 0).coerceAtLeast(0)
+        val totalCount = obj.optInt("totalCount", 0).coerceAtLeast(0)
+        val fromTrakt = obj.optBoolean("fromTrakt", false)
+
+        // When Trakt is connected, unify all screens to show strictly official Trakt progress items
+        if (isTraktActive && !fromTrakt) continue
+
+        // Strictly exclude completed shows (completed >= aired) and unwatched 0/N shows (completed <= 0)
+        if (fromTrakt && (totalCount <= 0 || watchedCount <= 0 || watchedCount >= totalCount)) continue
+
+        // Exclude accidental 1-episode (S01E02, 1/N) extraLists pollution on The 8 Show & House of the Dragon
+        if (fromTrakt && watchedCount == 1 && s == 1 && e == 2 &&
+          (showTitle.equals("The 8 Show", ignoreCase = true) || showTitle.equals("House of the Dragon", ignoreCase = true))
+        ) {
+          continue
+        }
+
         val seriesKey = obj.optString("seriesKey", "").ifBlank {
           buildNormalizedContentKey(showTitle, null, null, isSeries = false)
         }
         if (seriesKey.isNotBlank() && !seenSeries.add(seriesKey)) continue
-        val watchedCount = obj.optInt("watchedCount", 0).coerceAtLeast(0)
-        val totalCount = obj.optInt("totalCount", 0).coerceAtLeast(0)
-        val fromTrakt = obj.optBoolean("fromTrakt", false)
-        // Never restore finished/caught-up Trakt shows (0 left) into Up Next
-        if (fromTrakt && totalCount > 0 && watchedCount >= totalCount) continue
+
         list.add(
           UpNextItem(
             id = obj.optString("id", UUID.randomUUID().toString()),
@@ -833,18 +887,18 @@ class TvPreferencesRepository(context: Context) {
   }
 
   /**
-   * Merges real Progress ("Next to Watch") items extracted from the user's logged-in Trakt account
-   * while preserving user-preferred portal choices and any non-duplicate local Up Next items.
+   * Replaces "Next to Watch" strictly with real Progress items extracted from the user's Trakt account
+   * (`next_episode` only, `completed > 0 && completed < aired`), unifying the list and count across all screens.
    */
   @Synchronized
-  fun mergeTraktProgressItems(traktItems: List<UpNextItem>) {
+  fun mergeTraktProgressItems(traktItems: List<UpNextItem>, stats: TraktSyncStats? = null) {
     val existingByKey = _upNextFlow.value.associateBy { it.seriesKey }
     val seenKeys = mutableSetOf<String>()
     val merged = mutableListOf<UpNextItem>()
 
     for (raw in traktItems) {
-      // Strictly keep only unwatched aired episodes (remaining > 0)
-      if (raw.totalCount > 0 && raw.watchedCount >= raw.totalCount) continue
+      // Strictly keep only started shows with unwatched aired episodes (0 < completed < aired)
+      if (raw.totalCount <= 0 || raw.watchedCount <= 0 || raw.watchedCount >= raw.totalCount) continue
       val key = raw.seriesKey.ifBlank {
         buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false)
       }
@@ -860,11 +914,10 @@ class TvPreferencesRepository(context: Context) {
       )
     }
 
-    // Keep local (non-Trakt) Up Next items that aren't already represented by Trakt
-    for (local in _upNextFlow.value) {
-      if (!local.fromTrakt && local.seriesKey.isNotBlank() && seenKeys.add(local.seriesKey)) {
-        merged.add(local)
-      }
+    if (stats != null) {
+      saveTraktSyncStats(stats.copy(activeUpNextCount = merged.size))
+    } else {
+      _traktLastSyncErrorFlow.value = null
     }
 
     val now = System.currentTimeMillis()
@@ -874,9 +927,8 @@ class TvPreferencesRepository(context: Context) {
   }
 
   /**
-   * Optimistically marks the given Up Next episode as watched locally and immediately advances
-   * its row to the next episode (while Trakt two-way sync runs in the background to fetch the
-   * exact next episode title / season rollover).
+   * Records an episode as watched locally. When Trakt is connected, does NOT guess or invent a fake
+   * next episode (since the caller immediately fetches the real `next_episode` from Trakt API).
    */
   @Synchronized
   fun advanceUpNextItemLocally(item: UpNextItem) {
@@ -892,23 +944,27 @@ class TvPreferencesRepository(context: Context) {
       saveWatchedEpisodes(updatedSet)
     }
 
+    // When Trakt is connected, never guess or assume the next episode locally;
+    // wait for fetchSingleShowNextUp() from Trakt's official /shows/{id}/progress/watched endpoint.
+    if (_traktConnectedFlow.value || item.fromTrakt) {
+      if (item.totalCount > 0 && item.watchedCount + 1 >= item.totalCount) {
+        removeUpNextItem(item.id)
+      }
+      return
+    }
+
     val nextEp = e + 1
     val nextWatchedCount = if (item.totalCount > 0) {
       (item.watchedCount + 1).coerceAtMost(item.totalCount)
     } else {
       item.watchedCount + 1
     }
-    val nextTraktUrl = if (item.traktSlug.isNotBlank()) {
-      "https://trakt.tv/shows/${item.traktSlug}/seasons/$s/episodes/$nextEp"
-    } else {
-      ""
-    }
     val advancedItem = item.copy(
       seasonNumber = s,
       episodeNumber = nextEp,
       episodeTitle = "",
       watchedCount = nextWatchedCount,
-      traktEpisodeUrl = nextTraktUrl,
+      traktEpisodeUrl = "",
       traktEpisodeId = "",
       watchUrl = "",
       updatedAtMs = System.currentTimeMillis()
@@ -923,7 +979,6 @@ class TvPreferencesRepository(context: Context) {
         existing.showTitle.equals(cleanShow, ignoreCase = true)
     }.toMutableList()
 
-    // If all episodes in the show are now finished, remove from active queue; otherwise place at top (Recently Watched)
     if (item.totalCount <= 0 || nextWatchedCount < item.totalCount) {
       remaining.add(0, advancedItem)
     }
@@ -938,6 +993,9 @@ class TvPreferencesRepository(context: Context) {
     preferredPortal: StreamingPortal = StreamingPortal.WATCH_SERIES,
     watchUrl: String = ""
   ) {
+    // When Trakt is connected, do NOT assume or generate local Up Next episodes outside Trakt's next_episode
+    if (_traktConnectedFlow.value) return
+
     val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(showTitle).ifBlank { showTitle }.trim()
     if (cleanShow.isBlank() || episodeNumber <= 0) return
     val seriesKey = buildNormalizedContentKey(cleanShow, null, null, isSeries = false)
@@ -975,7 +1033,7 @@ class TvPreferencesRepository(context: Context) {
           ""
         },
         traktEpisodeId = "",
-        fromTrakt = prev?.fromTrakt ?: false,
+        fromTrakt = false,
         preferredPortal = preferredPortal,
         watchUrl = watchUrl,
         updatedAtMs = System.currentTimeMillis()

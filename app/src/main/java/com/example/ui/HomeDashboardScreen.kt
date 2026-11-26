@@ -219,9 +219,20 @@ fun HomeDashboardScreen(
   val upNextQueue by repository.upNextFlow.collectAsState()
   val traktConnected by repository.traktConnectedFlow.collectAsState()
   val traktUsername by repository.traktUsernameFlow.collectAsState()
+  val traktLastSyncError by repository.traktLastSyncErrorFlow.collectAsState()
   val traktCalendar by repository.traktCalendarFlow.collectAsState()
   val traktWatchlist by repository.traktWatchlistFlow.collectAsState()
   val displayMode by repository.displayModeFlow.collectAsState()
+
+  val displayedUpNext = remember(upNextQueue, traktConnected) {
+    upNextQueue.filter { item ->
+      if (traktConnected) {
+        item.fromTrakt && item.totalCount > 0 && item.watchedCount in 1 until item.totalCount
+      } else {
+        !item.fromTrakt || (item.totalCount > 0 && item.watchedCount in 1 until item.totalCount)
+      }
+    }
+  }
 
   // Load Live Daily Catalog via single lightweight pass after first frame paints
   LaunchedEffect(catalogRefreshTrigger) {
@@ -454,11 +465,11 @@ fun HomeDashboardScreen(
         }
       }
 
-      // Up Next Queue Row (التالي للمشاهدة) — Real Trakt Synced & Local Auto-Tracked Next Episodes
-      if (upNextQueue.isNotEmpty()) {
+      // Up Next Queue Row (التالي للمشاهدة) — Unified with Trakt Official Progress
+      if (displayedUpNext.isNotEmpty() || (traktConnected && !traktLastSyncError.isNullOrBlank())) {
         item {
           UpNextQueueSection(
-            items = upNextQueue,
+            items = displayedUpNext,
             onPlayItem = onPlayUpNext,
             onMarkWatched = { item ->
               if (onMarkUpNextWatched != null) {
@@ -470,6 +481,7 @@ fun HomeDashboardScreen(
             onOpenTrakt = onOpenTrakt,
             onSyncTrakt = if (traktConnected) onSyncTraktFromHome else null,
             traktUsername = if (traktConnected) traktUsername else "",
+            syncErrorMessage = if (traktConnected) traktLastSyncError else null,
             onDeleteItem = { item ->
               repository.removeUpNextItem(item.id)
             },
@@ -2904,6 +2916,7 @@ fun UpNextQueueSection(
   onOpenTrakt: () -> Unit = {},
   onSyncTrakt: (() -> Unit)? = null,
   traktUsername: String = "",
+  syncErrorMessage: String? = null,
   onDeleteItem: (UpNextItem) -> Unit,
   onClearAll: () -> Unit
 ) {
@@ -2913,8 +2926,11 @@ fun UpNextQueueSection(
       .fillMaxWidth()
       .testTag("up_next_queue_section")
   ) {
+    // Clean, balanced top header row: [Icon + Title + Count] on right, [تحديث + Trakt] on left — zero clipping or overlap
     Row(
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 2.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
@@ -2926,33 +2942,35 @@ fun UpNextQueueSection(
           imageVector = Icons.Default.QueuePlayNext,
           contentDescription = null,
           tint = CinemaSuccess,
-          modifier = Modifier.size(22.dp)
+          modifier = Modifier.size(20.dp)
         )
         Text(
-          text = if (traktUsername.isNotBlank()) "التالي للمشاهدة (@$traktUsername)" else "التالي للمشاهدة",
+          text = "التالي للمشاهدة",
           color = Color.White,
-          fontSize = 18.sp,
+          fontSize = 16.5.sp,
           fontWeight = FontWeight.ExtraBold,
           maxLines = 1,
-          overflow = TextOverflow.Ellipsis
+          softWrap = false
         )
         Surface(
-          color = CinemaSuccess.copy(alpha = 0.2f),
-          shape = RoundedCornerShape(6.dp),
-          border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.7f))
+          color = CinemaSuccess.copy(alpha = 0.18f),
+          shape = RoundedCornerShape(8.dp),
+          border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.75f))
         ) {
           Text(
             text = "${items.size}",
             color = CinemaSuccess,
             fontSize = 12.5.sp,
             fontWeight = FontWeight.ExtraBold,
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            maxLines = 1,
+            softWrap = false
           )
         }
       }
 
       Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
         if (onSyncTrakt != null) {
@@ -2960,18 +2978,30 @@ fun UpNextQueueSection(
             onClick = onSyncTrakt,
             color = CinemaSurface,
             shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.7f)),
+            border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.75f)),
             modifier = Modifier
-              .heightIn(min = 34.dp)
+              .heightIn(min = 36.dp)
               .testTag("btn_sync_trakt_from_home")
           ) {
             Row(
-              modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+              modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp)
+              horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-              Icon(Icons.Default.Sync, contentDescription = "مزامنة", tint = CinemaSuccess, modifier = Modifier.size(15.dp))
-              Text("تحديث", color = CinemaSuccess, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
+              Icon(
+                imageVector = Icons.Default.Sync,
+                contentDescription = "تحديث",
+                tint = CinemaSuccess,
+                modifier = Modifier.size(15.dp)
+              )
+              Text(
+                text = "تحديث",
+                color = CinemaSuccess,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false
+              )
             }
           }
         }
@@ -2982,35 +3012,93 @@ fun UpNextQueueSection(
           shape = RoundedCornerShape(8.dp),
           border = BorderStroke(1.dp, CinemaPrimary.copy(alpha = 0.75f)),
           modifier = Modifier
-            .heightIn(min = 34.dp)
+            .heightIn(min = 36.dp)
             .testTag("btn_open_trakt_table_from_home")
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
           ) {
-            Icon(Icons.Default.TrackChanges, contentDescription = null, tint = CinemaPrimary, modifier = Modifier.size(15.dp))
-            Text("Trakt", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
+            Icon(
+              imageVector = Icons.Default.TrackChanges,
+              contentDescription = null,
+              tint = CinemaPrimary,
+              modifier = Modifier.size(15.dp)
+            )
+            Text(
+              text = "Trakt",
+              color = Color.White,
+              fontSize = 12.5.sp,
+              fontWeight = FontWeight.ExtraBold,
+              maxLines = 1,
+              softWrap = false
+            )
           }
         }
 
-        Surface(
-          onClick = onClearAll,
-          color = CinemaSurface,
-          shape = RoundedCornerShape(8.dp),
-          border = BorderStroke(1.dp, CinemaBorder),
-          modifier = Modifier
-            .heightIn(min = 34.dp)
-            .testTag("btn_clear_up_next")
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        if (onSyncTrakt == null) {
+          Surface(
+            onClick = onClearAll,
+            color = CinemaSurface,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, CinemaBorder),
+            modifier = Modifier
+              .heightIn(min = 36.dp)
+              .testTag("btn_clear_up_next")
           ) {
-            Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
-            Text("مسح", color = Color.LightGray, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(15.dp))
+              Text("مسح", color = Color.LightGray, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+            }
+          }
+        }
+      }
+    }
+
+    if (!syncErrorMessage.isNullOrBlank()) {
+      Spacer(modifier = Modifier.height(6.dp))
+      Surface(
+        color = Color(0x33EF4444),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, Color(0xFFEF4444)),
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Text(
+            text = syncErrorMessage,
+            color = Color(0xFFFCA5A5),
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f)
+          )
+          if (onSyncTrakt != null) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+              onClick = onSyncTrakt,
+              color = Color(0xFFED1C24),
+              shape = RoundedCornerShape(8.dp)
+            ) {
+              Text(
+                text = "إعادة المحاولة",
+                color = Color.White,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                maxLines = 1,
+                softWrap = false
+              )
+            }
           }
         }
       }
@@ -3209,12 +3297,12 @@ fun UpNextQueueSection(
                   shape = RoundedCornerShape(50)
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                   ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                    Text("شغّل", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                    Text("تشغيل", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, softWrap = false)
                   }
                 }
 
@@ -3225,14 +3313,14 @@ fun UpNextQueueSection(
                   shape = RoundedCornerShape(50),
                   border = BorderStroke(1.3.dp, CinemaSuccess),
                   modifier = Modifier
-                    .heightIn(min = 28.dp)
+                    .heightIn(min = 30.dp)
                     .focusProperties { canFocus = false }
                     .testTag("btn_home_up_next_watched_${item.id}")
                 ) {
                   Row(
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                   ) {
                     Icon(
                       imageVector = Icons.Default.CheckCircle,
@@ -3241,7 +3329,7 @@ fun UpNextQueueSection(
                       modifier = Modifier.size(14.dp)
                     )
                     Text(
-                      text = "Watched",
+                      text = "تمت المشاهدة",
                       color = Color.White,
                       fontSize = 11.5.sp,
                       fontWeight = FontWeight.Bold,

@@ -414,7 +414,7 @@ private fun MainModeTabItem(
 
   Box(
     modifier = modifier
-      .heightIn(min = 54.dp)
+      .heightIn(min = 52.dp)
       .clip(RoundedCornerShape(10.dp))
       .background(bgColor)
       .border(
@@ -424,39 +424,43 @@ private fun MainModeTabItem(
       )
       .clickable(interactionSource = interactionSource, indication = null) { onClick() }
       .focusable(interactionSource = interactionSource)
-      .padding(horizontal = 10.dp, vertical = 6.dp)
+      .padding(horizontal = 6.dp, vertical = 6.dp)
       .testTag(testTag),
     contentAlignment = Alignment.Center
   ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp)
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = title,
-        tint = if (isSelected) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
-        modifier = Modifier.size(20.dp)
-      )
-      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+      ) {
+        Icon(
+          imageVector = icon,
+          contentDescription = title,
+          tint = if (isSelected) activeColor else if (isFocused) CinemaFocusGlow else Color.LightGray,
+          modifier = Modifier.size(16.dp)
+        )
         Text(
           text = title,
           color = Color.White,
-          fontSize = 15.sp,
-          lineHeight = 19.sp,
+          fontSize = 13.5.sp,
+          lineHeight = 17.sp,
           fontWeight = FontWeight.ExtraBold,
           maxLines = 1,
-          overflow = TextOverflow.Ellipsis
-        )
-        Text(
-          text = subtitle,
-          color = if (isSelected) activeColor else Color.LightGray,
-          fontSize = 12.5.sp,
-          lineHeight = 15.sp,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis
+          softWrap = false
         )
       }
+      Text(
+        text = subtitle,
+        color = if (isSelected) activeColor else Color.LightGray,
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        softWrap = false
+      )
     }
   }
 }

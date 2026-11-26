@@ -241,6 +241,8 @@ fun TraktPortalScreen(
   val isConnected by repository.traktConnectedFlow.collectAsState()
   val traktUsername by repository.traktUsernameFlow.collectAsState()
   val upNextItems by repository.upNextFlow.collectAsState()
+  val traktSyncStats by repository.traktSyncStatsFlow.collectAsState()
+  val traktLastSyncError by repository.traktLastSyncErrorFlow.collectAsState()
   val traktKeysVersion by repository.traktKeysVersionFlow.collectAsState()
 
   var selectedLaunchPortal by remember { mutableStateOf(StreamingPortal.WATCH_SERIES) }
@@ -408,10 +410,10 @@ fun TraktPortalScreen(
     }
   }
 
-  // Always strictly filtered to unwatched aired episodes and sorted by Trakt Most Recently Watched
+  // Strictly filtered to started shows with unwatched aired episodes (0 < watchedCount < totalCount), unified with Home screen
   val displayedUpNext = remember(upNextItems) {
-    upNextItems.filterNot { item ->
-      item.fromTrakt && item.totalCount > 0 && item.watchedCount >= item.totalCount
+    upNextItems.filter { item ->
+      item.fromTrakt && item.totalCount > 0 && item.watchedCount in 1 until item.totalCount
     }
   }
 
@@ -694,97 +696,95 @@ fun TraktPortalScreen(
         }
       } else {
         // =====================================================================
-        // STATE B: CONNECTED NATIVE TRAKT HUB (UP NEXT / CALENDAR / WATCHLIST)
+        // STATE B: CONNECTED NATIVE TRAKT HUB (NEXT TO WATCH ONLY - UNIFIED UI)
         // =====================================================================
         Surface(
           color = CinemaSurface,
           border = BorderStroke(1.dp, CinemaBorder),
           modifier = Modifier.fillMaxWidth()
         ) {
-          Column(modifier = Modifier.fillMaxWidth()) {
-            // Top Status & Actions Row
+          Column(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            // Row 1: Unified Section Title + Count Badge + Full "تحديث" Button + Account Pill + Disconnect
             Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+              modifier = Modifier.fillMaxWidth(),
               verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp)
+              horizontalArrangement = Arrangement.SpaceBetween
             ) {
-              Surface(
-                color = CinemaSuccess.copy(alpha = 0.16f),
-                shape = RoundedCornerShape(50),
-                border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.65f))
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
               ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                  Box(
-                    modifier = Modifier
-                      .size(8.dp)
-                      .clip(CircleShape)
-                      .background(CinemaSuccess)
-                  )
-                  Text(
-                    text = if (traktUsername.isNotBlank()) "@$traktUsername • متصل" else "Trakt متصل ✓",
-                    color = CinemaSuccess,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    softWrap = false
-                  )
-                }
-              }
-
-              Surface(
-                onClick = onTraktSyncNow,
-                color = CinemaDarkBackground,
-                shape = RoundedCornerShape(50),
-                border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f)),
-                modifier = Modifier
-                  .heightIn(min = 38.dp)
-                  .testTag("btn_trakt_sync_now")
-              ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                  if (isSyncingNow) {
-                    CircularProgressIndicator(color = CinemaAccent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
-                  } else {
-                    Icon(Icons.Default.Sync, contentDescription = "تحديث", tint = CinemaAccent, modifier = Modifier.size(16.dp))
-                  }
-                  Text(
-                    text = if (isSyncingNow) "جاري المزامنة..." else "تحديث الآن",
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    softWrap = false
-                  )
-                }
-              }
-
-              // Launch Portal Switcher (WatchSeries / TopCinema)
-              listOf(StreamingPortal.WATCH_SERIES, StreamingPortal.TOP_CINEMA).forEach { portal ->
-                val isSelected = selectedLaunchPortal == portal
+                Icon(
+                  imageVector = Icons.Default.QueuePlayNext,
+                  contentDescription = null,
+                  tint = CinemaSuccess,
+                  modifier = Modifier.size(20.dp)
+                )
+                Text(
+                  text = "التالي للمشاهدة",
+                  color = Color.White,
+                  fontSize = 16.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  softWrap = false
+                )
                 Surface(
-                  onClick = { selectedLaunchPortal = portal },
-                  color = if (isSelected) ClipboxWhite else CinemaDarkBackground,
-                  shape = RoundedCornerShape(50),
-                  border = BorderStroke(1.dp, if (isSelected) ClipboxWhite else CinemaBorder),
-                  modifier = Modifier.heightIn(min = 36.dp)
+                  color = CinemaSuccess.copy(alpha = 0.18f),
+                  shape = RoundedCornerShape(8.dp),
+                  border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.75f))
                 ) {
-                  Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
+                  Text(
+                    text = "${displayedUpNext.size}",
+                    color = CinemaSuccess,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                }
+              }
+
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Surface(
+                  onClick = onTraktSyncNow,
+                  color = CinemaDarkBackground,
+                  shape = RoundedCornerShape(8.dp),
+                  border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.75f)),
+                  modifier = Modifier
+                    .heightIn(min = 36.dp)
+                    .testTag("btn_trakt_sync_now")
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                   ) {
+                    if (isSyncingNow) {
+                      CircularProgressIndicator(
+                        color = CinemaSuccess,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(15.dp)
+                      )
+                    } else {
+                      Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = "تحديث",
+                        tint = CinemaSuccess,
+                        modifier = Modifier.size(15.dp)
+                      )
+                    }
                     Text(
-                      text = portal.displayNameEnglish,
-                      color = if (isSelected) Color.Black else Color.LightGray,
+                      text = "تحديث",
+                      color = CinemaSuccess,
                       fontSize = 12.5.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
@@ -792,59 +792,213 @@ fun TraktPortalScreen(
                     )
                   }
                 }
-              }
 
-              Surface(
-                onClick = {
-                  repository.disconnectTrakt(clearAppKeys = false)
-                  onTraktDisconnected()
-                  Toast.makeText(context, "تم فصل حساب Trakt", Toast.LENGTH_SHORT).show()
-                },
-                color = Color(0x26EF4444),
-                shape = RoundedCornerShape(50),
-                border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.6f)),
-                modifier = Modifier
-                  .heightIn(min = 36.dp)
-                  .testTag("btn_trakt_disconnect")
-              ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp)
+                Surface(
+                  onClick = {
+                    repository.disconnectTrakt(clearAppKeys = false)
+                    onTraktDisconnected()
+                    Toast.makeText(context, "تم فصل حساب Trakt", Toast.LENGTH_SHORT).show()
+                  },
+                  color = Color(0x26EF4444),
+                  shape = RoundedCornerShape(8.dp),
+                  border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.65f)),
+                  modifier = Modifier
+                    .heightIn(min = 36.dp)
+                    .testTag("btn_trakt_disconnect")
                 ) {
-                  Icon(Icons.Default.LinkOff, contentDescription = "فصل", tint = Color(0xFFFCA5A5), modifier = Modifier.size(15.dp))
-                  Text("فصل", color = Color(0xFFFCA5A5), fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                  Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                  ) {
+                    Icon(
+                      imageVector = Icons.Default.LinkOff,
+                      contentDescription = "فصل",
+                      tint = Color(0xFFFCA5A5),
+                      modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                      text = "فصل",
+                      color = Color(0xFFFCA5A5),
+                      fontSize = 12.5.sp,
+                      fontWeight = FontWeight.Bold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
                 }
               }
             }
 
-            // Single Focused Section Header: Next to Watch ONLY (Sorted by Trakt Recently Watched)
+            // Row 2: Connected Account Pill + Full Portal Switcher (WatchSeries / TopCinema) + Sort Order Badge
             Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
+              modifier = Modifier.fillMaxWidth(),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween
             ) {
-              TraktHubTabChip(
-                label = "التالي للمشاهدة (${displayedUpNext.size})",
-                icon = Icons.Default.QueuePlayNext,
-                isActive = true,
-                onClick = {},
-                testTag = "tab_trakt_up_next"
-              )
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+              ) {
+                Surface(
+                  color = CinemaSuccess.copy(alpha = 0.14f),
+                  shape = RoundedCornerShape(8.dp),
+                  border = BorderStroke(1.dp, CinemaSuccess.copy(alpha = 0.55f))
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                  ) {
+                    Box(
+                      modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(CinemaSuccess)
+                    )
+                    Text(
+                      text = if (traktUsername.isNotBlank()) "@$traktUsername" else "متصل",
+                      color = CinemaSuccess,
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
+
+                listOf(StreamingPortal.WATCH_SERIES, StreamingPortal.TOP_CINEMA).forEach { portal ->
+                  val isSelected = selectedLaunchPortal == portal
+                  Surface(
+                    onClick = { selectedLaunchPortal = portal },
+                    color = if (isSelected) ClipboxWhite else CinemaDarkBackground,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, if (isSelected) ClipboxWhite else CinemaBorder),
+                    modifier = Modifier.heightIn(min = 32.dp)
+                  ) {
+                    Box(
+                      contentAlignment = Alignment.Center,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                      Text(
+                        text = portal.displayNameEnglish,
+                        color = if (isSelected) Color.Black else Color.LightGray,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        softWrap = false
+                      )
+                    }
+                  }
+                }
+              }
+
               Surface(
                 color = CinemaDarkBackground,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(8.dp),
                 border = BorderStroke(1.dp, CinemaBorder)
               ) {
                 Text(
                   text = "مرتب بآخر مشاهدة",
                   color = CinemaAccent,
-                  fontSize = 12.sp,
+                  fontSize = 11.5.sp,
                   fontWeight = FontWeight.Bold,
-                  modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                  maxLines = 1,
+                  softWrap = false
                 )
+              }
+            }
+
+            // Row 3: Official Sync & Filter Summary Strip (ملخص المسلسلات المسحوبة والمفلترة)
+            if (traktSyncStats.totalWatchedFetched > 0) {
+              val totalFilteredOut = traktSyncStats.completedFilteredCount +
+                traktSyncStats.hiddenFilteredCount +
+                traktSyncStats.noNextEpisodeFilteredCount
+              Surface(
+                color = CinemaDarkBackground,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, CinemaBorder),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("trakt_sync_stats_banner")
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Text(
+                    text = "المسحوب: ${traktSyncStats.totalWatchedFetched}",
+                    color = Color.LightGray,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                  Text(
+                    text = "المستبعد (مكتمل/مخفي): $totalFilteredOut",
+                    color = CinemaAccent,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                  Text(
+                    text = "الصافي: ${displayedUpNext.size}",
+                    color = CinemaSuccess,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    softWrap = false
+                  )
+                }
+              }
+            }
+
+            // Error Banner if Trakt request failed (never show fake data)
+            if (!traktLastSyncError.isNullOrBlank()) {
+              Surface(
+                color = Color(0x33EF4444),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, Color(0xFFEF4444)),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .testTag("trakt_sync_error_banner")
+              ) {
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Text(
+                    text = traktLastSyncError ?: "",
+                    color = Color(0xFFFCA5A5),
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                  )
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Surface(
+                    onClick = onTraktSyncNow,
+                    color = Color(0xFFED1C24),
+                    shape = RoundedCornerShape(8.dp)
+                  ) {
+                    Text(
+                      text = "إعادة المحاولة",
+                      color = Color.White,
+                      fontSize = 11.5.sp,
+                      fontWeight = FontWeight.ExtraBold,
+                      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                      maxLines = 1,
+                      softWrap = false
+                    )
+                  }
+                }
               }
             }
           }
