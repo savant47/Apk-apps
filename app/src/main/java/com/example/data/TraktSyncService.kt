@@ -296,14 +296,17 @@ class TraktSyncService {
   }
 
   /**
-   * Fetches Trakt IDs of shows hidden from watched progress or dropped by the user,
-   * so they never appear in "Next to Watch" (matching Showly).
+   * Fetches Trakt IDs of shows hidden from watched progress, calendar, recommendations, or dropped by the user,
+   * so they never appear in "Next to Watch" (matching official Trakt Continue Watching & Showly).
    */
   private fun fetchHiddenShowIds(clientId: String, accessToken: String): Set<Long> {
     val hidden = mutableSetOf<Long>()
     val endpoints = listOf(
-      "$API_BASE/users/hidden/progress_watched?type=show&limit=100",
-      "$API_BASE/users/hidden/dropped?type=show&limit=100"
+      "$API_BASE/users/hidden/progress_watched?limit=100",
+      "$API_BASE/users/hidden/progress_watched_reset?limit=100",
+      "$API_BASE/users/hidden/progress_collected?limit=100",
+      "$API_BASE/users/hidden/calendar?limit=100",
+      "$API_BASE/users/hidden/dropped?limit=100"
     )
     for (url in endpoints) {
       try {
@@ -312,13 +315,77 @@ class TraktSyncService {
           if (!resp.isSuccessful) return@use
           val arr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
           for (i in 0 until arr.length()) {
-            val id = arr.optJSONObject(i)?.optJSONObject("show")?.optJSONObject("ids")?.optLong("trakt", 0L) ?: 0L
-            if (id > 0L) hidden.add(id)
+            val item = arr.optJSONObject(i) ?: continue
+            val type = item.optString("type", "show")
+            // Only hide the whole show if the hidden entry is of type "show"
+            // (hidden seasons are already handled by ?hidden=false on /progress/watched)
+            if (type == "show" || !item.has("season")) {
+              val id = item.optJSONObject("show")?.optJSONObject("ids")?.optLong("trakt", 0L) ?: 0L
+              if (id > 0L) hidden.add(id)
+            }
           }
         }
       } catch (_: Exception) {}
     }
     return hidden
+  }
+
+  /**
+   * Fetches shows from all of the user's custom Trakt personal lists (`/users/me/lists` -> `/users/me/lists/{id}/items`),
+   * because many users (and apps like Showly "My Shows" / Trakt Lists) store their "Next to Watch" shows in custom lists
+   * in addition to or instead of the default Watchlist!
+   */
+  private fun fetchCustomListsShows(clientId: String, accessToken: String): JSONArray {
+    val combined = JSONArray()
+    try {
+      val listsReq = buildTraktRequest("$API_BASE/users/me/lists", clientId, accessToken).get().build()
+      val listIds = mutableListOf<String>()
+      client.newCall(listsReq).execute().use { resp ->
+        if (resp.isSuccessful) {
+          val arr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+          for (i in 0 until arr.length()) {
+            val idsObj = arr.optJSONObject(i)?.optJSONObject("ids")
+            val slugOrId = idsObj?.optString("slug", "").orEmpty().ifBlank {
+              idsObj?.optLong("trakt", 0L)?.takeIf { it > 0L }?.toString().orEmpty()
+            }
+            if (slugOrId.isNotBlank()) listIds.add(slugOrId)
+          }
+        }
+      }
+      for (listId in listIds.take(12)) {
+        try {
+          val itemsReq = buildTraktRequest("$API_BASE/users/me/lists/$listId/items", clientId, accessToken).get().build()
+          client.newCall(itemsReq).execute().use { resp ->
+            if (resp.isSuccessful) {
+              val itemsArr = JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+              for (j in 0 until itemsArr.length()) {
+                val itemObj = itemsArr.optJSONObject(j) ?: continue
+                if (itemObj.optJSONObject("show") != null) {
+                  combined.put(itemObj)
+                }
+              }
+            }
+          }
+        } catch (_: Exception) {}
+      }
+    } catch (_: Exception) {}
+    return combined
+  }
+
+  /**
+   * Fetches the user's collected shows (`/sync/collection/shows?extended=noseasons`) so any show
+   * added to the user's Trakt Collection / My Shows in Showly is also checked for unwatched episodes.
+   */
+  private fun fetchCollectionShows(clientId: String, accessToken: String): JSONArray {
+    return try {
+      val req = buildTraktRequest("$API_BASE/sync/collection/shows?extended=noseasons", clientId, accessToken).get().build()
+      client.newCall(req).execute().use { resp ->
+        if (resp.isSuccessful) JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+        else JSONArray()
+      }
+    } catch (_: Exception) {
+      JSONArray()
+    }
   }
 
   private data class CandidateShowStub(
@@ -327,6 +394,7 @@ class TraktSyncService {
     val imdbId: String,
     val title: String,
     val sortTimestampMs: Long,
+    val hasUnwatchedHint: Boolean = true,
     val fromWatchlistOnly: Boolean
   )
 
@@ -345,14 +413,13 @@ class TraktSyncService {
   )
 
   /**
-   * Performs a complete official Trakt API v2 "Next to Watch" (Progress) sync matching Showly:
-   *  - Fetches ALL watched shows (/sync/watched/shows) + Watchlist shows (/sync/watchlist/shows)
-   *  - Excludes hidden/dropped shows (/users/hidden/progress_watched + /users/hidden/dropped)
-   *  - Keeps ONLY shows that have at least 1 already-aired unwatched episode (aired > 0 && completed < aired)
-   *    — NEVER includes finished (0 left) or unaired/upcoming shows!
-   *  - Sorts strictly by most recently watched on Trakt (watched shows by last_watched_at DESC,
-   *    followed by unwatched aired watchlist shows by listed_at DESC)
-   *  - Resolves show posters only for the surviving Up Next shows for fast sync performance.
+   * Performs a complete official Trakt API v2 "Next to Watch" (Progress) sync matching Showly & Trakt Continue Watching:
+   *  - Fetches ALL watched shows (/sync/watched/shows?extended=full) + Watchlist (/sync/watchlist)
+   *    + Personal Custom Lists (/users/me/lists/{id}/items) + Collection (/sync/collection/shows) + Favorites
+   *  - Pre-filters long-finished shows using `show.aired_episodes` vs watched regular episodes so Trakt's rate limit is never hit
+   *  - Excludes hidden/dropped shows (/users/hidden/progress_watched + /users/hidden/dropped + /users/hidden/calendar)
+   *  - Keeps ONLY shows that have a real, already-aired `next_episode` (`aired > 0 && completed < aired && next_episode != null`)
+   *  - Sorts strictly by most recently watched on Trakt (`last_watched_at` DESC, followed by unwatched aired watchlist/list shows)
    */
   suspend fun syncFullAccountData(
     clientId: String,
@@ -363,9 +430,10 @@ class TraktSyncService {
     }
 
     try {
-      // 1. Validate token & fetch ALL watched shows
+      // 1. Validate token & fetch ALL watched shows WITH seasons & extended=full
+      // This single request gives us show.aired_episodes + watched seasons/episodes for all shows!
       val watchedReq = buildTraktRequest(
-        "$API_BASE/sync/watched/shows?extended=noseasons",
+        "$API_BASE/sync/watched/shows?extended=full",
         clientId,
         accessToken
       ).get().build()
@@ -385,8 +453,22 @@ class TraktSyncService {
         val hiddenIdsDeferred = async { fetchHiddenShowIds(clientId, accessToken) }
         val watchlistShowsDeferred = async {
           try {
-            val wlReq = buildTraktRequest("$API_BASE/sync/watchlist/shows", clientId, accessToken).get().build()
+            // Use /sync/watchlist (all types: show, season, episode) so watchlisted seasons/episodes also yield their parent show!
+            val wlReq = buildTraktRequest("$API_BASE/sync/watchlist", clientId, accessToken).get().build()
             client.newCall(wlReq).execute().use { resp ->
+              if (resp.isSuccessful) JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
+              else JSONArray()
+            }
+          } catch (_: Exception) {
+            JSONArray()
+          }
+        }
+        val customListsShowsDeferred = async { fetchCustomListsShows(clientId, accessToken) }
+        val collectionShowsDeferred = async { fetchCollectionShows(clientId, accessToken) }
+        val favoritesShowsDeferred = async {
+          try {
+            val favReq = buildTraktRequest("$API_BASE/sync/favorites/shows", clientId, accessToken).get().build()
+            client.newCall(favReq).execute().use { resp ->
               if (resp.isSuccessful) JSONArray(resp.body?.string().orEmpty().ifBlank { "[]" })
               else JSONArray()
             }
@@ -397,9 +479,16 @@ class TraktSyncService {
 
         val hiddenIds = hiddenIdsDeferred.await()
         val watchlistArray = watchlistShowsDeferred.await()
+        val customListsArray = customListsShowsDeferred.await()
+        val collectionArray = collectionShowsDeferred.await()
+        val favoritesArray = favoritesShowsDeferred.await()
 
         val seenIds = mutableSetOf<Long>()
+        val finishedWatchedIds = mutableSetOf<Long>()
         val watchedStubs = mutableListOf<CandidateShowStub>()
+        val nowMs = System.currentTimeMillis()
+        val recentThresholdMs = nowMs - (14L * 24L * 3600_000L) // 14 days
+
         for (i in 0 until watchedArray.length()) {
           val entry = watchedArray.optJSONObject(i) ?: continue
           val showObj = entry.optJSONObject("show") ?: continue
@@ -407,9 +496,34 @@ class TraktSyncService {
           val traktId = ids.optLong("trakt", 0L)
           val title = showObj.optString("title", "").trim()
           if (traktId <= 0L || title.isBlank() || traktId in hiddenIds || !seenIds.add(traktId)) continue
+
           val lastWatchedMs = parseIsoUtcMs(entry.optString("last_watched_at", ""))
             .takeIf { it > 0L }
             ?: parseIsoUtcMs(entry.optString("last_updated_at", ""))
+
+          val totalAiredFromShow = showObj.optInt("aired_episodes", 0)
+          val seasonsArr = entry.optJSONArray("seasons")
+          var watchedRegularEps = 0
+          if (seasonsArr != null) {
+            for (si in 0 until seasonsArr.length()) {
+              val sObj = seasonsArr.optJSONObject(si) ?: continue
+              val sNum = sObj.optInt("number", 0)
+              if (sNum > 0) {
+                watchedRegularEps += (sObj.optJSONArray("episodes")?.length() ?: 0)
+              }
+            }
+          }
+
+          val likelyHasUnwatched = totalAiredFromShow <= 0 || watchedRegularEps < totalAiredFromShow
+          val watchedRecently = lastWatchedMs >= recentThresholdMs
+
+          // If the user has already watched 100% of aired episodes and hasn't touched this finished show recently,
+          // skip calling /shows/{id}/progress/watched so we don't waste 80+ HTTP requests on old completed shows!
+          if (!likelyHasUnwatched && !watchedRecently) {
+            finishedWatchedIds.add(traktId)
+            continue
+          }
+
           watchedStubs.add(
             CandidateShowStub(
               traktId = traktId,
@@ -417,38 +531,58 @@ class TraktSyncService {
               imdbId = ids.optString("imdb", "").trim(),
               title = title,
               sortTimestampMs = lastWatchedMs,
+              hasUnwatchedHint = likelyHasUnwatched,
               fromWatchlistOnly = false
             )
           )
         }
 
         val watchlistStubs = mutableListOf<CandidateShowStub>()
-        for (i in 0 until watchlistArray.length()) {
-          val entry = watchlistArray.optJSONObject(i) ?: continue
-          val showObj = entry.optJSONObject("show") ?: continue
-          val ids = showObj.optJSONObject("ids") ?: continue
-          val traktId = ids.optLong("trakt", 0L)
-          val title = showObj.optString("title", "").trim()
-          if (traktId <= 0L || title.isBlank() || traktId in hiddenIds || !seenIds.add(traktId)) continue
-          val listedAtMs = parseIsoUtcMs(entry.optString("listed_at", ""))
-          watchlistStubs.add(
-            CandidateShowStub(
-              traktId = traktId,
-              slug = ids.optString("slug", "").trim(),
-              imdbId = ids.optString("imdb", "").trim(),
-              title = title,
-              sortTimestampMs = listedAtMs,
-              fromWatchlistOnly = true
+        fun collectAdditionalShows(arr: JSONArray, timestampField: String) {
+          for (i in 0 until arr.length()) {
+            val entry = arr.optJSONObject(i) ?: continue
+            val showObj = entry.optJSONObject("show") ?: continue
+            val ids = showObj.optJSONObject("ids") ?: continue
+            val traktId = ids.optLong("trakt", 0L)
+            val title = showObj.optString("title", "").trim()
+            if (traktId <= 0L || title.isBlank() || traktId in hiddenIds || traktId in finishedWatchedIds || !seenIds.add(traktId)) continue
+            val tsMs = parseIsoUtcMs(entry.optString(timestampField, ""))
+              .takeIf { it > 0L }
+              ?: parseIsoUtcMs(entry.optString("listed_at", ""))
+              .takeIf { it > 0L }
+              ?: parseIsoUtcMs(entry.optString("last_collected_at", ""))
+            watchlistStubs.add(
+              CandidateShowStub(
+                traktId = traktId,
+                slug = ids.optString("slug", "").trim(),
+                imdbId = ids.optString("imdb", "").trim(),
+                title = title,
+                sortTimestampMs = tsMs,
+                hasUnwatchedHint = true,
+                fromWatchlistOnly = true
+              )
             )
-          )
+          }
         }
 
+        collectAdditionalShows(watchlistArray, "listed_at")
+        collectAdditionalShows(customListsArray, "listed_at")
+        collectAdditionalShows(favoritesArray, "listed_at")
+        collectAdditionalShows(collectionArray, "last_collected_at")
+
+        // Prioritize shows that definitely have unwatched episodes first, sorted by most recently watched
         val allCandidates = buildList {
-          addAll(watchedStubs.sortedByDescending { it.sortTimestampMs }.take(150))
+          addAll(
+            watchedStubs.sortedWith(
+              compareByDescending<CandidateShowStub> { it.hasUnwatchedHint }
+                .thenByDescending { it.sortTimestampMs }
+            )
+          )
           addAll(watchlistStubs.sortedByDescending { it.sortTimestampMs }.take(80))
         }
 
-        val progressSemaphore = Semaphore(8)
+        // Concurrency capped at 4 with automatic Retry-After backoff so Trakt never drops a single show!
+        val progressSemaphore = Semaphore(4)
         val rawResults = allCandidates.map { stub ->
           async {
             progressSemaphore.withPermit {
@@ -461,9 +595,9 @@ class TraktSyncService {
           }
         }.awaitAll().filterNotNull()
 
-        // Sort strictly like Showly "Recently Watched":
+        // Sort strictly like Showly & Trakt "Continue Watching" (Recently Watched):
         // 1. Shows with watched episodes (completed > 0) sorted by Trakt last_watched_at DESC
-        // 2. Unwatched watchlist shows with aired episodes (completed == 0) sorted by listed_at DESC
+        // 2. Unwatched watchlist/custom-list shows with aired episodes (completed == 0) sorted by listed_at DESC
         val orderedRaw = rawResults.sortedWith(
           compareByDescending<RawUpNextProgress> { it.watchedCount > 0 }
             .thenByDescending { it.sortTimestampMs }
@@ -503,7 +637,7 @@ class TraktSyncService {
 
         AppDiagnosticsLogger.log(
           "TraktAPI",
-          "Synced Trakt @$username: checked=${allCandidates.size} (watched=${watchedStubs.size}, wl=${watchlistStubs.size}, hidden=${hiddenIds.size}) -> activeUpNext=${upNextItems.size}"
+          "Synced Trakt @$username: totalWatched=${watchedArray.length()}, preSkippedFinished=${finishedWatchedIds.size}, queried=${allCandidates.size} (activeWatched=${watchedStubs.size}, extraLists=${watchlistStubs.size}, hidden=${hiddenIds.size}) -> activeUpNext=${upNextItems.size}"
         )
 
         TraktFullSyncResult.Success(
@@ -520,26 +654,30 @@ class TraktSyncService {
   }
 
   /**
-   * Fetches a single show's Trakt watched progress and STRICTLY filters to shows with
-   * at least one already-aired unwatched episode (`aired > 0 && completed < aired`).
-   * Finished shows (`0 left`) and upcoming unaired shows return null immediately.
+   * Fetches a single show's Trakt watched progress with `&extended=full` and STRICTLY filters to shows with
+   * a real, already-aired `next_episode` (`aired > 0 && completed < aired && next_episode != null`).
+   * Finished shows (`0 left`), shows with `next_episode == null` (e.g. remaining episodes are unaired/hidden),
+   * and future/TBA episodes return null immediately.
    */
   private suspend fun fetchShowProgressRaw(
     clientId: String,
     accessToken: String,
     stub: CandidateShowStub
   ): RawUpNextProgress? {
-    val url = "$API_BASE/shows/${stub.traktId}/progress/watched?hidden=false&specials=false&count_specials=false"
-    for (attempt in 0..1) {
+    val url = "$API_BASE/shows/${stub.traktId}/progress/watched?hidden=false&specials=false&count_specials=false&extended=full"
+    for (attempt in 0..3) {
       try {
         val req = buildTraktRequest(url, clientId, accessToken).get().build()
+        var retryAfterSec = 0L
         val statusAndBody = client.newCall(req).execute().use { resp ->
+          retryAfterSec = resp.header("Retry-After")?.trim()?.toLongOrNull() ?: 0L
           resp.code to resp.body?.string().orEmpty()
         }
         val code = statusAndBody.first
         val body = statusAndBody.second
-        if (code == 429 && attempt == 0) {
-          kotlinx.coroutines.delay(650L)
+        if ((code == 429 || code in 500..599) && attempt < 3) {
+          val waitMs = if (retryAfterSec > 0L) (retryAfterSec * 1000L).coerceAtMost(5000L) else (1000L * (attempt + 1))
+          kotlinx.coroutines.delay(waitMs)
           continue
         }
         if (code !in 200..299 || body.isBlank()) return null
@@ -548,47 +686,42 @@ class TraktSyncService {
         val aired = obj.optInt("aired", 0).coerceAtLeast(0)
         val completed = obj.optInt("completed", 0).coerceAtLeast(0)
 
-        // STRICT FILTER: Must have aired episodes AND at least 1 unwatched aired episode!
-        // Excludes finished shows (35/35, 14/14, 30/30 -> 0 left) and unaired upcoming premieres (0/0).
+        // STRICT FILTER 1: Must have aired episodes AND at least 1 unwatched aired episode!
         if (aired <= 0 || completed >= aired) return null
 
-        val nextEp = obj.optJSONObject("next_episode")
-        var season = nextEp?.optInt("season", 0) ?: 0
-        var epNum = nextEp?.optInt("number", 0) ?: 0
-        var epTitle = nextEp?.optString("title", "").orEmpty().trim()
-        var epTraktId = nextEp?.optJSONObject("ids")?.optLong("trakt", 0L)
+        // STRICT FILTER 2: Trakt MUST provide a non-null `next_episode`!
+        // When `next_episode` is null on Trakt (even if completed < aired), it means the remaining episode
+        // has not aired yet or is in a hidden season (like The Boys S05E04). Never synthesize a fake episode!
+        val nextEp = obj.optJSONObject("next_episode") ?: return null
+        val season = nextEp.optInt("season", 0)
+        val epNum = nextEp.optInt("number", 0)
+        if (season <= 0 || epNum <= 0) return null
+
+        val rawTitle = nextEp.optString("title", "").trim()
+        val epTitle = if (rawTitle.equals("null", ignoreCase = true)) "" else rawTitle
+        val epTraktId = nextEp.optJSONObject("ids")?.optLong("trakt", 0L)
           ?.takeIf { it > 0L }?.toString().orEmpty()
 
-        // Fallback: if next_episode is missing despite completed < aired, find first unwatched aired episode in seasons
-        if (season <= 0 || epNum <= 0) {
-          val seasonsArr = obj.optJSONArray("seasons")
-          if (seasonsArr != null) {
-            outer@ for (si in 0 until seasonsArr.length()) {
-              val sObj = seasonsArr.optJSONObject(si) ?: continue
-              val sNum = sObj.optInt("number", 0)
-              val sAired = sObj.optInt("aired", 0)
-              val sCompleted = sObj.optInt("completed", 0)
-              if (sNum <= 0 || sAired <= 0 || sCompleted >= sAired) continue
-              val epsArr = sObj.optJSONArray("episodes") ?: continue
-              for (ei in 0 until epsArr.length()) {
-                val eObj = epsArr.optJSONObject(ei) ?: continue
-                if (!eObj.optBoolean("completed", false)) {
-                  val eNum = eObj.optInt("number", 0)
-                  if (eNum > 0) {
-                    season = sNum
-                    epNum = eNum
-                    break@outer
-                  }
-                }
-              }
-            }
+        // STRICT FILTER 3: Check `first_aired` from `&extended=full` on `next_episode`.
+        // If `first_aired` is in the future, or if it has no air date AND a blank/TBA title,
+        // the episode has NOT aired yet — exclude it from "Next to Watch"!
+        val firstAiredIso = nextEp.optString("first_aired", "").trim()
+        val hasValidFirstAired = firstAiredIso.isNotBlank() && !firstAiredIso.equals("null", ignoreCase = true)
+        if (hasValidFirstAired) {
+          val firstAiredMs = parseIsoUtcMs(firstAiredIso)
+          if (firstAiredMs > System.currentTimeMillis() + 3600_000L) {
+            return null
+          }
+        } else {
+          // No air date on Trakt: if title is also blank or TBA, it's an unaired placeholder
+          if (epTitle.isBlank() || epTitle.equals("TBA", ignoreCase = true)) {
+            return null
           }
         }
-        if (season <= 0 || epNum <= 0) return null
 
         val progressLastWatchedMs = parseIsoUtcMs(obj.optString("last_watched_at", ""))
         val finalSortMs = if (completed > 0) {
-          maxOf(stub.sortTimestampMs, progressLastWatchedMs)
+          if (progressLastWatchedMs > 0L) progressLastWatchedMs else stub.sortTimestampMs
         } else {
           stub.sortTimestampMs
         }
@@ -607,6 +740,10 @@ class TraktSyncService {
           sortTimestampMs = finalSortMs
         )
       } catch (_: Exception) {
+        if (attempt < 3) {
+          kotlinx.coroutines.delay(800L * (attempt + 1))
+          continue
+        }
         return null
       }
     }

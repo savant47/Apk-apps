@@ -3027,7 +3027,7 @@ fun UpNextQueueSection(
         .fillMaxWidth()
         .focusGroup()
     ) {
-      items(items.take(25), key = { it.id }) { item ->
+      items(items.take(100), key = { it.id }) { item ->
         val interactionSource = remember { MutableInteractionSource() }
         val isFocused by interactionSource.collectIsFocusedAsState()
         val sPad = item.seasonNumber.toString().padStart(2, '0')
