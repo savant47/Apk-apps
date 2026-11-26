@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -15,6 +16,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -44,19 +46,16 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QueuePlayNext
-import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VerifiedUser
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -85,6 +84,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,6 +111,9 @@ import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.CinemaSurfaceVariant
 import com.example.ui.theme.ClipboxWhite
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -237,6 +242,7 @@ fun TraktPortalScreen(
     username: String
   ) -> Unit,
   onTraktDisconnected: () -> Unit,
+  onOpenSettings: () -> Unit = {},
   isSyncingNow: Boolean = false,
   modifier: Modifier = Modifier
 ) {
@@ -248,20 +254,24 @@ fun TraktPortalScreen(
   val upNextItems by repository.upNextFlow.collectAsState()
   val calendarItems by repository.traktCalendarFlow.collectAsState()
   val watchlistItems by repository.traktWatchlistFlow.collectAsState()
+  val traktKeysVersion by repository.traktKeysVersionFlow.collectAsState()
 
   var activeSection by remember { mutableStateOf(TraktHubSection.UP_NEXT) }
   var sortMode by remember { mutableStateOf(TraktSortMode.RECENTLY_WATCHED) }
   var selectedLaunchPortal by remember { mutableStateOf(StreamingPortal.WATCH_SERIES) }
   var markingItemId by remember { mutableStateOf<String?>(null) }
 
-  // Device Code OAuth Setup State
-  var clientIdInput by remember { mutableStateOf(repository.getTraktClientId()) }
-  var clientSecretInput by remember { mutableStateOf(repository.getTraktClientSecret()) }
-  var showSecretText by remember { mutableStateOf(false) }
+  // Effective Developer Keys (Admin Override -> BuildConfig Secrets). Never exposed to normal users!
+  val effectiveClientId = remember(traktKeysVersion) { repository.getTraktClientId() }
+  val effectiveClientSecret = remember(traktKeysVersion) { repository.getTraktClientSecret() }
+  val hasValidAppKeys = effectiveClientId.isNotBlank()
+
+  // Auto-Generated Device Code OAuth State
   var isGeneratingCode by remember { mutableStateOf(false) }
   var authError by remember { mutableStateOf<String?>(null) }
   var activeDeviceAuth by remember { mutableStateOf<ActiveDeviceAuthState?>(null) }
   var remainingSeconds by remember { mutableIntStateOf(0) }
+  var codeRefreshNonce by remember { mutableIntStateOf(0) }
 
   fun copyToClipboard(label: String, value: String) {
     try {
@@ -272,8 +282,8 @@ fun TraktPortalScreen(
   }
 
   fun openExternalTraktUrl(url: String) {
-    // Strictly allow only official https://trakt.tv URLs
-    if (!url.startsWith("https://trakt.tv/")) return
+    // Strictly allow only official https://trakt.tv or https://auth.trakt.tv URLs
+    if (!url.startsWith("https://trakt.tv/") && !url.startsWith("https://auth.trakt.tv/")) return
     try {
       val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -284,15 +294,67 @@ fun TraktPortalScreen(
     }
   }
 
-  // Automatic Background Polling while Device Code is active
+  // AUTO-GENERATE Device Code immediately when Trakt tab opens (like BeeTV / HDO Box)
+  LaunchedEffect(isConnected, effectiveClientId, effectiveClientSecret, codeRefreshNonce) {
+    if (isConnected) {
+      activeDeviceAuth = null
+      authError = null
+      isGeneratingCode = false
+      return@LaunchedEffect
+    }
+    if (!hasValidAppKeys) {
+      activeDeviceAuth = null
+      authError = null
+      isGeneratingCode = false
+      return@LaunchedEffect
+    }
+    if (activeDeviceAuth != null && remainingSeconds > 15 && codeRefreshNonce == 0) {
+      return@LaunchedEffect
+    }
+    isGeneratingCode = true
+    authError = null
+    try {
+      when (val res = traktSyncService.requestDeviceCode(effectiveClientId)) {
+        is TraktDeviceCodeResult.Success -> {
+          activeDeviceAuth = ActiveDeviceAuthState(
+            deviceCode = res.deviceCode,
+            userCode = res.userCode,
+            verificationUrl = res.verificationUrl.ifBlank { TraktSyncService.TRAKT_ACTIVATE_URL },
+            intervalSec = res.intervalSec,
+            expiresAtMs = System.currentTimeMillis() + (res.expiresInSec * 1000L)
+          )
+          remainingSeconds = res.expiresInSec
+        }
+        is TraktDeviceCodeResult.Error -> {
+          activeDeviceAuth = null
+          authError = res.message
+        }
+      }
+    } finally {
+      isGeneratingCode = false
+    }
+  }
+
+  // Smooth 1-second visual countdown timer while code is active
   LaunchedEffect(activeDeviceAuth?.deviceCode) {
     val auth = activeDeviceAuth ?: return@LaunchedEffect
-    var pollIntervalMs = (auth.intervalSec.coerceAtLeast(4)) * 1000L
     while (isActive && activeDeviceAuth?.deviceCode == auth.deviceCode) {
       val leftSec = ((auth.expiresAtMs - System.currentTimeMillis()) / 1000L).toInt().coerceAtLeast(0)
       remainingSeconds = leftSec
+      if (leftSec <= 0) break
+      delay(1000L)
+    }
+  }
+
+  // Automatic Background Polling while Device Code is active
+  LaunchedEffect(activeDeviceAuth?.deviceCode, effectiveClientId, effectiveClientSecret) {
+    val auth = activeDeviceAuth ?: return@LaunchedEffect
+    if (!hasValidAppKeys) return@LaunchedEffect
+    var pollIntervalMs = (auth.intervalSec.coerceAtLeast(4)) * 1000L
+    while (isActive && activeDeviceAuth?.deviceCode == auth.deviceCode) {
+      val leftSec = ((auth.expiresAtMs - System.currentTimeMillis()) / 1000L).toInt().coerceAtLeast(0)
       if (leftSec <= 0) {
-        authError = "انتهت صلاحية كود التفعيل — اضغط توليد كود جديد"
+        authError = "انتهت صلاحية كود التفعيل — اضغط لتوليد كود جديد"
         activeDeviceAuth = null
         break
       }
@@ -302,25 +364,25 @@ fun TraktPortalScreen(
 
       when (
         val pollRes = traktSyncService.pollDeviceToken(
-          clientId = clientIdInput.trim(),
-          clientSecret = clientSecretInput.trim(),
+          clientId = effectiveClientId,
+          clientSecret = effectiveClientSecret,
           deviceCode = auth.deviceCode
         )
       ) {
         is TraktTokenPollResult.Authorized -> {
           val tokens = pollRes.tokens
-          val username = traktSyncService.fetchUserProfile(clientIdInput.trim(), tokens.accessToken)
+          val username = traktSyncService.fetchUserProfile(effectiveClientId, tokens.accessToken)
           repository.saveTraktOAuthCredentials(
-            clientId = clientIdInput.trim(),
-            clientSecret = clientSecretInput.trim(),
+            clientId = effectiveClientId,
+            clientSecret = effectiveClientSecret,
             accessToken = tokens.accessToken,
             refreshToken = tokens.refreshToken,
             expiresAtMs = tokens.expiresAtMs,
             username = username
           )
           onTraktCredentialsSaved(
-            clientIdInput.trim(),
-            clientSecretInput.trim(),
+            effectiveClientId,
+            effectiveClientSecret,
             tokens.accessToken,
             tokens.refreshToken,
             tokens.expiresAtMs,
@@ -343,12 +405,12 @@ fun TraktPortalScreen(
           pollIntervalMs = (pollIntervalMs + 3000L).coerceAtMost(15_000L)
         }
         TraktTokenPollResult.Expired -> {
-          authError = "انتهت صلاحية الكود — قم بتوليد كود جديد"
+          authError = "انتهت صلاحية الكود — اضغط لتوليد كود جديد"
           activeDeviceAuth = null
           break
         }
         TraktTokenPollResult.Denied -> {
-          authError = "تم رفض الربط من Trakt"
+          authError = "تم رفض الربط من Trakt — يمكنك توليد كود جديد"
           activeDeviceAuth = null
           break
         }
@@ -382,7 +444,7 @@ fun TraktPortalScreen(
     ) {
       if (!isConnected) {
         // =====================================================================
-        // STATE A: OFFICIAL TRAKT OAUTH DEVICE CODE ACTIVATION SCREEN (NO WEBVIEW)
+        // STATE A: 1-STEP AUTO-GENERATED TRAKT ACTIVATION + QR CODE (ZERO DEV SETUP)
         // =====================================================================
         Column(
           modifier = Modifier
@@ -392,7 +454,6 @@ fun TraktPortalScreen(
           verticalArrangement = Arrangement.spacedBy(14.dp),
           horizontalAlignment = Alignment.CenterHorizontally
         ) {
-          // Hero Card matching user's web app design (Dark Red Gradient + Official OAuth Badge)
           Surface(
             shape = RoundedCornerShape(22.dp),
             border = BorderStroke(1.5.dp, Color(0xFF7F1D1D)),
@@ -412,15 +473,15 @@ fun TraktPortalScreen(
                 .padding(18.dp),
               verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-              // Top Red Badge Icon + Title
+              // Top Icon + Title Header
               Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
               ) {
                 Box(
                   modifier = Modifier
-                    .size(54.dp)
+                    .size(50.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(Color(0xFFED1C24)),
                   contentAlignment = Alignment.Center
@@ -429,384 +490,223 @@ fun TraktPortalScreen(
                     imageVector = Icons.Default.QueuePlayNext,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(30.dp)
+                    modifier = Modifier.size(26.dp)
                   )
                 }
 
-                Surface(
-                  color = Color(0x1F10B981),
-                  shape = RoundedCornerShape(50),
-                  border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.65f))
-                ) {
-                  Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.VerifiedUser,
-                      contentDescription = null,
-                      tint = Color(0xFF34D399),
-                      modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                      text = "OAuth رسمي مدمج",
-                      color = Color(0xFF34D399),
-                      fontSize = 12.5.sp,
-                      fontWeight = FontWeight.ExtraBold
-                    )
-                  }
-                }
+                Text(
+                  text = "ربط حساب Trakt.tv بالكود",
+                  color = Color.White,
+                  fontSize = 21.sp,
+                  fontWeight = FontWeight.Black,
+                  lineHeight = 27.sp,
+                  modifier = Modifier.weight(1f)
+                )
               }
 
               Text(
-                text = "ربط حساب Trakt.tv الرسمي بالكود",
-                color = Color.White,
-                fontSize = 23.sp,
-                fontWeight = FontWeight.Black,
-                lineHeight = 30.sp
-              )
-
-              Text(
-                text = "اربط حسابك بكود التفعيل الرسمي ليتم تخزين بياناتك كاش محلياً على التطبيق، وعرض التالي للمشاهدة وجدول الحلقات وقائمتك مباشرة على الواجهة الرئيسية مع تسجيل المشاهدة تلقائياً عند 80%.",
+                text = "امسح رمز QR بهاتفك أو افتح رابط التفعيل وأدخل الكود الظاهر أدناه لربط حسابك تلقائياً وعرض حلقاتك القادمة وجدول العرض وقائمتك على الواجهة الرئيسية.",
                 color = Color(0xFFCBD5E1),
-                fontSize = 14.5.sp,
-                lineHeight = 22.sp
+                fontSize = 14.sp,
+                lineHeight = 21.sp
               )
 
-              // Active Device Code Activation Box (shown right after pressing Generate Code)
-              val deviceAuth = activeDeviceAuth
-              if (deviceAuth != null) {
+              if (!hasValidAppKeys) {
+                // Clean, non-technical message when developer Secrets haven't been set yet
                 Surface(
-                  color = Color(0xFF0B1220),
+                  color = Color(0xFF101622),
                   shape = RoundedCornerShape(16.dp),
-                  border = BorderStroke(2.dp, CinemaAccent),
+                  border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.6f)),
                   modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("trakt_active_code_card")
+                    .testTag("trakt_unconfigured_card")
                 ) {
                   Column(
                     modifier = Modifier
                       .fillMaxWidth()
                       .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                   ) {
+                    Icon(
+                      imageVector = Icons.Default.Settings,
+                      contentDescription = null,
+                      tint = CinemaAccent,
+                      modifier = Modifier.size(34.dp)
+                    )
                     Text(
-                      text = "أدخل هذا الكود في صفحة التفعيل على Trakt:",
-                      color = Color.LightGray,
-                      fontSize = 14.sp,
-                      fontWeight = FontWeight.Bold,
+                      text = "خدمة ربط Trakt بانتظار التفعيل من المسؤول",
+                      color = Color.White,
+                      fontSize = 16.sp,
+                      fontWeight = FontWeight.ExtraBold,
                       textAlign = TextAlign.Center
                     )
-
-                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                      Surface(
-                        color = Color(0xFF1A2232),
-                        shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.5.dp, CinemaPrimary)
-                      ) {
-                        Text(
-                          text = deviceAuth.userCode,
-                          color = CinemaAccent,
-                          fontSize = 34.sp,
-                          fontWeight = FontWeight.Black,
-                          fontFamily = FontFamily.Monospace,
-                          letterSpacing = 4.sp,
-                          modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
-                        )
+                    Text(
+                      text = "بمجرد إضافة مفاتيح التطبيق في Secrets أو من خلال ترس الإعدادات للمسؤول، سيظهر كود التفعيل ورمز QR هنا تلقائياً لجميع المستخدمين.",
+                      color = Color.LightGray,
+                      fontSize = 13.sp,
+                      lineHeight = 20.sp,
+                      textAlign = TextAlign.Center
+                    )
+                    Button(
+                      onClick = onOpenSettings,
+                      colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
+                      shape = RoundedCornerShape(12.dp),
+                      modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("btn_trakt_open_admin_settings")
+                    ) {
+                      Icon(Icons.Default.Settings, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(18.dp))
+                      Spacer(modifier = Modifier.width(6.dp))
+                      Text("فتح الإعدادات", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+                    }
+                  }
+                }
+              } else if (isGeneratingCode && activeDeviceAuth == null) {
+                Surface(
+                  color = Color(0xFF0B1220),
+                  shape = RoundedCornerShape(16.dp),
+                  border = BorderStroke(1.dp, CinemaBorder),
+                  modifier = Modifier.fillMaxWidth()
+                ) {
+                  Column(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                  ) {
+                    CircularProgressIndicator(
+                      color = Color(0xFFED1C24),
+                      strokeWidth = 3.dp,
+                      modifier = Modifier.size(38.dp)
+                    )
+                    Text(
+                      text = "جاري تجهيز كود التفعيل ورمز QR تلقائياً...",
+                      color = Color.White,
+                      fontSize = 14.5.sp,
+                      fontWeight = FontWeight.Bold
+                    )
+                  }
+                }
+              } else {
+                val deviceAuth = activeDeviceAuth
+                if (deviceAuth != null) {
+                  val activateUrl = deviceAuth.verificationUrl.ifBlank { TraktSyncService.TRAKT_ACTIVATE_URL }
+                  Surface(
+                    color = Color(0xFF0B1220),
+                    shape = RoundedCornerShape(18.dp),
+                    border = BorderStroke(1.5.dp, CinemaAccent.copy(alpha = 0.85f)),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("trakt_active_code_card")
+                  ) {
+                    BoxWithConstraints(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                    ) {
+                      val isWide = maxWidth >= 520.dp
+                      if (isWide) {
+                        Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.spacedBy(18.dp),
+                          verticalAlignment = Alignment.CenterVertically
+                        ) {
+                          TraktQrActivationBlock(
+                            url = activateUrl,
+                            qrSize = 164.dp
+                          )
+                          TraktCodeAndActionsColumn(
+                            userCode = deviceAuth.userCode,
+                            activateUrl = activateUrl,
+                            remainingSeconds = remainingSeconds,
+                            isRefreshing = isGeneratingCode,
+                            onCopyCode = { copyToClipboard("كود التفعيل", deviceAuth.userCode) },
+                            onOpenActivate = { openExternalTraktUrl(activateUrl) },
+                            onRefreshCode = { codeRefreshNonce++ },
+                            modifier = Modifier.weight(1f)
+                          )
+                        }
+                      } else {
+                        Column(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalAlignment = Alignment.CenterHorizontally,
+                          verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                          TraktQrActivationBlock(
+                            url = activateUrl,
+                            qrSize = 172.dp
+                          )
+                          TraktCodeAndActionsColumn(
+                            userCode = deviceAuth.userCode,
+                            activateUrl = activateUrl,
+                            remainingSeconds = remainingSeconds,
+                            isRefreshing = isGeneratingCode,
+                            onCopyCode = { copyToClipboard("كود التفعيل", deviceAuth.userCode) },
+                            onOpenActivate = { openExternalTraktUrl(activateUrl) },
+                            onRefreshCode = { codeRefreshNonce++ },
+                            modifier = Modifier.fillMaxWidth()
+                          )
+                        }
                       }
                     }
+                  }
+                }
 
-                    Row(
-                      modifier = Modifier.fillMaxWidth(),
-                      horizontalArrangement = Arrangement.spacedBy(8.dp)
+                if (!authError.isNullOrBlank()) {
+                  Surface(
+                    color = Color(0x33EF4444),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFFEF4444)),
+                    modifier = Modifier.fillMaxWidth()
+                  ) {
+                    Column(
+                      modifier = Modifier.padding(12.dp),
+                      verticalArrangement = Arrangement.spacedBy(10.dp),
+                      horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                      Text(
+                        text = authError ?: "",
+                        color = Color(0xFFFCA5A5),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                      )
                       Button(
-                        onClick = { copyToClipboard("كود التفعيل", deviceAuth.userCode) },
-                        colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                          .weight(1f)
-                          .heightIn(min = 48.dp)
-                          .testTag("btn_trakt_copy_code")
-                      ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("نسخ الكود", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
-                      }
-
-                      Button(
-                        onClick = { openExternalTraktUrl(deviceAuth.verificationUrl.ifBlank { TraktSyncService.TRAKT_ACTIVATE_URL }) },
+                        onClick = { codeRefreshNonce++ },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED1C24)),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
-                          .weight(1f)
+                          .fillMaxWidth()
                           .heightIn(min = 48.dp)
-                          .testTag("btn_trakt_open_activate")
+                          .testTag("btn_trakt_retry_code")
                       ) {
-                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("فتح التفعيل", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+                        Text("توليد كود تفعيل جديد", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
                       }
-                    }
-
-                    Row(
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                      CircularProgressIndicator(
-                        color = CinemaSuccess,
-                        strokeWidth = 2.5.dp,
-                        modifier = Modifier.size(18.dp)
-                      )
-                      val mins = remainingSeconds / 60
-                      val secs = remainingSeconds % 60
-                      Text(
-                        text = "بانتظار تأكيدك في trakt.tv/activate... (%02d:%02d)".format(Locale.US, mins, secs),
-                        color = CinemaSuccess,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                      )
                     }
                   }
                 }
               }
 
-              // Gold-bordered One-Time Trakt App Keys Card (matching screenshot!)
-              Surface(
-                color = Color(0xFF1A1710),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color(0xFF927125)),
-                modifier = Modifier.fillMaxWidth()
-              ) {
-                Column(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                  verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                  ) {
-                    Icon(Icons.Default.Key, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(20.dp))
-                    Text(
-                      text = "إعداد مفاتيح تطبيق Trakt (مرة واحدة فقط)",
-                      color = CinemaAccent,
-                      fontSize = 15.5.sp,
-                      fontWeight = FontWeight.ExtraBold
-                    )
-                  }
-
-                  Surface(
-                    onClick = { openExternalTraktUrl(TraktSyncService.TRAKT_CREATE_APP_URL) },
-                    color = Color(0x1F38BDF8),
-                    shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.55f)),
-                    modifier = Modifier
-                      .heightIn(min = 42.dp)
-                      .testTag("btn_trakt_create_app")
-                  ) {
-                    Row(
-                      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                      Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(17.dp))
-                      Text(
-                        text = "إنشاء تطبيق Trakt مجاني",
-                        color = Color(0xFF38BDF8),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.ExtraBold
-                      )
-                    }
-                  }
-
-                  Text(
-                    text = "في صفحة إنشاء التطبيق على Trakt، اكتب أي اسم (مثل Asser TV) وضع في خانة Redirect URI القيمة التالية ثم انسخ Client ID و Client Secret هنا:",
-                    color = Color(0xFFD1D5DB),
-                    fontSize = 13.sp,
-                    lineHeight = 20.sp
-                  )
-
-                  Surface(
-                    onClick = { copyToClipboard("Redirect URI", TraktSyncService.REDIRECT_URI_OOB) },
-                    color = Color(0xFF0E1218),
-                    shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.5f)),
-                    modifier = Modifier.fillMaxWidth()
-                  ) {
-                    Row(
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                      CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                        Text(
-                          text = TraktSyncService.REDIRECT_URI_OOB,
-                          color = CinemaAccent,
-                          fontSize = 13.sp,
-                          fontFamily = FontFamily.Monospace,
-                          fontWeight = FontWeight.Bold,
-                          maxLines = 1,
-                          overflow = TextOverflow.Ellipsis,
-                          modifier = Modifier.weight(1f)
-                        )
-                      }
-                      Spacer(modifier = Modifier.width(8.dp))
-                      Icon(Icons.Default.ContentCopy, contentDescription = "نسخ", tint = CinemaAccent, modifier = Modifier.size(16.dp))
-                    }
-                  }
-
-                  OutlinedTextField(
-                    value = clientIdInput,
-                    onValueChange = {
-                      clientIdInput = it
-                      authError = null
-                    },
-                    placeholder = { Text("Trakt Client ID", color = Color.Gray, fontSize = 14.sp) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                      focusedBorderColor = CinemaAccent,
-                      unfocusedBorderColor = CinemaBorder,
-                      focusedTextColor = Color.White,
-                      unfocusedTextColor = Color.White,
-                      focusedContainerColor = Color(0xFF0E1218),
-                      unfocusedContainerColor = Color(0xFF0E1218)
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .testTag("input_trakt_client_id")
-                  )
-
-                  OutlinedTextField(
-                    value = clientSecretInput,
-                    onValueChange = {
-                      clientSecretInput = it
-                      authError = null
-                    },
-                    placeholder = { Text("Trakt Client Secret", color = Color.Gray, fontSize = 14.sp) },
-                    trailingIcon = {
-                      IconButton(onClick = { showSecretText = !showSecretText }) {
-                        Icon(
-                          imageVector = if (showSecretText) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                          contentDescription = if (showSecretText) "إخفاء" else "إظهار",
-                          tint = Color.LightGray
-                        )
-                      }
-                    },
-                    visualTransformation = if (showSecretText) VisualTransformation.None else PasswordVisualTransformation(),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                      focusedBorderColor = CinemaAccent,
-                      unfocusedBorderColor = CinemaBorder,
-                      focusedTextColor = Color.White,
-                      unfocusedTextColor = Color.White,
-                      focusedContainerColor = Color(0xFF0E1218),
-                      unfocusedContainerColor = Color(0xFF0E1218)
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .testTag("input_trakt_client_secret")
-                  )
-                }
-              }
-
-              if (!authError.isNullOrBlank()) {
-                Surface(
-                  color = Color(0x33EF4444),
-                  shape = RoundedCornerShape(10.dp),
-                  border = BorderStroke(1.dp, Color(0xFFEF4444)),
-                  modifier = Modifier.fillMaxWidth()
-                ) {
-                  Text(
-                    text = authError ?: "",
-                    color = Color(0xFFFCA5A5),
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
-                  )
-                }
-              }
-
-              // Primary Red Generate Code CTA Button
-              Button(
-                onClick = {
-                  val cId = clientIdInput.trim()
-                  val cSec = clientSecretInput.trim()
-                  if (cId.isBlank() || cSec.isBlank()) {
-                    authError = "يرجى إدخال Trakt Client ID و Trakt Client Secret أولاً"
-                    return@Button
-                  }
-                  repository.saveTraktAppKeys(cId, cSec)
-                  authError = null
-                  isGeneratingCode = true
-                  scope.launch {
-                    try {
-                      when (val res = traktSyncService.requestDeviceCode(cId)) {
-                        is TraktDeviceCodeResult.Success -> {
-                          activeDeviceAuth = ActiveDeviceAuthState(
-                            deviceCode = res.deviceCode,
-                            userCode = res.userCode,
-                            verificationUrl = res.verificationUrl,
-                            intervalSec = res.intervalSec,
-                            expiresAtMs = System.currentTimeMillis() + (res.expiresInSec * 1000L)
-                          )
-                          remainingSeconds = res.expiresInSec
-                        }
-                        is TraktDeviceCodeResult.Error -> {
-                          authError = res.message
-                        }
-                      }
-                    } finally {
-                      isGeneratingCode = false
-                    }
-                  }
-                },
-                enabled = !isGeneratingCode,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED1C24)),
-                shape = RoundedCornerShape(14.dp),
-                contentPadding = PaddingValues(vertical = 14.dp),
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .heightIn(min = 52.dp)
-                  .testTag("btn_trakt_generate_code")
-              ) {
-                if (isGeneratingCode) {
-                  CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(22.dp))
-                } else {
-                  Icon(Icons.Default.Key, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
-                  Spacer(modifier = Modifier.width(8.dp))
-                  Text(
-                    text = "توليد كود ربط Trakt الآن",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Black
-                  )
-                }
-              }
-
-              // 3 Feature Summary Pills (matching screenshot!)
+              // 3 Clean Feature Highlights (ZERO "كاش محلي")
               Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TraktFeatureHighlightRow(
-                  icon = Icons.Default.Storage,
+                  icon = Icons.Default.Sync,
                   iconTint = Color(0xFF38BDF8),
-                  text = "تخزين كاش محلي سريع على التطبيق بدون متصفح"
+                  text = "متابعة حلقاتك القادمة وجدول العرض مباشرة داخل التطبيق"
                 )
                 TraktFeatureHighlightRow(
                   icon = Icons.Default.CheckCircle,
                   iconTint = CinemaSuccess,
-                  text = "مزامنة تلقائية عند مشاهدة 80% أو الضغط على ✓"
+                  text = "تسجيل المشاهدة تلقائياً عند 80% أو بالضغط على ✓"
                 )
                 TraktFeatureHighlightRow(
                   icon = Icons.Default.LocalFireDepartment,
                   iconTint = Color(0xFFED1C24),
-                  text = "عرض كامل على الواجهة الرئيسية مع استكمال المشاهدة"
+                  text = "عرض مباشر على الواجهة الرئيسية مع استكمال المشاهدة"
                 )
               }
             }
@@ -1658,3 +1558,207 @@ private fun TraktHubTabChip(
     }
   }
 }
+
+@Composable
+private fun TraktQrActivationBlock(
+  url: String,
+  qrSize: Dp
+) {
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(8.dp)
+  ) {
+    Surface(
+      color = Color.White,
+      shape = RoundedCornerShape(16.dp),
+      border = BorderStroke(2.dp, CinemaAccent.copy(alpha = 0.8f)),
+      modifier = Modifier.testTag("trakt_qr_code_card")
+    ) {
+      Box(
+        modifier = Modifier.padding(10.dp),
+        contentAlignment = Alignment.Center
+      ) {
+        LocalQrCodeCanvas(
+          content = url,
+          size = qrSize
+        )
+      }
+    }
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+      Icon(
+        imageVector = Icons.Default.QrCode2,
+        contentDescription = null,
+        tint = CinemaAccent,
+        modifier = Modifier.size(16.dp)
+      )
+      Text(
+        text = "امسح الكود بكاميرا الهاتف",
+        color = Color(0xFFE2E8F0),
+        fontSize = 12.5.sp,
+        fontWeight = FontWeight.Bold
+      )
+    }
+  }
+}
+
+@Composable
+private fun TraktCodeAndActionsColumn(
+  userCode: String,
+  activateUrl: String,
+  remainingSeconds: Int,
+  isRefreshing: Boolean,
+  onCopyCode: () -> Unit,
+  onOpenActivate: () -> Unit,
+  onRefreshCode: () -> Unit,
+  modifier: Modifier = Modifier
+) {
+  Column(
+    modifier = modifier,
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(12.dp)
+  ) {
+    Text(
+      text = "أدخل هذا الكود في صفحة التفعيل على Trakt:",
+      color = Color.LightGray,
+      fontSize = 14.sp,
+      fontWeight = FontWeight.Bold,
+      textAlign = TextAlign.Center
+    )
+
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+      Surface(
+        color = Color(0xFF1A2232),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.5.dp, CinemaPrimary)
+      ) {
+        Text(
+          text = userCode,
+          color = CinemaAccent,
+          fontSize = 34.sp,
+          fontWeight = FontWeight.Black,
+          fontFamily = FontFamily.Monospace,
+          letterSpacing = 4.sp,
+          modifier = Modifier
+            .padding(horizontal = 24.dp, vertical = 12.dp)
+            .testTag("trakt_activation_code_text")
+        )
+      }
+    }
+
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+      Text(
+        text = activateUrl.removePrefix("https://"),
+        color = Color(0xFF38BDF8),
+        fontSize = 13.5.sp,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold
+      )
+    }
+
+    Button(
+      onClick = onOpenActivate,
+      colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED1C24)),
+      shape = RoundedCornerShape(12.dp),
+      contentPadding = PaddingValues(vertical = 13.dp, horizontal = 16.dp),
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 50.dp)
+        .testTag("btn_trakt_open_activate")
+    ) {
+      Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, tint = Color.White, modifier = Modifier.size(19.dp))
+      Spacer(modifier = Modifier.width(8.dp))
+      Text("فتح رابط التفعيل (trakt.tv/activate)", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.Black)
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      Button(
+        onClick = onCopyCode,
+        colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+          .weight(1f)
+          .heightIn(min = 48.dp)
+          .testTag("btn_trakt_copy_code")
+      ) {
+        Icon(Icons.Default.ContentCopy, contentDescription = null, tint = CinemaAccent, modifier = Modifier.size(17.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("نسخ الكود", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold)
+      }
+
+      Button(
+        onClick = onRefreshCode,
+        enabled = !isRefreshing,
+        colors = ButtonDefaults.buttonColors(containerColor = CinemaSurfaceVariant),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+          .weight(1f)
+          .heightIn(min = 48.dp)
+          .testTag("btn_trakt_refresh_code")
+      ) {
+        Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text("كود جديد", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.ExtraBold)
+      }
+    }
+
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+      CircularProgressIndicator(
+        color = CinemaSuccess,
+        strokeWidth = 2.5.dp,
+        modifier = Modifier.size(17.dp)
+      )
+      val mins = remainingSeconds / 60
+      val secs = remainingSeconds % 60
+      Text(
+        text = "بانتظار موافقتك على Trakt... (%02d:%02d)".format(Locale.US, mins, secs),
+        color = CinemaSuccess,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold
+      )
+    }
+  }
+}
+
+@Composable
+private fun LocalQrCodeCanvas(
+  content: String,
+  size: Dp
+) {
+  val matrix = remember(content) {
+    try {
+      val hints = mapOf(EncodeHintType.MARGIN to 1)
+      QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, 33, 33, hints)
+    } catch (_: Throwable) {
+      null
+    }
+  }
+  Canvas(modifier = Modifier.size(size)) {
+    drawRect(color = Color.White)
+    val m = matrix ?: return@Canvas
+    val cols = m.width.coerceAtLeast(1)
+    val rows = m.height.coerceAtLeast(1)
+    val cellW = this.size.width / cols
+    val cellH = this.size.height / rows
+    for (y in 0 until rows) {
+      for (x in 0 until cols) {
+        if (m.get(x, y)) {
+          drawRect(
+            color = Color(0xFF0A0E17),
+            topLeft = Offset(x * cellW, y * cellH),
+            size = Size(cellW + 0.5f, cellH + 0.5f)
+          )
+        }
+      }
+    }
+  }
+}
+

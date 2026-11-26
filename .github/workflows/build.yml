@@ -60,10 +60,18 @@ jobs:
         id: signing
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
         run: |
-          echo "GEMINI_API_KEY=dummy_key" > .env
+          {
+            echo "GEMINI_API_KEY=dummy_key"
+            echo "TRAKT_CLIENT_ID=${TRAKT_CLIENT_ID:-TRAKT_CLIENT_ID_DEFAULT_VALUE}"
+            if [ -n "$TRAKT_CLIENT_SECRET" ]; then
+              echo "TRAKT_CLIENT_SECRET=${TRAKT_CLIENT_SECRET}"
+            fi
+          } > .env
           mkdir -p app
-          echo "GEMINI_API_KEY=dummy_key" > app/.env
+          cp .env app/.env
 
           SIGNING_SOURCE=""
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then

@@ -167,6 +167,7 @@ fun MainScreen(
   var showUpdateDialog by remember { mutableStateOf(false) }
   var showDiagnosticsDialog by remember { mutableStateOf(false) }
   var showAccountDialog by remember { mutableStateOf(false) }
+  var showSettingsDialog by remember { mutableStateOf(false) }
   var isSyncingTrakt by remember { mutableStateOf(false) }
 
   suspend fun getValidTraktCredentials(forceRefresh: Boolean = false): Pair<String, String>? {
@@ -178,7 +179,7 @@ fun MainScreen(
     if (clientId.isBlank() || accessToken.isBlank()) return null
 
     val isExpiredOrNear = expiresAtMs > 0L && System.currentTimeMillis() >= (expiresAtMs - 5 * 60_000L)
-    if ((forceRefresh || isExpiredOrNear) && clientSecret.isNotBlank() && refreshToken.isNotBlank()) {
+    if ((forceRefresh || isExpiredOrNear) && refreshToken.isNotBlank()) {
       val refreshed = traktSyncService.refreshAccessToken(clientId, clientSecret, refreshToken)
       if (refreshed != null) {
         accessToken = refreshed.accessToken
@@ -1477,7 +1478,10 @@ fun MainScreen(
         cursorY = y
       },
       onBackHandled = {
-        if (showAccountDialog) {
+        if (showSettingsDialog) {
+          showSettingsDialog = false
+          true
+        } else if (showAccountDialog) {
           showAccountDialog = false
           true
         } else if (showDiagnosticsDialog) {
@@ -1534,7 +1538,8 @@ fun MainScreen(
   DisposableEffect(activity) {
     val keyEventProvider = activity as? KeyEventProvider
     keyEventProvider?.setKeyEventCallback { event ->
-      val anyModalOpen = showAccountDialog ||
+      val anyModalOpen = showSettingsDialog ||
+        showAccountDialog ||
         showDiagnosticsDialog ||
         showUpdateDialog ||
         showDisplayModeDialog ||
@@ -1557,7 +1562,9 @@ fun MainScreen(
   }
 
   BackHandler {
-    if (showAccountDialog) {
+    if (showSettingsDialog) {
+      showSettingsDialog = false
+    } else if (showAccountDialog) {
       showAccountDialog = false
     } else if (showDiagnosticsDialog) {
       showDiagnosticsDialog = false
@@ -2536,7 +2543,7 @@ fun MainScreen(
                     icon = Icons.Default.VideoLibrary,
                     tint = if (isWatchSidePanelOpen) Color.Black else Color.White,
                     containerColor = if (isWatchSidePanelOpen) ClipboxWhite else CinemaSurface,
-                    contentDescription = "إظهار/إخفاء لوحة المصادر والحلقات",
+                    contentDescription = "إظهار/إخفاء لوحة البوابات والحلقات",
                     onClick = { isWatchSidePanelOpen = !isWatchSidePanelOpen },
                     testTag = "btn_top_toggle_side_panel"
                   )
@@ -2555,45 +2562,6 @@ fun MainScreen(
           }
         }
       }
-    },
-    bottomBar = {
-      if (isBarVisible && !isFullscreenVideo && (isHomeActive || isGeneralBrowserSession)) {
-        TvNavBar(
-          activePortal = activePortal,
-          isHomeActive = isHomeActive,
-          selectedMainTab = selectedMainTab,
-          controlMode = controlMode,
-          currentDisplayMode = displayMode,
-          onGoToBrowserHome = {
-            selectedMainTab = AppMainTab.BROWSER
-            isHomeActive = true
-          },
-          onGoToAsserTvHome = {
-            selectedMainTab = AppMainTab.ASSER_TV
-            isHomeActive = true
-          },
-          onGoToTrakt = {
-            selectedMainTab = AppMainTab.TRAKT
-            isHomeActive = true
-          },
-          onSelectPortal = { portal ->
-            navigateTo(portal.homeUrl, portal, portal.displayNameArabic, isGeneralBrowser = false)
-          },
-          onOpenBookmarks = { showFavoritesDialog = true },
-          onOpenHistory = { showHistoryDialog = true },
-          onToggleControlMode = {
-            val newMode = if (controlMode == ControlMode.VIRTUAL_MOUSE) ControlMode.DPAD_NAV else ControlMode.VIRTUAL_MOUSE
-            controlMode = newMode
-            repository.setControlMode(newMode)
-            val msg = if (newMode == ControlMode.VIRTUAL_MOUSE) "تم تفعيل وضع الماوس (تحريك بالأسهم + نقر بـ OK)" else "تم تفعيل وضع الأسهم للتصفح والتمرير"
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-          },
-          onOpenModeDialog = { showDisplayModeDialog = true },
-          accountDisplayName = currentAccount?.displayName.orEmpty(),
-          onOpenAccountDialog = { showAccountDialog = true },
-          modifier = if (displayMode == AppDisplayMode.MOBILE) Modifier.navigationBarsPadding() else Modifier
-        )
-      }
     }
   ) { innerPadding ->
     if (isHomeActive) {
@@ -2601,7 +2569,7 @@ fun MainScreen(
         modifier = Modifier
           .fillMaxSize()
           .padding(innerPadding)
-          .then(if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding() else Modifier)
+          .then(if (displayMode == AppDisplayMode.MOBILE) Modifier.statusBarsPadding().navigationBarsPadding() else Modifier)
       ) {
         AppMainTabSwitcherBar(
           selectedTab = selectedMainTab,
@@ -2622,7 +2590,8 @@ fun MainScreen(
           onOpenUpdate = { showUpdateDialog = true },
           onOpenDiagnostics = { showDiagnosticsDialog = true },
           accountDisplayName = currentAccount?.displayName.orEmpty(),
-          onOpenAccount = { showAccountDialog = true }
+          onOpenAccount = { showAccountDialog = true },
+          onOpenSettings = { showSettingsDialog = true }
         )
 
         fun resolveAndLaunchShowEpisode(
@@ -2791,6 +2760,7 @@ fun MainScreen(
                   )
                 }
               },
+              onOpenSettings = { showSettingsDialog = true },
               isSyncingNow = isSyncingTrakt,
               modifier = Modifier.weight(1f)
             )
@@ -2814,6 +2784,7 @@ fun MainScreen(
               onOpenDisplayMode = { showDisplayModeDialog = true },
               onOpenAdBlockSettings = { showAdBlockDialog = true },
               onOpenUpdate = { showUpdateDialog = true },
+              onOpenSettings = { showSettingsDialog = true },
               onOpenTrakt = {
                 selectedMainTab = AppMainTab.TRAKT
                 isHomeActive = true
@@ -3458,6 +3429,31 @@ fun MainScreen(
         repository.disconnectTrakt()
       },
       onDismiss = { showAccountDialog = false }
+    )
+  }
+
+  if (showSettingsDialog) {
+    UnifiedSettingsDialog(
+      repository = repository,
+      displayMode = displayMode,
+      controlMode = controlMode,
+      onOpenDisplayMode = { showDisplayModeDialog = true },
+      onToggleControlMode = {
+        val newMode = if (controlMode == ControlMode.VIRTUAL_MOUSE) ControlMode.DPAD_NAV else ControlMode.VIRTUAL_MOUSE
+        controlMode = newMode
+        repository.setControlMode(newMode)
+        val msg = if (newMode == ControlMode.VIRTUAL_MOUSE) "تم تفعيل وضع الماوس (تحريك بالأسهم + نقر بـ OK)" else "تم تفعيل وضع الأسهم للتصفح والتمرير"
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+      },
+      onOpenAdBlock = { showAdBlockDialog = true },
+      onOpenUpdate = { showUpdateDialog = true },
+      onOpenDiagnostics = { showDiagnosticsDialog = true },
+      onAdminTraktKeysUpdated = {
+        if (repository.isTraktConnected()) {
+          triggerFullTraktSync(showToast = false)
+        }
+      },
+      onDismiss = { showSettingsDialog = false }
     )
   }
   }

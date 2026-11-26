@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.SportsSoccer
@@ -112,6 +113,7 @@ fun AppMainTabSwitcherBar(
   onOpenDiagnostics: () -> Unit = {},
   accountDisplayName: String = "",
   onOpenAccount: () -> Unit = {},
+  onOpenSettings: () -> Unit = {},
   modifier: Modifier = Modifier
 ) {
   val configuration = LocalConfiguration.current
@@ -155,62 +157,17 @@ fun AppMainTabSwitcherBar(
 
         Spacer(modifier = Modifier.width(6.dp))
 
-        // Well-proportioned Mobile Action Bar (Never clips Brand Title!)
+        // Clean Mobile Action Bar: Account + Bookmarks + History + Unified Settings Gear
         Row(
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp)
+          horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-          Surface(
-            onClick = onOpenDisplayMode,
-            color = Color(0xFF0284C7).copy(alpha = 0.2f),
-            shape = RoundedCornerShape(8.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)),
-            modifier = Modifier
-              .heightIn(min = 34.dp)
-              .testTag("top_chip_display_mode")
-          ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-              Icon(
-                imageVector = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
-                contentDescription = null,
-                tint = Color(0xFF38BDF8),
-                modifier = Modifier.size(15.dp)
-              )
-              Text(
-                text = if (displayMode == AppDisplayMode.TV) "شاشة" else "هاتف",
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.ExtraBold,
-                maxLines = 1,
-                softWrap = false
-              )
-            }
-          }
-
           CompactTopIconBtn(
             icon = Icons.Default.AccountCircle,
             tint = if (accountDisplayName.isNotBlank()) CinemaSuccess else Color(0xFF38BDF8),
             contentDescription = if (accountDisplayName.isNotBlank()) "حسابي: $accountDisplayName" else "تسجيل الدخول",
             onClick = onOpenAccount,
             testTag = "top_chip_account"
-          )
-          CompactTopIconBtn(
-            icon = Icons.Default.SystemUpdate,
-            tint = CinemaSuccess,
-            contentDescription = "تحديث التطبيق من جيت هب",
-            onClick = onOpenUpdate,
-            testTag = "top_chip_update"
-          )
-          CompactTopIconBtn(
-            icon = Icons.Default.BugReport,
-            tint = CinemaAccent,
-            contentDescription = "سجل الأعطال واللوج",
-            onClick = onOpenDiagnostics,
-            testTag = "top_chip_diagnostics"
           )
           CompactTopIconBtn(
             icon = Icons.Default.Bookmark,
@@ -226,13 +183,36 @@ fun AppMainTabSwitcherBar(
             onClick = onOpenHistory,
             testTag = "top_chip_history"
           )
-          CompactTopIconBtn(
-            icon = Icons.Default.Shield,
-            tint = CinemaSuccess,
-            contentDescription = "حماية AdGuard",
-            onClick = onOpenAdBlock,
-            testTag = "top_chip_adblock"
-          )
+          Surface(
+            onClick = onOpenSettings,
+            color = CinemaSurfaceVariant,
+            shape = RoundedCornerShape(9.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CinemaAccent.copy(alpha = 0.7f)),
+            modifier = Modifier
+              .heightIn(min = 36.dp)
+              .testTag("top_chip_settings_gear")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "الإعدادات",
+                tint = CinemaAccent,
+                modifier = Modifier.size(16.dp)
+              )
+              Text(
+                text = "الإعدادات",
+                color = Color.White,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                softWrap = false
+              )
+            }
+          }
         }
       }
 
@@ -354,34 +334,6 @@ fun AppMainTabSwitcherBar(
           testTag = "top_chip_account"
         )
         QuickTopUtilityChip(
-          label = if (controlMode == ControlMode.VIRTUAL_MOUSE) "ماوس ✓" else "الماوس",
-          icon = Icons.Default.Mouse,
-          tint = if (controlMode == ControlMode.VIRTUAL_MOUSE) CinemaAccent else Color.LightGray,
-          onClick = onToggleControlMode,
-          testTag = "top_chip_mouse"
-        )
-        QuickTopUtilityChip(
-          label = if (displayMode == AppDisplayMode.TV) "شاشة" else "هاتف",
-          icon = if (displayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
-          tint = Color(0xFF38BDF8),
-          onClick = onOpenDisplayMode,
-          testTag = "top_chip_display_mode"
-        )
-        QuickTopUtilityChip(
-          label = "تحديث",
-          icon = Icons.Default.SystemUpdate,
-          tint = CinemaSuccess,
-          onClick = onOpenUpdate,
-          testTag = "top_chip_update"
-        )
-        QuickTopUtilityChip(
-          label = "الأعطال",
-          icon = Icons.Default.BugReport,
-          tint = CinemaAccent,
-          onClick = onOpenDiagnostics,
-          testTag = "top_chip_diagnostics"
-        )
-        QuickTopUtilityChip(
           label = "المفضلة",
           icon = Icons.Default.Bookmark,
           tint = CinemaAccent,
@@ -396,11 +348,11 @@ fun AppMainTabSwitcherBar(
           testTag = "top_chip_history"
         )
         QuickTopUtilityChip(
-          label = "AdGuard",
-          icon = Icons.Default.Shield,
-          tint = CinemaSuccess,
-          onClick = onOpenAdBlock,
-          testTag = "top_chip_adblock"
+          label = "الإعدادات",
+          icon = Icons.Default.Settings,
+          tint = CinemaAccent,
+          onClick = onOpenSettings,
+          testTag = "top_chip_settings_gear"
         )
       }
     }

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material.icons.filled.Tv
@@ -76,6 +77,7 @@ fun TvNavBar(
   onOpenModeDialog: () -> Unit,
   accountDisplayName: String = "",
   onOpenAccountDialog: () -> Unit = {},
+  onOpenSettings: () -> Unit = onOpenModeDialog,
   modifier: Modifier = Modifier
 ) {
   Box(
@@ -204,12 +206,12 @@ fun TvNavBar(
 
       item {
         TvNavUtilityButton(
-          label = if (currentDisplayMode == AppDisplayMode.TV) "شاشة" else "هاتف",
-          icon = if (currentDisplayMode == AppDisplayMode.TV) Icons.Default.Tv else Icons.Default.Smartphone,
-          isActive = true,
-          activeColor = Color(0xFF38BDF8),
-          onClick = onOpenModeDialog,
-          testTag = "btn_nav_mode"
+          label = "الإعدادات",
+          icon = Icons.Default.Settings,
+          isActive = false,
+          activeColor = CinemaAccent,
+          onClick = onOpenSettings,
+          testTag = "btn_nav_settings"
         )
       }
     }

@@ -557,7 +557,7 @@ fun WatchSidePanel(
           }
         }
 
-        // 4. Mode Switcher Tabs: [📺 الحلقات] vs [🌐 المصادر]
+        // 4. Mode Switcher Tabs: [📺 الحلقات] vs [🌐 البوابات]
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -648,7 +648,7 @@ fun WatchSidePanel(
               )
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = "المصادر",
+                text = "البوابات",
                 color = if (activeSubTab == 1 || isTab1Focused) Color.Black else Color.White,
                 fontSize = 13.5.sp,
                 fontWeight = FontWeight.ExtraBold,
@@ -878,7 +878,7 @@ fun WatchSidePanel(
                     text = if (isScrapingSeries) {
                       "جاري تحميل الحلقات..."
                     } else {
-                      "هذا فيلم، أو اختر من تبويب المصادر"
+                      "هذا فيلم، أو اختر من تبويب البوابات"
                     },
                     color = Color.LightGray,
                     fontSize = 14.sp,

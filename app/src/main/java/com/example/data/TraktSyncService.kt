@@ -161,10 +161,15 @@ class TraktSyncService {
     deviceCode: String
   ): TraktTokenPollResult = withContext(Dispatchers.IO) {
     try {
-      val payload = JSONObject()
+      val cleanId = clientId.trim()
+      val cleanSecret = clientSecret.trim()
+      val payloadObj = JSONObject()
         .put("code", deviceCode.trim())
-        .put("client_id", clientId.trim())
-        .put("client_secret", clientSecret.trim())
+        .put("client_id", cleanId)
+      if (cleanSecret.isNotBlank() && cleanSecret != cleanId) {
+        payloadObj.put("client_secret", cleanSecret)
+      }
+      val payload = payloadObj
         .toString()
         .toRequestBody(jsonMediaType)
 
@@ -216,14 +221,19 @@ class TraktSyncService {
     clientSecret: String,
     refreshToken: String
   ): TraktOAuthTokens? = withContext(Dispatchers.IO) {
-    if (clientId.isBlank() || clientSecret.isBlank() || refreshToken.isBlank()) return@withContext null
+    val cleanId = clientId.trim()
+    val cleanSecret = clientSecret.trim()
+    if (cleanId.isBlank() || refreshToken.isBlank()) return@withContext null
     try {
-      val payload = JSONObject()
+      val payloadObj = JSONObject()
         .put("refresh_token", refreshToken.trim())
-        .put("client_id", clientId.trim())
-        .put("client_secret", clientSecret.trim())
+        .put("client_id", cleanId)
         .put("redirect_uri", REDIRECT_URI_OOB)
         .put("grant_type", "refresh_token")
+      if (cleanSecret.isNotBlank() && cleanSecret != cleanId) {
+        payloadObj.put("client_secret", cleanSecret)
+      }
+      val payload = payloadObj
         .toString()
         .toRequestBody(jsonMediaType)
 

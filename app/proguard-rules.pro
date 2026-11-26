@@ -41,3 +41,6 @@
 # Coil ImageLoader
 -keep class coil.** { *; }
 -dontwarn coil.**
+
+# ZXing Core (Local QR Code Generator)
+-dontwarn com.google.zxing.**

@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.BuildConfig
 import com.example.model.Bookmark
 import com.example.model.ControlMode
 import com.example.model.HistoryEntry
@@ -86,6 +87,9 @@ class TvPreferencesRepository(context: Context) {
 
   private val _traktWatchlistFlow = MutableStateFlow<List<TraktWatchlistItem>>(emptyList())
   val traktWatchlistFlow: StateFlow<List<TraktWatchlistItem>> = _traktWatchlistFlow.asStateFlow()
+
+  private val _traktKeysVersionFlow = MutableStateFlow(0L)
+  val traktKeysVersionFlow: StateFlow<Long> = _traktKeysVersionFlow.asStateFlow()
 
   init {
     loadBookmarks()
@@ -500,6 +504,16 @@ class TvPreferencesRepository(context: Context) {
       .putString(KEY_TRAKT_CLIENT_ID, clientId.trim())
       .putString(KEY_TRAKT_CLIENT_SECRET, clientSecret.trim())
       .apply()
+    _traktKeysVersionFlow.value = System.currentTimeMillis()
+  }
+
+  @Synchronized
+  fun clearAdminTraktAppKeys() {
+    prefs.edit()
+      .remove(KEY_TRAKT_CLIENT_ID)
+      .remove(KEY_TRAKT_CLIENT_SECRET)
+      .apply()
+    _traktKeysVersionFlow.value = System.currentTimeMillis()
   }
 
   @Synchronized
@@ -512,8 +526,12 @@ class TvPreferencesRepository(context: Context) {
     username: String = ""
   ) {
     val editor = prefs.edit()
-    if (clientId.isNotBlank()) editor.putString(KEY_TRAKT_CLIENT_ID, clientId.trim())
-    if (clientSecret.isNotBlank()) editor.putString(KEY_TRAKT_CLIENT_SECRET, clientSecret.trim())
+    if (clientId.isNotBlank() && !isPlaceholderTraktValue(clientId) && clientId.trim() != getBuiltInTraktClientId()) {
+      editor.putString(KEY_TRAKT_CLIENT_ID, clientId.trim())
+    }
+    if (clientSecret.isNotBlank() && !isPlaceholderTraktValue(clientSecret) && clientSecret.trim() != getBuiltInTraktClientSecret()) {
+      editor.putString(KEY_TRAKT_CLIENT_SECRET, clientSecret.trim())
+    }
     if (accessToken.isNotBlank()) {
       editor.putString(KEY_TRAKT_ACCESS_TOKEN, accessToken.trim())
       _traktConnectedFlow.value = true
@@ -528,8 +546,67 @@ class TvPreferencesRepository(context: Context) {
     editor.apply()
   }
 
-  fun getTraktClientId(): String = prefs.getString(KEY_TRAKT_CLIENT_ID, "") ?: ""
-  fun getTraktClientSecret(): String = prefs.getString(KEY_TRAKT_CLIENT_SECRET, "") ?: ""
+  private fun isPlaceholderTraktValue(raw: String): Boolean {
+    val clean = raw.trim()
+    return clean.isBlank() ||
+      clean.equals("TRAKT_CLIENT_ID_DEFAULT_VALUE", ignoreCase = true) ||
+      clean.equals("TRAKT_CLIENT_SECRET_DEFAULT_VALUE", ignoreCase = true) ||
+      clean.equals("YOUR_TRAKT_CLIENT_ID", ignoreCase = true) ||
+      clean.equals("YOUR_TRAKT_CLIENT_SECRET", ignoreCase = true) ||
+      clean.equals("dummy_key", ignoreCase = true) ||
+      clean.equals("null", ignoreCase = true)
+  }
+
+  fun getBuiltInTraktClientId(): String {
+    val raw = try { BuildConfig.TRAKT_CLIENT_ID } catch (_: Throwable) { "" }
+    return if (isPlaceholderTraktValue(raw)) "" else raw.trim()
+  }
+
+  fun getBuiltInTraktClientSecret(): String {
+    val raw = try {
+      (BuildConfig::class.java.getField("TRAKT_CLIENT_SECRET").get(null) as? String).orEmpty()
+    } catch (_: Throwable) {
+      ""
+    }
+    val clean = if (isPlaceholderTraktValue(raw)) "" else raw.trim()
+    val builtInId = getBuiltInTraktClientId()
+    return if (clean == builtInId) "" else clean
+  }
+
+  fun hasBuiltInTraktSecrets(): Boolean =
+    getBuiltInTraktClientId().isNotBlank()
+
+  fun getStoredAdminTraktClientId(): String {
+    val raw = prefs.getString(KEY_TRAKT_CLIENT_ID, "") ?: ""
+    return if (isPlaceholderTraktValue(raw)) "" else raw.trim()
+  }
+
+  fun getStoredAdminTraktClientSecret(): String {
+    val raw = prefs.getString(KEY_TRAKT_CLIENT_SECRET, "") ?: ""
+    val clean = if (isPlaceholderTraktValue(raw)) "" else raw.trim()
+    val adminId = getStoredAdminTraktClientId()
+    return if (clean == adminId) "" else clean
+  }
+
+  fun hasAdminTraktKeysOverride(): Boolean =
+    getStoredAdminTraktClientId().isNotBlank()
+
+  /**
+   * Resolves effective Trakt Client ID: Admin Override (from password-protected Settings) -> BuildConfig Secret.
+   */
+  fun getTraktClientId(): String =
+    getStoredAdminTraktClientId().ifBlank { getBuiltInTraktClientId() }
+
+  /**
+   * Resolves effective Trakt Client Secret (optional for Public OAuth Clients):
+   * Admin Override -> BuildConfig Secret (or blank when using Client-ID-only public Trakt apps).
+   */
+  fun getTraktClientSecret(): String =
+    if (hasAdminTraktKeysOverride()) getStoredAdminTraktClientSecret() else getBuiltInTraktClientSecret()
+
+  fun hasEffectiveTraktKeys(): Boolean =
+    getTraktClientId().isNotBlank()
+
   fun getTraktAccessToken(): String = prefs.getString(KEY_TRAKT_ACCESS_TOKEN, "") ?: ""
   fun getTraktRefreshToken(): String = prefs.getString(KEY_TRAKT_REFRESH_TOKEN, "") ?: ""
   fun getTraktTokenExpiresAtMs(): Long = prefs.getLong(KEY_TRAKT_TOKEN_EXPIRES_AT_MS, 0L)
@@ -555,6 +632,7 @@ class TvPreferencesRepository(context: Context) {
       .remove(KEY_TRAKT_WATCHLIST_JSON)
     if (clearAppKeys) {
       editor.remove(KEY_TRAKT_CLIENT_ID).remove(KEY_TRAKT_CLIENT_SECRET)
+      _traktKeysVersionFlow.value = System.currentTimeMillis()
     }
     editor.apply()
     // Keep non-Trakt local items only

@@ -179,6 +179,7 @@ fun HomeDashboardScreen(
   onOpenDisplayMode: () -> Unit,
   onOpenAdBlockSettings: () -> Unit = {},
   onOpenUpdate: () -> Unit = {},
+  onOpenSettings: () -> Unit = {},
   onOpenTrakt: () -> Unit = {},
   onPlayUpNext: (UpNextItem) -> Unit = {},
   onMarkUpNextWatched: ((UpNextItem) -> Unit)? = null,
@@ -200,8 +201,6 @@ fun HomeDashboardScreen(
   var isSearching by remember { mutableStateOf(false) }
   var portalResultsMap by remember { mutableStateOf<Map<StreamingPortal, List<SearchResultItem>>>(emptyMap()) }
   var hasSearched by remember { mutableStateOf(false) }
-  var showSourcesDialog by remember { mutableStateOf(false) }
-  var showAdminSourcesPrompt by remember { mutableStateOf(false) }
   var spellingSuggestion by remember { mutableStateOf<String?>(null) }
 
   // Catalog State (Live Daily IMDb Trending, Top 10 Movies Today, Top 10 TV Series Today)
@@ -299,7 +298,7 @@ fun HomeDashboardScreen(
             onOpenBookmarks = onOpenBookmarks,
             onOpenHistory = onOpenHistory,
             onOpenTrakt = onOpenTrakt,
-            onOpenSources = { showAdminSourcesPrompt = true },
+            onOpenSources = onOpenSettings,
             onOpenUpdate = onOpenUpdate
           )
         }
@@ -337,7 +336,7 @@ fun HomeDashboardScreen(
                 searchQuery = suggestion
                 executeMultiSourceSearch(suggestion)
               },
-              onOpenSources = { showSourcesDialog = true },
+              onOpenSources = onOpenSettings,
               focusRequester = searchInputFocusRequester,
               isCompactMobile = isCompactMobile
             )
@@ -701,25 +700,6 @@ fun HomeDashboardScreen(
       }
     }
   }
-
-  if (showAdminSourcesPrompt) {
-    AdminPasswordDialog(
-      title = "إدارة المصادر",
-      subtitle = "أدخل كلمة مرور المسؤول لتعديل روابط المصادر أو تفعيلها/تعطيلها",
-      onVerified = {
-        showAdminSourcesPrompt = false
-        showSourcesDialog = true
-      },
-      onDismiss = { showAdminSourcesPrompt = false }
-    )
-  }
-
-  if (showSourcesDialog) {
-    SourcesManagementDialog(
-      repository = repository,
-      onDismiss = { showSourcesDialog = false }
-    )
-  }
 }
 
 @Composable
@@ -836,10 +816,10 @@ fun ClipboxNavigationRail(
             .background(CinemaBorder)
         )
 
-        // Sources Settings Icon
+        // Unified Settings Gear Icon
         ClipboxRailIcon(
           icon = Icons.Default.Settings,
-          contentDescription = "إدارة المصادر",
+          contentDescription = "الإعدادات",
           isActive = false,
           size = iconBoxSize,
           onClick = onOpenSources
@@ -957,39 +937,27 @@ fun ClipboxTopSearchBar(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        val sourcesInteraction = remember { MutableInteractionSource() }
-        val isSourcesFocused by sourcesInteraction.collectIsFocusedAsState()
+        val settingsInteraction = remember { MutableInteractionSource() }
+        val isSettingsFocused by settingsInteraction.collectIsFocusedAsState()
         Surface(
           onClick = onOpenSources,
-          interactionSource = sourcesInteraction,
-          color = if (isSourcesFocused) CinemaFocusGlow else CinemaSurfaceVariant,
+          interactionSource = settingsInteraction,
+          color = if (isSettingsFocused) CinemaFocusGlow else CinemaSurfaceVariant,
           shape = RoundedCornerShape(50),
           border = BorderStroke(
-            width = if (isSourcesFocused) 2.dp else 1.dp,
-            color = if (isSourcesFocused) ClipboxWhite else CinemaBorder
+            width = if (isSettingsFocused) 2.dp else 1.dp,
+            color = if (isSettingsFocused) ClipboxWhite else CinemaBorder
           ),
           modifier = Modifier
-            .heightIn(min = 38.dp)
-            .testTag("btn_dashboard_sources")
+            .size(40.dp)
+            .testTag("btn_dashboard_settings_gear")
         ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-          ) {
+          Box(contentAlignment = Alignment.Center) {
             Icon(
               imageVector = Icons.Default.Settings,
-              contentDescription = "المصادر",
-              tint = if (isSourcesFocused) Color.Black else CinemaAccent,
-              modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(
-              text = "المصادر",
-              color = if (isSourcesFocused) Color.Black else Color.White,
-              fontSize = 13.5.sp,
-              fontWeight = FontWeight.ExtraBold,
-              maxLines = 1,
-              softWrap = false
+              contentDescription = "الإعدادات",
+              tint = if (isSettingsFocused) Color.Black else CinemaAccent,
+              modifier = Modifier.size(20.dp)
             )
           }
         }
@@ -1887,7 +1855,7 @@ fun SourcesManagementDialog(
       ) {
         if (selectedPortalForEdit == null) {
           Text(
-            text = "إدارة المصادر",
+            text = "إدارة البوابات والروابط",
             color = Color.White,
             fontSize = 19.sp,
             fontWeight = FontWeight.ExtraBold,
@@ -2132,7 +2100,7 @@ fun SourcesManagementDialog(
                 )
               )
               Spacer(modifier = Modifier.width(6.dp))
-              Text("تفعيل المصدر", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+              Text("تفعيل البوابة", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(16.dp))
           }
@@ -3357,30 +3325,13 @@ private fun HomeTraktConnectBannerCard(
           )
         }
 
-        Column(
-          modifier = Modifier.weight(1f),
-          verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-          Text(
-            text = "اربط حسابك على Trakt بالكود",
-            color = Color.White,
-            fontSize = 17.5.sp,
-            fontWeight = FontWeight.Black
-          )
-          Surface(
-            color = Color(0x1F10B981),
-            shape = RoundedCornerShape(50),
-            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.65f))
-          ) {
-            Text(
-              text = "كاش محلي + متابعة تلقائية",
-              color = Color(0xFF34D399),
-              fontSize = 11.5.sp,
-              fontWeight = FontWeight.ExtraBold,
-              modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-            )
-          }
-        }
+        Text(
+          text = "اربط حسابك على Trakt بالكود",
+          color = Color.White,
+          fontSize = 17.5.sp,
+          fontWeight = FontWeight.Black,
+          modifier = Modifier.weight(1f)
+        )
       }
 
       Text(
