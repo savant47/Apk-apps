@@ -305,17 +305,13 @@ class TraktSyncService {
   }
 
   /**
-   * Fetches Trakt IDs of shows hidden from watched progress, calendar, recommendations, or dropped by the user,
-   * so they never appear in "Next to Watch" (matching official Trakt Continue Watching & Showly).
+   * Fetches Trakt show IDs explicitly hidden or dropped at the show level (`type == "show"`).
    */
   private fun fetchHiddenShowIds(clientId: String, accessToken: String): Set<Long> {
     val hidden = mutableSetOf<Long>()
     val endpoints = listOf(
-      "$API_BASE/users/hidden/progress_watched?limit=100",
-      "$API_BASE/users/hidden/progress_watched_reset?limit=100",
-      "$API_BASE/users/hidden/progress_collected?limit=100",
-      "$API_BASE/users/hidden/calendar?limit=100",
-      "$API_BASE/users/hidden/dropped?limit=100"
+      "$API_BASE/users/hidden/progress_watched?type=show&limit=100",
+      "$API_BASE/users/hidden/dropped?type=show&limit=100"
     )
     for (url in endpoints) {
       try {
@@ -326,9 +322,7 @@ class TraktSyncService {
           for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
             val type = item.optString("type", "show")
-            // Only hide the whole show if the hidden entry is of type "show"
-            // (hidden seasons are already handled by ?hidden=false on /progress/watched)
-            if (type == "show" || !item.has("season")) {
+            if (type == "show" && !item.has("season")) {
               val id = item.optJSONObject("show")?.optJSONObject("ids")?.optLong("trakt", 0L) ?: 0L
               if (id > 0L) hidden.add(id)
             }
@@ -339,16 +333,6 @@ class TraktSyncService {
     return hidden
   }
 
-  private data class CandidateShowStub(
-    val traktId: Long,
-    val slug: String,
-    val imdbId: String,
-    val title: String,
-    val sortTimestampMs: Long,
-    val hasUnwatchedHint: Boolean = true,
-    val fromWatchlistOnly: Boolean = false
-  )
-
   private data class RawUpNextProgress(
     val traktShowId: Long,
     val slug: String,
@@ -357,6 +341,8 @@ class TraktSyncService {
     val seasonNumber: Int,
     val episodeNumber: Int,
     val episodeTitle: String,
+    val firstAiredIso: String,
+    val lastWatchedAtIso: String,
     val epTraktId: String,
     val watchedCount: Int,
     val airedCount: Int,
@@ -370,151 +356,390 @@ class TraktSyncService {
     data class Failed(val reason: String) : ProgressCheckOutcome()
   }
 
-  /**
-   * Removes an accidentally marked S01E01 episode from Trakt history via POST /sync/history/remove.
-   */
-  private fun removeEpisodeFromHistorySync(
-    clientId: String,
-    accessToken: String,
-    traktShowId: Long,
-    seasonNumber: Int,
-    episodeNumber: Int
-  ) {
-    try {
-      val epObj = JSONObject().put("number", episodeNumber)
-      val seasonObj = JSONObject()
-        .put("number", seasonNumber)
-        .put("episodes", JSONArray().put(epObj))
-      val showObj = JSONObject()
-        .put("ids", JSONObject().put("trakt", traktShowId))
-        .put("seasons", JSONArray().put(seasonObj))
-      val bodyJson = JSONObject().put("shows", JSONArray().put(showObj))
-      val req = buildTraktRequest("$API_BASE/sync/history/remove", clientId, accessToken)
-        .post(bodyJson.toString().toRequestBody(jsonMediaType))
-        .build()
-      client.newCall(req).execute().use { resp ->
-        AppDiagnosticsLogger.log("TraktAPI", "Cleaned accidental history S${seasonNumber}E${episodeNumber} for show=$traktShowId -> HTTP ${resp.code}")
-      }
-    } catch (_: Exception) {}
+  private sealed class PaginatedEndpointOutcome {
+    data class Success(val items: List<JSONObject>) : PaginatedEndpointOutcome()
+    data object NotFound : PaginatedEndpointOutcome()
+    data object Unauthorized : PaginatedEndpointOutcome()
+    data class Error(val message: String) : PaginatedEndpointOutcome()
   }
 
   /**
-   * Official Trakt API v2 "Next to Watch" (التالي للمشاهدة) extraction:
-   *  - Uses ONLY `/users/me/watched/shows?extended=full` and `/shows/{id}/progress/watched?hidden=false&specials=false&count_specials=false&extended=full`
-   *  - NEVER pulls unwatched `0/N` shows from Watchlist, Custom Lists, Collection, or Favorites
-   *  - Excludes hidden/dropped shows and any show where all aired episodes are completed (`completed >= aired`)
-   *  - Computes the next episode STRICTLY from `next_episode` in Trakt's response (never generates or assumes episode data)
-   *  - Returns an explicit error if the request fails instead of any fallback/mock data, plus exact `TraktSyncStats`.
+   * Paginates a Trakt progress endpoint (`extended=full&page=1&limit=100`, `page=2`, ...)
+   * until an empty array comes back.
+   */
+  private fun fetchPaginatedTraktArray(
+    endpointPath: String,
+    clientId: String,
+    accessToken: String
+  ): PaginatedEndpointOutcome {
+    val allItems = mutableListOf<JSONObject>()
+    var page = 1
+    val limit = 100
+    while (page <= 50) {
+      val sep = if (endpointPath.contains("?")) "&" else "?"
+      val url = "$API_BASE$endpointPath${sep}extended=full&page=$page&limit=$limit"
+      val req = buildTraktRequest(url, clientId, accessToken).get().build()
+      client.newCall(req).execute().use { resp ->
+        when (resp.code) {
+          401, 403 -> return PaginatedEndpointOutcome.Unauthorized
+          404 -> return if (page == 1) PaginatedEndpointOutcome.NotFound else PaginatedEndpointOutcome.Success(allItems)
+        }
+        if (!resp.isSuccessful) {
+          return PaginatedEndpointOutcome.Error("تعذر جلب التقدم من Trakt (HTTP ${resp.code})")
+        }
+        val bodyStr = resp.body?.string().orEmpty().trim()
+        if (bodyStr.isBlank()) {
+          return PaginatedEndpointOutcome.Success(allItems)
+        }
+        val arr = JSONArray(bodyStr)
+        if (arr.length() == 0) {
+          return PaginatedEndpointOutcome.Success(allItems)
+        }
+        for (i in 0 until arr.length()) {
+          val obj = arr.optJSONObject(i) ?: continue
+          allItems.add(obj)
+        }
+        val pageCountHeader = resp.header("X-Pagination-Page-Count")?.trim()?.toIntOrNull()
+        if (pageCountHeader != null && page >= pageCountHeader) {
+          return PaginatedEndpointOutcome.Success(allItems)
+        }
+        if (pageCountHeader == null && arr.length() < limit) {
+          return PaginatedEndpointOutcome.Success(allItems)
+        }
+      }
+      page++
+    }
+    return PaginatedEndpointOutcome.Success(allItems)
+  }
+
+  /**
+   * Parses a single `{ show, progress }` entry strictly according to rules:
+   * - Uses ONLY `progress.next_episode` (`season`, `number`, `title`, `first_aired`).
+   * - Uses `progress.aired` and `progress.completed` directly for the counters.
+   * - Uses `progress.last_watched_at` for the "last watched" label and sorting.
+   * - Drops every item whose `progress.next_episode` is null.
+   * - Drops every item whose `next_episode.first_aired` is null/blank or in the future (`firstAiredMs > nowMs`).
+   * - Drops every item where `progress.completed <= 0` or `progress.completed >= progress.aired`.
+   */
+  private fun parseStrictUpNextEntry(
+    showObj: JSONObject,
+    progressObj: JSONObject,
+    fallbackLastWatchedIso: String,
+    nowMs: Long,
+    watchedEpisodeKeys: MutableSet<String>?
+  ): ProgressCheckOutcome {
+    val ids = showObj.optJSONObject("ids") ?: return ProgressCheckOutcome.FilteredNoNextEpisode
+    val traktShowId = ids.optLong("trakt", 0L)
+    val showTitle = showObj.optString("title", "").trim()
+    if (traktShowId <= 0L || showTitle.isBlank()) {
+      return ProgressCheckOutcome.FilteredNoNextEpisode
+    }
+    val slug = ids.optString("slug", "").trim()
+    val imdbId = ids.optString("imdb", "").trim()
+
+    val aired = progressObj.optInt("aired", 0)
+    val completed = progressObj.optInt("completed", 0)
+
+    // Record completed episodes for local watched checkmarks if seasons array is present
+    val seasonsArr = progressObj.optJSONArray("seasons")
+    if (watchedEpisodeKeys != null && seasonsArr != null) {
+      for (si in 0 until seasonsArr.length()) {
+        val sObj = seasonsArr.optJSONObject(si) ?: continue
+        val sNum = sObj.optInt("number", 0)
+        if (sNum <= 0) continue
+        val epsArr = sObj.optJSONArray("episodes") ?: continue
+        for (ei in 0 until epsArr.length()) {
+          val eObj = epsArr.optJSONObject(ei) ?: continue
+          if (eObj.optBoolean("completed", false) || !eObj.has("completed")) {
+            val eNum = eObj.optInt("number", 0)
+            if (eNum > 0) {
+              val key = TvPreferencesRepository.buildEpisodeWatchedKey(showTitle, sNum, eNum)
+              if (key.isNotBlank()) watchedEpisodeKeys.add(key)
+            }
+          }
+        }
+      }
+    }
+
+    // Rule 5: A show the user has not watched a single episode of must not appear; completed shows must not appear
+    if (completed <= 0 || aired <= 0 || completed >= aired) {
+      return ProgressCheckOutcome.FilteredCompleted
+    }
+
+    // Rule 3 & Rule 4: Use ONLY progress.next_episode; drop if null or if first_aired is null or in the future
+    val nextEp = progressObj.optJSONObject("next_episode")
+      ?: return ProgressCheckOutcome.FilteredNoNextEpisode
+
+    val season = nextEp.optInt("season", 0)
+    val number = nextEp.optInt("number", 0)
+    if (season <= 0 || number <= 0) {
+      return ProgressCheckOutcome.FilteredNoNextEpisode
+    }
+
+    val rawFirstAired = nextEp.optString("first_aired", "").trim()
+    val firstAiredIso = if (rawFirstAired.equals("null", ignoreCase = true)) "" else rawFirstAired
+    val firstAiredMs = parseIsoUtcMs(firstAiredIso)
+    if (firstAiredIso.isBlank() || firstAiredMs <= 0L || firstAiredMs > nowMs) {
+      // Unaired or unknown-air-date episode — must NEVER appear
+      return ProgressCheckOutcome.FilteredNoNextEpisode
+    }
+
+    val rawTitle = nextEp.optString("title", "").trim()
+    val epTitle = if (rawTitle.equals("null", ignoreCase = true)) "" else rawTitle
+    val epTraktId = nextEp.optJSONObject("ids")?.optLong("trakt", 0L)
+      ?.takeIf { it > 0L }?.toString().orEmpty()
+
+    val rawLastWatched = progressObj.optString("last_watched_at", "").trim()
+      .takeUnless { it.isBlank() || it.equals("null", ignoreCase = true) }
+      ?: fallbackLastWatchedIso
+    val lastWatchedAtIso = if (rawLastWatched.equals("null", ignoreCase = true)) "" else rawLastWatched
+    val lastWatchedMs = parseIsoUtcMs(lastWatchedAtIso)
+
+    return ProgressCheckOutcome.Active(
+      RawUpNextProgress(
+        traktShowId = traktShowId,
+        slug = slug,
+        imdbId = imdbId,
+        showTitle = showTitle,
+        seasonNumber = season,
+        episodeNumber = number,
+        episodeTitle = epTitle,
+        firstAiredIso = firstAiredIso,
+        lastWatchedAtIso = lastWatchedAtIso,
+        epTraktId = epTraktId,
+        watchedCount = completed,
+        airedCount = aired,
+        sortTimestampMs = lastWatchedMs
+      )
+    )
+  }
+
+  /**
+   * Fetches a single show's `{ progress }` object from `GET /shows/{id}/progress/watched?hidden=false&specials=false&count_specials=false&extended=full`
+   * and applies `parseStrictUpNextEntry`.
+   */
+  private suspend fun fetchShowProgressOutcome(
+    clientId: String,
+    accessToken: String,
+    showObj: JSONObject,
+    fallbackLastWatchedIso: String,
+    nowMs: Long,
+    watchedEpisodeKeys: MutableSet<String>?
+  ): ProgressCheckOutcome {
+    val traktId = showObj.optJSONObject("ids")?.optLong("trakt", 0L) ?: 0L
+    if (traktId <= 0L) return ProgressCheckOutcome.FilteredNoNextEpisode
+    val sortTimestampMs = parseIsoUtcMs(fallbackLastWatchedIso)
+    if (sortTimestampMs > 0L && verifiedCompletedShowsCache[traktId] == sortTimestampMs) {
+      return ProgressCheckOutcome.FilteredCompleted
+    }
+
+    val url = "$API_BASE/shows/$traktId/progress/watched?hidden=false&specials=false&count_specials=false&extended=full"
+    for (attempt in 0..3) {
+      try {
+        val req = buildTraktRequest(url, clientId, accessToken).get().build()
+        var retryAfterSec = 0L
+        val statusAndBody = client.newCall(req).execute().use { resp ->
+          retryAfterSec = resp.header("Retry-After")?.trim()?.toLongOrNull() ?: 0L
+          resp.code to resp.body?.string().orEmpty()
+        }
+        val code = statusAndBody.first
+        val body = statusAndBody.second
+        if ((code == 429 || code in 500..599) && attempt < 3) {
+          val waitMs = if (retryAfterSec > 0L) (retryAfterSec * 1000L).coerceAtMost(5000L) else (1000L * (attempt + 1))
+          kotlinx.coroutines.delay(waitMs)
+          continue
+        }
+        if (code !in 200..299 || body.isBlank()) {
+          return ProgressCheckOutcome.Failed("HTTP $code")
+        }
+
+        val progressObj = JSONObject(body)
+        val outcome = parseStrictUpNextEntry(
+          showObj = showObj,
+          progressObj = progressObj,
+          fallbackLastWatchedIso = fallbackLastWatchedIso,
+          nowMs = nowMs,
+          watchedEpisodeKeys = watchedEpisodeKeys
+        )
+        when (outcome) {
+          is ProgressCheckOutcome.Active -> verifiedCompletedShowsCache.remove(traktId)
+          ProgressCheckOutcome.FilteredCompleted -> {
+            val aired = progressObj.optInt("aired", 0)
+            val completed = progressObj.optInt("completed", 0)
+            if (sortTimestampMs > 0L && aired > 0 && completed >= aired) {
+              verifiedCompletedShowsCache[traktId] = sortTimestampMs
+            }
+          }
+          else -> {}
+        }
+        return outcome
+      } catch (e: Exception) {
+        if (attempt < 3) {
+          kotlinx.coroutines.delay(800L * (attempt + 1))
+          continue
+        }
+        return ProgressCheckOutcome.Failed(e.message ?: "Network error")
+      }
+    }
+    return ProgressCheckOutcome.Failed("Timeout")
+  }
+
+  /**
+   * Invalidates the 10-minute in-memory Up Next cache so the next sync fetches immediately from Trakt.
+   */
+  fun invalidateUpNextCache() {
+    cachedUpNextResult = null
+    cachedUpNextToken = ""
+    cachedUpNextTimestampMs = 0L
+  }
+
+  /**
+   * Rewritten Next to Watch synchronization driven strictly by Trakt's own up-next progress:
+   * 1. Calls `GET https://api.trakt.tv/sync/progress/up_next?extended=full&page={page}&limit=100` until empty array.
+   * 2. If `/sync/progress/up_next` returns 404, falls back to `GET https://api.trakt.tv/sync/progress/watched?extended=full&page={page}&limit=100`
+   *    (and if 404 or missing embedded `progress`, resolves each watched show's `progress` via `/shows/{id}/progress/watched?extended=full`).
+   * 3. Uses `progress.next_episode` (`season`, `number`, `title`, `first_aired`), `progress.aired`, `progress.completed`, and `progress.last_watched_at`.
+   * 4. Drops every item whose `progress.next_episode` is null or whose `next_episode.first_aired` is null or in the future.
+   * 5. Never adds any show not in this response or with 0 watched episodes.
+   * 6. Sorts by `progress.last_watched_at` descending.
+   * 7. Caches the response for 10 minutes and refreshes immediately after marking an episode watched.
    */
   suspend fun syncFullAccountData(
     clientId: String,
-    accessToken: String
+    accessToken: String,
+    forceRefresh: Boolean = false
   ): TraktFullSyncResult = withContext(Dispatchers.IO) {
     if (clientId.isBlank() || accessToken.isBlank()) {
       return@withContext TraktFullSyncResult.Unauthorized
     }
 
+    val nowMs = System.currentTimeMillis()
+    val cached = cachedUpNextResult
+    if (
+      !forceRefresh &&
+      cached != null &&
+      cachedUpNextToken == accessToken &&
+      (nowMs - cachedUpNextTimestampMs) in 0 until UP_NEXT_CACHE_TTL_MS
+    ) {
+      AppDiagnosticsLogger.log("TraktAPI", "Returning 10-min cached Trakt Up Next list (${cached.upNextItems.size} items)")
+      return@withContext cached
+    }
+
     try {
-      // 1. Fetch official watched shows list from /users/me/watched/shows (compact JSON for low-RAM Android 7 TV boxes)
-      val watchedReq = buildTraktRequest(
-        "$API_BASE/users/me/watched/shows",
-        clientId,
-        accessToken
-      ).get().build()
-
-      val watchedArray = client.newCall(watchedReq).execute().use { resp ->
-        if (resp.code == 401 || resp.code == 403) {
-          return@withContext TraktFullSyncResult.Unauthorized
-        }
-        if (!resp.isSuccessful) {
-          return@withContext TraktFullSyncResult.Error("تعذر جلب سجل المشاهدة من Trakt (HTTP ${resp.code})")
-        }
-        val bodyStr = resp.body?.string().orEmpty()
-        if (bodyStr.isBlank()) {
-          return@withContext TraktFullSyncResult.Error("رد فارغ من Trakt عند جلب سجل المشاهدة")
-        }
-        JSONArray(bodyStr)
-      }
-
       coroutineScope {
         val usernameDeferred = async { fetchUserProfile(clientId, accessToken) }
+        val hiddenIdsDeferred = async { fetchHiddenShowIds(clientId, accessToken) }
 
-        val totalWatchedFetched = watchedArray.length()
-        val hiddenFilteredCount = 0
+        // Step 1: Call GET /sync/progress/up_next?extended=full&page=1&limit=100 (looping pages until empty array)
+        var sourceEndpoint = "/sync/progress/up_next"
+        var pageOutcome = fetchPaginatedTraktArray("/sync/progress/up_next", clientId, accessToken)
+
+        // Step 9: If /sync/progress/up_next returns 404, fall back to GET /sync/progress/watched with extended=full
+        if (pageOutcome is PaginatedEndpointOutcome.NotFound) {
+          sourceEndpoint = "/sync/progress/watched"
+          pageOutcome = fetchPaginatedTraktArray("/sync/progress/watched", clientId, accessToken)
+        }
+
+        // If /sync/progress/watched also returns 404 on this Trakt host, fetch /sync/watched/shows and resolve each show's progress object
+        if (pageOutcome is PaginatedEndpointOutcome.NotFound) {
+          sourceEndpoint = "/sync/watched/shows"
+          pageOutcome = fetchPaginatedTraktArray("/sync/watched/shows", clientId, accessToken)
+        }
+
+        val entryObjects = when (val res = pageOutcome) {
+          is PaginatedEndpointOutcome.Unauthorized -> return@coroutineScope TraktFullSyncResult.Unauthorized
+          is PaginatedEndpointOutcome.Error -> return@coroutineScope TraktFullSyncResult.Error(res.message)
+          is PaginatedEndpointOutcome.NotFound -> return@coroutineScope TraktFullSyncResult.Error("تعذر العثور على نقطة مزامنة التقدم في Trakt (HTTP 404)")
+          is PaginatedEndpointOutcome.Success -> res.items
+        }
+
+        val hiddenShowIds = hiddenIdsDeferred.await()
+        val totalWatchedFetched = entryObjects.size
+        var hiddenFilteredCount = 0
         var completedFilteredCount = 0
         var noNextEpisodeFilteredCount = 0
 
         val seenIds = mutableSetOf<Long>()
-        val candidateStubs = mutableListOf<CandidateShowStub>()
         val watchedEpisodeKeys = ConcurrentHashMap.newKeySet<String>()
+        val directOutcomes = mutableListOf<ProgressCheckOutcome>()
+        val needsShowProgressFetch = mutableListOf<Pair<JSONObject, String>>()
 
-        for (i in 0 until watchedArray.length()) {
-          val entry = watchedArray.optJSONObject(i) ?: continue
+        for (entry in entryObjects) {
           val showObj = entry.optJSONObject("show") ?: continue
           val ids = showObj.optJSONObject("ids") ?: continue
           val traktId = ids.optLong("trakt", 0L)
           val title = showObj.optString("title", "").trim()
           if (traktId <= 0L || title.isBlank() || !seenIds.add(traktId)) continue
 
-          val seasonsArr = entry.optJSONArray("seasons")
-          if (seasonsArr != null) {
-            for (si in 0 until seasonsArr.length()) {
-              val sObj = seasonsArr.optJSONObject(si) ?: continue
+          if (hiddenShowIds.contains(traktId)) {
+            hiddenFilteredCount++
+            continue
+          }
+
+          val fallbackLastWatched = entry.optString("last_watched_at", "").trim()
+            .ifBlank { entry.optString("last_updated_at", "").trim() }
+
+          // Record any watched episodes present on the entry itself
+          val entrySeasons = entry.optJSONArray("seasons")
+          if (entrySeasons != null) {
+            for (si in 0 until entrySeasons.length()) {
+              val sObj = entrySeasons.optJSONObject(si) ?: continue
               val sNum = sObj.optInt("number", 0)
-              if (sNum > 0) {
-                val eps = sObj.optJSONArray("episodes")
-                val count = eps?.length() ?: 0
-                if (eps != null) {
-                  for (ei in 0 until count) {
-                    val epNum = eps.optJSONObject(ei)?.optInt("number", 0) ?: 0
-                    if (epNum > 0) {
-                      val key = TvPreferencesRepository.buildEpisodeWatchedKey(title, sNum, epNum)
-                      if (key.isNotBlank()) watchedEpisodeKeys.add(key)
-                    }
+              if (sNum <= 0) continue
+              val eps = sObj.optJSONArray("episodes") ?: continue
+              for (ei in 0 until eps.length()) {
+                val eObj = eps.optJSONObject(ei) ?: continue
+                if (!eObj.has("completed") || eObj.optBoolean("completed", false)) {
+                  val epNum = eObj.optInt("number", 0)
+                  if (epNum > 0) {
+                    val key = TvPreferencesRepository.buildEpisodeWatchedKey(title, sNum, epNum)
+                    if (key.isNotBlank()) watchedEpisodeKeys.add(key)
                   }
                 }
               }
             }
           }
 
-          val lastWatchedMs = parseIsoUtcMs(entry.optString("last_watched_at", ""))
-            .takeIf { it > 0L }
-            ?: parseIsoUtcMs(entry.optString("last_updated_at", ""))
+          val embeddedProgress = entry.optJSONObject("progress")
+            ?: entry.takeIf { it.has("next_episode") || (it.has("aired") && it.has("completed")) }
 
-          candidateStubs.add(
-            CandidateShowStub(
-              traktId = traktId,
-              slug = ids.optString("slug", "").trim(),
-              imdbId = ids.optString("imdb", "").trim(),
-              title = title,
-              sortTimestampMs = lastWatchedMs,
-              hasUnwatchedHint = true,
-              fromWatchlistOnly = false
+          if (embeddedProgress != null) {
+            directOutcomes.add(
+              parseStrictUpNextEntry(
+                showObj = showObj,
+                progressObj = embeddedProgress,
+                fallbackLastWatchedIso = fallbackLastWatched,
+                nowMs = nowMs,
+                watchedEpisodeKeys = watchedEpisodeKeys
+              )
             )
-          )
+          } else {
+            needsShowProgressFetch.add(showObj to fallbackLastWatched)
+          }
         }
 
-        val orderedCandidates = candidateStubs.sortedByDescending { it.sortTimestampMs }
-
-        // Query official /shows/{id}/progress/watched for watched shows with low-CPU concurrency on Android 7
         val isLowRamDevice = android.os.Build.VERSION.SDK_INT <= android.os.Build.VERSION_CODES.N_MR1
         val progressSemaphore = Semaphore(if (isLowRamDevice) 4 else 8)
-        val outcomes = orderedCandidates.map { stub ->
+        val fetchedOutcomes = needsShowProgressFetch.map { (showObj, fallbackIso) ->
           async {
             progressSemaphore.withPermit {
               fetchShowProgressOutcome(
                 clientId = clientId,
                 accessToken = accessToken,
-                stub = stub,
+                showObj = showObj,
+                fallbackLastWatchedIso = fallbackIso,
+                nowMs = nowMs,
                 watchedEpisodeKeys = watchedEpisodeKeys
               )
             }
           }
         }.awaitAll()
 
+        val allOutcomes = directOutcomes + fetchedOutcomes
         val rawResults = mutableListOf<RawUpNextProgress>()
         var networkFailures = 0
-        for (outcome in outcomes) {
+
+        for (outcome in allOutcomes) {
           when (outcome) {
             is ProgressCheckOutcome.Active -> rawResults.add(outcome.progress)
             ProgressCheckOutcome.FilteredCompleted -> completedFilteredCount++
@@ -523,15 +748,13 @@ class TraktSyncService {
           }
         }
 
-        // If candidate requests failed due to network error and we got no valid results, return an explicit Error
-        if (orderedCandidates.isNotEmpty() && rawResults.isEmpty() && networkFailures > 0) {
-          return@coroutineScope TraktFullSyncResult.Error("تعذر جلب تفاصيل تقدم الحلقات من Trakt — يرجى إعادة المحاولة")
+        if (allOutcomes.isNotEmpty() && rawResults.isEmpty() && networkFailures > 0) {
+          return@coroutineScope TraktFullSyncResult.Error("تعذر جلب تفاصيل الحلقات القادمة من Trakt — يرجى إعادة المحاولة")
         }
 
-        // Sort strictly by Trakt last_watched_at DESC
+        // Rule 6: Sort by progress.last_watched_at descending
         val orderedRaw = rawResults.sortedByDescending { it.sortTimestampMs }
 
-        // Resolve posters concurrently for the verified active Up Next shows
         val posterSemaphore = Semaphore(if (isLowRamDevice) 3 else 6)
         val baseNowMs = System.currentTimeMillis()
         val upNextItems = orderedRaw.mapIndexed { idx, raw ->
@@ -546,6 +769,9 @@ class TraktSyncService {
               seasonNumber = raw.seasonNumber,
               episodeNumber = raw.episodeNumber,
               episodeTitle = raw.episodeTitle,
+              firstAiredIso = raw.firstAiredIso,
+              lastWatchedAtIso = raw.lastWatchedAtIso,
+              lastWatchedAtMs = raw.sortTimestampMs,
               posterUrl = poster,
               watchedCount = raw.watchedCount,
               totalCount = raw.airedCount,
@@ -572,10 +798,10 @@ class TraktSyncService {
 
         AppDiagnosticsLogger.log(
           "TraktAPI",
-          "Synced Trakt @$username: fetched=$totalWatchedFetched, filteredCompleted=$completedFilteredCount, filteredHidden=$hiddenFilteredCount, filteredNoNextEp=$noNextEpisodeFilteredCount, queried=${orderedCandidates.size} -> activeUpNext=${upNextItems.size}"
+          "Synced Trakt @$username via $sourceEndpoint: fetched=$totalWatchedFetched, filteredCompleted=$completedFilteredCount, filteredHidden=$hiddenFilteredCount, filteredNoNextEp=$noNextEpisodeFilteredCount -> activeUpNext=${upNextItems.size}"
         )
 
-        TraktFullSyncResult.Success(
+        val successResult = TraktFullSyncResult.Success(
           username = username,
           upNextItems = upNextItems,
           calendarItems = emptyList(),
@@ -583,6 +809,10 @@ class TraktSyncService {
           stats = stats,
           watchedEpisodeKeys = watchedEpisodeKeys
         )
+        cachedUpNextResult = successResult
+        cachedUpNextToken = accessToken
+        cachedUpNextTimestampMs = System.currentTimeMillis()
+        successResult
       }
     } catch (e: Exception) {
       AppDiagnosticsLogger.log("TraktAPI", "Full sync error: ${e.message}", isError = true)
@@ -591,169 +821,8 @@ class TraktSyncService {
   }
 
   /**
-   * Fetches a single show's Trakt watched progress via `/shows/{id}/progress/watched` and
-   * resolves the next episode strictly from Trakt's `next_episode` (including both mid-season episodes
-   * and new-season Premiere episodes shown in Trakt's Continue Watching).
-   * Excludes finished shows that have no `next_episode`.
-   */
-  private suspend fun fetchShowProgressOutcome(
-    clientId: String,
-    accessToken: String,
-    stub: CandidateShowStub,
-    bypassCache: Boolean = false,
-    watchedEpisodeKeys: MutableSet<String>? = null
-  ): ProgressCheckOutcome {
-    if (!bypassCache && stub.sortTimestampMs > 0L && verifiedCompletedShowsCache[stub.traktId] == stub.sortTimestampMs) {
-      return ProgressCheckOutcome.FilteredCompleted
-    }
-    val url = "$API_BASE/shows/${stub.traktId}/progress/watched?hidden=false&specials=false&count_specials=false&extended=full"
-    for (attempt in 0..3) {
-      try {
-        val req = buildTraktRequest(url, clientId, accessToken).get().build()
-        var retryAfterSec = 0L
-        val statusAndBody = client.newCall(req).execute().use { resp ->
-          retryAfterSec = resp.header("Retry-After")?.trim()?.toLongOrNull() ?: 0L
-          resp.code to resp.body?.string().orEmpty()
-        }
-        val code = statusAndBody.first
-        val body = statusAndBody.second
-        if ((code == 429 || code in 500..599) && attempt < 3) {
-          val waitMs = if (retryAfterSec > 0L) (retryAfterSec * 1000L).coerceAtMost(5000L) else (1000L * (attempt + 1))
-          kotlinx.coroutines.delay(waitMs)
-          continue
-        }
-        if (code !in 200..299 || body.isBlank()) {
-          return ProgressCheckOutcome.Failed("HTTP $code")
-        }
-
-        val obj = JSONObject(body)
-        val aired = obj.optInt("aired", 0).coerceAtLeast(0)
-        val completed = obj.optInt("completed", 0).coerceAtLeast(0)
-        val seasonsArr = obj.optJSONArray("seasons")
-
-        // Record completed episode keys for local watched badges
-        if (watchedEpisodeKeys != null && seasonsArr != null) {
-          for (si in 0 until seasonsArr.length()) {
-            val sObj = seasonsArr.optJSONObject(si) ?: continue
-            val sNum = sObj.optInt("number", 0)
-            if (sNum <= 0) continue
-            val epsArr = sObj.optJSONArray("episodes") ?: continue
-            for (ei in 0 until epsArr.length()) {
-              val eObj = epsArr.optJSONObject(ei) ?: continue
-              if (eObj.optBoolean("completed", false)) {
-                val eNum = eObj.optInt("number", 0)
-                if (eNum > 0) {
-                  val key = TvPreferencesRepository.buildEpisodeWatchedKey(stub.title, sNum, eNum)
-                  if (key.isNotBlank()) watchedEpisodeKeys.add(key)
-                }
-              }
-            }
-          }
-        }
-
-        // Resolve the show's next episode from Trakt's `next_episode`, or find the first unwatched episode in `seasons`
-        var nextEp = obj.optJSONObject("next_episode")
-        var season = nextEp?.optInt("season", 0) ?: 0
-        var epNum = nextEp?.optInt("number", 0) ?: 0
-
-        if ((nextEp == null || season <= 0 || epNum <= 0) && completed < aired) {
-          if (seasonsArr != null) {
-            outer@ for (si in 0 until seasonsArr.length()) {
-              val sObj = seasonsArr.optJSONObject(si) ?: continue
-              val sNum = sObj.optInt("number", 0)
-              val sAired = sObj.optInt("aired", 0)
-              val sComp = sObj.optInt("completed", 0)
-              if (sNum <= 0 || (sAired > 0 && sComp >= sAired)) continue
-              val epsArr = sObj.optJSONArray("episodes") ?: continue
-              for (ei in 0 until epsArr.length()) {
-                val eObj = epsArr.optJSONObject(ei) ?: continue
-                if (!eObj.optBoolean("completed", false)) {
-                  val eNum = eObj.optInt("number", 0)
-                  if (eNum > 0) {
-                    season = sNum
-                    epNum = eNum
-                    nextEp = eObj
-                    break@outer
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        if (nextEp == null || season <= 0 || epNum <= 0) {
-          if (stub.sortTimestampMs > 0L && completed >= aired && completed > 0) {
-            verifiedCompletedShowsCache[stub.traktId] = stub.sortTimestampMs
-          }
-          return ProgressCheckOutcome.FilteredCompleted
-        }
-
-        val rawTitle = nextEp.optString("title", "").trim()
-        val epTitle = if (rawTitle.equals("null", ignoreCase = true)) "" else rawTitle
-        val epTraktId = nextEp.optJSONObject("ids")?.optLong("trakt", 0L)
-          ?.takeIf { it > 0L }?.toString().orEmpty()
-
-        val progressLastWatchedMs = parseIsoUtcMs(obj.optString("last_watched_at", ""))
-        val finalSortMs = if (progressLastWatchedMs > 0L) progressLastWatchedMs else stub.sortTimestampMs
-
-        // Ensure effectiveWatched >= 1 (even if previous seasons were hidden on Trakt) and effectiveAired > effectiveWatched
-        val effectiveWatched = completed.coerceAtLeast(1)
-        val effectiveAired = if (aired > effectiveWatched) {
-          aired
-        } else {
-          var seasonEpisodeTotal = 0
-          if (seasonsArr != null) {
-            for (si in 0 until seasonsArr.length()) {
-              val sObj = seasonsArr.optJSONObject(si) ?: continue
-              if (sObj.optInt("number", 0) == season) {
-                val sEpsLen = sObj.optJSONArray("episodes")?.length() ?: 0
-                val sAired = sObj.optInt("aired", 0)
-                seasonEpisodeTotal = maxOf(sAired, sEpsLen)
-                break
-              }
-            }
-          }
-          if (seasonEpisodeTotal > 0) effectiveWatched + seasonEpisodeTotal else effectiveWatched + 1
-        }
-
-        verifiedCompletedShowsCache.remove(stub.traktId)
-
-        return ProgressCheckOutcome.Active(
-          RawUpNextProgress(
-            traktShowId = stub.traktId,
-            slug = stub.slug,
-            imdbId = stub.imdbId,
-            showTitle = stub.title,
-            seasonNumber = season,
-            episodeNumber = epNum,
-            episodeTitle = epTitle,
-            epTraktId = epTraktId,
-            watchedCount = effectiveWatched,
-            airedCount = effectiveAired,
-            sortTimestampMs = finalSortMs
-          )
-        )
-      } catch (e: Exception) {
-        if (attempt < 3) {
-          kotlinx.coroutines.delay(800L * (attempt + 1))
-          continue
-        }
-        return ProgressCheckOutcome.Failed(e.message ?: "Network error")
-      }
-    }
-    return ProgressCheckOutcome.Failed("Timeout")
-  }
-
-  private suspend fun fetchShowProgressRaw(
-    clientId: String,
-    accessToken: String,
-    stub: CandidateShowStub
-  ): RawUpNextProgress? {
-    return (fetchShowProgressOutcome(clientId, accessToken, stub, bypassCache = true) as? ProgressCheckOutcome.Active)?.progress
-  }
-
-  /**
-   * Marks an episode as watched directly on the user's Trakt account via POST /sync/history.
+   * Marks an episode as watched directly on the user's Trakt account via POST /sync/history
+   * and immediately invalidates the 10-minute Up Next cache.
    */
   suspend fun markEpisodeWatched(
     clientId: String,
@@ -803,6 +872,7 @@ class TraktSyncService {
       client.newCall(req).execute().use { resp ->
         AppDiagnosticsLogger.log("TraktAPI", "POST /sync/history -> HTTP ${resp.code}")
         if (item.traktShowId > 0L) verifiedCompletedShowsCache.remove(item.traktShowId) else verifiedCompletedShowsCache.clear()
+        invalidateUpNextCache()
         resp.isSuccessful || resp.code == 201
       }
     } catch (e: Exception) {
@@ -812,7 +882,8 @@ class TraktSyncService {
   }
 
   /**
-   * Removes an episode from watched history on the user's Trakt account via POST /sync/history/remove.
+   * Removes an episode from watched history on the user's Trakt account via POST /sync/history/remove
+   * and immediately invalidates the 10-minute Up Next cache.
    */
   suspend fun unmarkEpisodeWatched(
     clientId: String,
@@ -854,6 +925,7 @@ class TraktSyncService {
       client.newCall(req).execute().use { resp ->
         AppDiagnosticsLogger.log("TraktAPI", "POST /sync/history/remove -> HTTP ${resp.code}")
         if (item.traktShowId > 0L) verifiedCompletedShowsCache.remove(item.traktShowId) else verifiedCompletedShowsCache.clear()
+        invalidateUpNextCache()
         resp.isSuccessful
       }
     } catch (e: Exception) {
@@ -909,6 +981,7 @@ class TraktSyncService {
         AppDiagnosticsLogger.log("TraktAPI", "POST /scrobble/$cleanAction (${clampedProgress.toInt()}%) -> HTTP ${resp.code}")
         if (cleanAction == "stop") {
           if (item.traktShowId > 0L) verifiedCompletedShowsCache.remove(item.traktShowId) else verifiedCompletedShowsCache.clear()
+          invalidateUpNextCache()
         }
         // 409 Conflict on /scrobble/stop means Trakt already scrobbled this episode recently
         resp.isSuccessful || resp.code == 201 || (cleanAction == "stop" && resp.code == 409)
@@ -925,52 +998,6 @@ class TraktSyncService {
         false
       }
     }
-  }
-
-  /**
-   * Immediately fetches the updated next_episode for a single show right after marking an episode watched
-   * so season rollovers (e.g., S01E10 -> S02E01) and real episode titles appear immediately.
-   * Returns null if all aired episodes of this show are now watched (so UI removes it from Up Next).
-   */
-  suspend fun fetchSingleShowNextUp(
-    clientId: String,
-    accessToken: String,
-    item: UpNextItem
-  ): UpNextItem? = withContext(Dispatchers.IO) {
-    if (clientId.isBlank() || accessToken.isBlank() || item.traktShowId <= 0L) return@withContext null
-    val raw = fetchShowProgressRaw(
-      clientId = clientId,
-      accessToken = accessToken,
-      stub = CandidateShowStub(
-        traktId = item.traktShowId,
-        slug = item.traktSlug,
-        imdbId = item.imdbId,
-        title = item.showTitle,
-        sortTimestampMs = System.currentTimeMillis(),
-        fromWatchlistOnly = false
-      )
-    ) ?: return@withContext null
-
-    val poster = item.posterUrl.ifBlank { resolveShowPoster(raw.imdbId, raw.showTitle) }
-    UpNextItem(
-      id = "trakt_${raw.traktShowId}",
-      seriesKey = TvPreferencesRepository.buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false),
-      showTitle = raw.showTitle,
-      seasonNumber = raw.seasonNumber,
-      episodeNumber = raw.episodeNumber,
-      episodeTitle = raw.episodeTitle,
-      posterUrl = poster,
-      watchedCount = raw.watchedCount,
-      totalCount = raw.airedCount,
-      traktSlug = raw.slug,
-      traktShowId = raw.traktShowId,
-      imdbId = raw.imdbId,
-      traktEpisodeUrl = if (raw.slug.isNotBlank()) "https://trakt.tv/shows/${raw.slug}/seasons/${raw.seasonNumber}/episodes/${raw.episodeNumber}" else "",
-      traktEpisodeId = raw.epTraktId,
-      fromTrakt = true,
-      preferredPortal = item.preferredPortal,
-      updatedAtMs = System.currentTimeMillis()
-    )
   }
 
   /**
@@ -1019,7 +1046,18 @@ class TraktSyncService {
     const val REDIRECT_URI_OOB = "urn:ietf:wg:oauth:2.0:oob"
     const val TRAKT_CREATE_APP_URL = "https://trakt.tv/oauth/applications/new"
     const val TRAKT_ACTIVATE_URL = "https://trakt.tv/activate"
+    const val UP_NEXT_CACHE_TTL_MS = 10 * 60 * 1000L // 10 minutes cache TTL
+
     private val posterCache = ConcurrentHashMap<String, String>()
     private val verifiedCompletedShowsCache = ConcurrentHashMap<Long, Long>()
+
+    @Volatile
+    private var cachedUpNextResult: TraktFullSyncResult.Success? = null
+
+    @Volatile
+    private var cachedUpNextToken: String = ""
+
+    @Volatile
+    private var cachedUpNextTimestampMs: Long = 0L
   }
 }

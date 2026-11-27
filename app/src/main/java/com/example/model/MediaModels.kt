@@ -139,6 +139,9 @@ data class UpNextItem(
   val seasonNumber: Int,
   val episodeNumber: Int,
   val episodeTitle: String = "",
+  val firstAiredIso: String = "",
+  val lastWatchedAtIso: String = "",
+  val lastWatchedAtMs: Long = 0L,
   val posterUrl: String = "",
   val watchedCount: Int = 0,
   val totalCount: Int = 0,
@@ -147,7 +150,7 @@ data class UpNextItem(
   val imdbId: String = "",
   val traktEpisodeUrl: String = "",
   val traktEpisodeId: String = "",
-  val fromTrakt: Boolean = false,
+  val fromTrakt: Boolean = true,
   val preferredPortal: StreamingPortal = StreamingPortal.WATCH_SERIES,
   val watchUrl: String = "",
   val updatedAtMs: Long = System.currentTimeMillis()

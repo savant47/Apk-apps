@@ -412,7 +412,12 @@ fun TraktPortalScreen(
 
   val displayedUpNext = remember(upNextItems) {
     upNextItems.filter { item ->
-      item.fromTrakt && item.seasonNumber > 0 && item.episodeNumber > 0
+      item.fromTrakt &&
+        item.seasonNumber > 0 &&
+        item.episodeNumber > 0 &&
+        item.firstAiredIso.isNotBlank() &&
+        item.watchedCount > 0 &&
+        item.totalCount > item.watchedCount
     }
   }
 
@@ -1158,12 +1163,10 @@ private fun TraktNextToWatchRow(
     0f
   }
   val leftCount = if (item.totalCount > 0) (item.totalCount - item.watchedCount).coerceAtLeast(0) else 0
-  val isSeasonPremiere = item.seasonNumber > 1 && item.episodeNumber == 1
-  val progressLabel = when {
-    isSeasonPremiere && leftCount <= 1 -> "${item.watchedCount}/${item.totalCount} • Premiere"
-    isSeasonPremiere -> "${item.watchedCount}/${item.totalCount} ($leftCount left • Premiere)"
-    item.totalCount > 0 -> "${item.watchedCount}/${item.totalCount} ($leftCount left)"
-    else -> "Season ${item.seasonNumber} • Episode ${item.episodeNumber}"
+  val progressLabel = if (item.totalCount > 0) {
+    "${item.watchedCount}/${item.totalCount} ($leftCount left)"
+  } else {
+    "Season ${item.seasonNumber} • Episode ${item.episodeNumber}"
   }
 
   CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -1274,6 +1277,17 @@ private fun TraktNextToWatchRow(
                 )
               }
             }
+          }
+
+          if (item.lastWatchedAtIso.isNotBlank()) {
+            Text(
+              text = "Last watched: ${item.lastWatchedAtIso.take(10)}",
+              color = Color(0xFF9CA3AF),
+              fontSize = 11.5.sp,
+              fontWeight = FontWeight.Medium,
+              maxLines = 1,
+              softWrap = false
+            )
           }
 
           Spacer(modifier = Modifier.height(2.dp))

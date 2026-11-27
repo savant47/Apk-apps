@@ -226,7 +226,12 @@ fun HomeDashboardScreen(
 
   val displayedUpNext = remember(upNextQueue, traktConnected) {
     upNextQueue.filter { item ->
-      item.fromTrakt && item.seasonNumber > 0 && item.episodeNumber > 0
+      item.fromTrakt &&
+        item.seasonNumber > 0 &&
+        item.episodeNumber > 0 &&
+        item.firstAiredIso.isNotBlank() &&
+        item.watchedCount > 0 &&
+        item.totalCount > item.watchedCount
     }
   }
 
@@ -3254,14 +3259,9 @@ fun UpNextQueueSection(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                   ) {
-                    val isPremiere = item.seasonNumber > 1 && item.episodeNumber == 1
                     Text(
-                      text = if (isPremiere && leftCount <= 1) {
-                        "${item.watchedCount}/${item.totalCount} • Premiere"
-                      } else {
-                        "${item.watchedCount}/${item.totalCount} ($leftCount)"
-                      },
-                      color = if (isPremiere) CinemaSuccess else Color(0xFF9CA3AF),
+                      text = "${item.watchedCount}/${item.totalCount} ($leftCount)",
+                      color = Color(0xFF9CA3AF),
                       fontSize = 11.5.sp,
                       fontWeight = FontWeight.SemiBold,
                       maxLines = 1,
@@ -3283,6 +3283,20 @@ fun UpNextQueueSection(
                       )
                     }
                   }
+                }
+              }
+
+              if (item.lastWatchedAtIso.isNotBlank()) {
+                val shortDate = item.lastWatchedAtIso.take(10)
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                  Text(
+                    text = "Last watched: $shortDate",
+                    color = Color(0xFF9CA3AF),
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    softWrap = false
+                  )
                 }
               }
 

@@ -205,7 +205,10 @@ fun MainScreen(
     return clientId to accessToken
   }
 
-  fun triggerFullTraktSync(showToast: Boolean = true) {
+  fun triggerFullTraktSync(showToast: Boolean = true, forceRefresh: Boolean = true) {
+    if (!forceRefresh && repository.isTraktUpNextCacheFresh()) {
+      return
+    }
     if (isSyncingTrakt) return
     scope.launch {
       isSyncingTrakt = true
@@ -217,12 +220,20 @@ fun MainScreen(
           }
           return@launch
         }
-        var result = traktSyncService.syncFullAccountData(creds.first, creds.second)
+        var result = traktSyncService.syncFullAccountData(
+          clientId = creds.first,
+          accessToken = creds.second,
+          forceRefresh = forceRefresh
+        )
         if (result is TraktFullSyncResult.Unauthorized) {
           val refreshedCreds = getValidTraktCredentials(forceRefresh = true)
           if (refreshedCreds != null) {
             creds = refreshedCreds
-            result = traktSyncService.syncFullAccountData(refreshedCreds.first, refreshedCreds.second)
+            result = traktSyncService.syncFullAccountData(
+              clientId = refreshedCreds.first,
+              accessToken = refreshedCreds.second,
+              forceRefresh = true
+            )
           }
         }
         when (val finalRes = result) {
@@ -340,6 +351,8 @@ fun MainScreen(
       if (!ok) {
         val errMsg = "تعذر مزامنة حالة المشاهدة (Scrobble $action) مع Trakt"
         repository.setTraktLastSyncError(errMsg)
+      } else if (action.equals("stop", ignoreCase = true) && progressPercent >= 80f) {
+        triggerFullTraktSync(showToast = false, forceRefresh = true)
       }
     }
   }
@@ -369,7 +382,7 @@ fun MainScreen(
       return
     }
 
-    val (itemForSync, matchedUpNext) = buildTraktSyncItemForEpisode(cleanShow, s, e)
+    val (itemForSync, _) = buildTraktSyncItemForEpisode(cleanShow, s, e)
     scope.launch {
       val creds = getValidTraktCredentials(forceRefresh = false)
       if (creds == null) {
@@ -404,17 +417,8 @@ fun MainScreen(
             Toast.makeText(context, "تم إزالة $epLabel من سجل Trakt ✓", Toast.LENGTH_SHORT).show()
           }
         }
-
-        if (itemForSync.traktShowId > 0L) {
-          val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
-          if (updatedNext != null) {
-            repository.replaceSingleUpNextItem(updatedNext)
-          } else if (matchedUpNext != null) {
-            repository.removeUpNextItem(matchedUpNext.id)
-          }
-        } else {
-          triggerFullTraktSync(showToast = false)
-        }
+        // Rule 7: Refresh immediately after marking an episode as watched
+        triggerFullTraktSync(showToast = false, forceRefresh = true)
       } else {
         val errMsg = if (markWatched) {
           "فشل إرسال مشاهدة الحلقة $epLabel إلى Trakt — تحقق من الاتصال وحاول مجدداً"
@@ -446,21 +450,12 @@ fun MainScreen(
       val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, item)
       if (synced) {
         repository.setTraktLastSyncError(null)
-        repository.advanceUpNextItemLocally(item)
+        repository.markEpisodeWatched(item.showTitle, item.seasonNumber, item.episodeNumber)
         if (showToast) {
           Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
         }
-        if (item.traktShowId > 0L) {
-          val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, item)
-          if (updatedNext != null) {
-            repository.replaceSingleUpNextItem(updatedNext)
-          } else {
-            // No more aired unwatched episodes left for this show — remove finished show from Next to Watch!
-            repository.removeUpNextItem(item.id)
-          }
-        } else {
-          triggerFullTraktSync(showToast = false)
-        }
+        // Rule 7: Refresh the Up Next list immediately from Trakt after POST /sync/history
+        triggerFullTraktSync(showToast = false, forceRefresh = true)
       } else {
         val errMsg = "فشل تسجيل الحلقة $epLabel كمُشاهدة في Trakt — يرجى إعادة المحاولة"
         repository.setTraktLastSyncError(errMsg)
@@ -469,7 +464,7 @@ fun MainScreen(
     }
   }
 
-  // Restore saved Trakt tokens from active Room account if needed, and ALWAYS read watched progress from Trakt on app open
+  // Restore saved Trakt tokens from active Room account if needed, and refresh stored list from Trakt
   LaunchedEffect(currentAccount?.id) {
     val acc = currentAccount
     if (acc != null && acc.traktAccessToken.isNotBlank() && acc.traktClientId.isNotBlank() && !repository.isTraktConnected()) {
@@ -483,7 +478,7 @@ fun MainScreen(
       )
     }
     if (repository.isTraktConnected()) {
-      triggerFullTraktSync(showToast = false)
+      triggerFullTraktSync(showToast = false, forceRefresh = !repository.isTraktUpNextCacheFresh())
     }
   }
 
