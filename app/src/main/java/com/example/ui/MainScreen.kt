@@ -1082,7 +1082,9 @@ fun MainScreen(
         refererPage
       )
     } else {
-      wv.loadUrl(cleanTargetUrl, mapOf("Referer" to refererOrigin))
+      val mutableHeaders = java.util.HashMap<String, String>()
+      mutableHeaders["Referer"] = refererOrigin
+      wv.loadUrl(cleanTargetUrl, mutableHeaders)
     }
   }
 
@@ -3025,16 +3027,22 @@ fun MainScreen(
         }
       }
 
-      if (showSidePanelLayout) {
-        if (isPortrait) {
-          Column(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(innerPadding)
-          ) {
-            Box(modifier = Modifier.weight(0.36f).fillMaxWidth()) {
-              movablePlayerBox()
+      if (isPortrait) {
+        Column(
+          modifier = Modifier
+            .fillMaxSize()
+            .then(if (isFullscreenVideo) Modifier else Modifier.padding(innerPadding))
+        ) {
+          Box(
+            modifier = if (showSidePanelLayout) {
+              Modifier.weight(0.36f).fillMaxWidth()
+            } else {
+              Modifier.fillMaxSize()
             }
+          ) {
+            movablePlayerBox()
+          }
+          if (showSidePanelLayout) {
             WatchSidePanel(
               activePortal = activePortal,
               currentUrl = currentUrl,
@@ -3191,15 +3199,23 @@ fun MainScreen(
                 .then(if (displayMode == AppDisplayMode.MOBILE) Modifier.navigationBarsPadding() else Modifier)
             )
           }
-        } else {
-          Row(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(innerPadding)
-          ) {
-            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-              movablePlayerBox()
+        }
+      } else {
+        Row(
+          modifier = Modifier
+            .fillMaxSize()
+            .then(if (isFullscreenVideo) Modifier else Modifier.padding(innerPadding))
+        ) {
+          Box(
+            modifier = if (showSidePanelLayout) {
+              Modifier.weight(1f).fillMaxHeight()
+            } else {
+              Modifier.fillMaxSize()
             }
+          ) {
+            movablePlayerBox()
+          }
+          if (showSidePanelLayout) {
             WatchSidePanel(
               activePortal = activePortal,
               currentUrl = currentUrl,
@@ -3355,14 +3371,6 @@ fun MainScreen(
                 .fillMaxHeight()
             )
           }
-        }
-      } else {
-        Box(
-          modifier = Modifier
-            .fillMaxSize()
-            .then(if (isFullscreenVideo) Modifier else Modifier.padding(innerPadding))
-        ) {
-          movablePlayerBox()
         }
       }
     }

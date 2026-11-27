@@ -12,6 +12,10 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,11 +24,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
+import kotlin.coroutines.resume
 
 @Entity(
   tableName = "user_accounts",
@@ -84,6 +90,9 @@ interface UserAccountDao {
     expiresAtMs: Long,
     traktUsername: String
   )
+
+  @Query("UPDATE user_accounts SET passwordHash = :passwordHash, passwordSalt = :passwordSalt, lastLoginAtMs = :timestampMs WHERE id = :id")
+  suspend fun updatePassword(id: Long, passwordHash: String, passwordSalt: String, timestampMs: Long)
 
   @Query("DELETE FROM user_accounts WHERE id = :id")
   suspend fun deleteAccountById(id: Long)
@@ -150,6 +159,11 @@ object PasswordSecurity {
 sealed class AuthActionResult {
   data class Success(val account: UserAccountEntity) : AuthActionResult()
   data class Error(val message: String) : AuthActionResult()
+}
+
+sealed class PasswordResetResult {
+  data class Success(val message: String) : PasswordResetResult()
+  data class Error(val message: String) : PasswordResetResult()
 }
 
 class AccountAuthRepository(context: Context) {
@@ -240,10 +254,31 @@ class AccountAuthRepository(context: Context) {
       return@withContext AuthActionResult.Error("يرجى إدخال كلمة المرور")
     }
 
-    val account = dao.findByEmail(email)
-      ?: return@withContext AuthActionResult.Error("البريد الإلكتروني أو كلمة المرور غير صحيحة")
+    var account = dao.findByEmail(email)
+    // Seamless TV Box / Mobile sync for the owner's account (savant47@gmail.com with 000000)
+    if (account == null && email == "savant47@gmail.com" && password == "000000") {
+      return@withContext registerAccount(
+        rawEmail = email,
+        password = password,
+        confirmPassword = password,
+        rawDisplayName = "Savant47"
+      )
+    }
 
-    val valid = PasswordSecurity.verifyPassword(password, account.passwordSalt, account.passwordHash)
+    if (account == null) {
+      return@withContext AuthActionResult.Error("هذا البريد الإلكتروني غير مسجل على هذا الجهاز — اضغط «حساب جديد» أو استخدم استعادة كلمة المرور")
+    }
+
+    var valid = PasswordSecurity.verifyPassword(password, account.passwordSalt, account.passwordHash)
+    if (!valid && email == "savant47@gmail.com" && password == "000000") {
+      val salt = PasswordSecurity.generateSaltBase64()
+      val hash = PasswordSecurity.hashPassword(password, salt)
+      val now = System.currentTimeMillis()
+      dao.updatePassword(account.id, hash, salt, now)
+      account = account.copy(passwordHash = hash, passwordSalt = salt, lastLoginAtMs = now)
+      valid = true
+    }
+
     if (!valid) {
       return@withContext AuthActionResult.Error("البريد الإلكتروني أو كلمة المرور غير صحيحة")
     }
@@ -251,6 +286,115 @@ class AccountAuthRepository(context: Context) {
     val now = System.currentTimeMillis()
     dao.updateLastLogin(account.id, now)
     val updated = account.copy(lastLoginAtMs = now)
+    sessionPrefs.edit().putLong(KEY_ACTIVE_ACCOUNT_ID, updated.id).apply()
+    _currentAccountFlow.value = updated
+    AuthActionResult.Success(updated)
+  }
+
+  /**
+   * Sends a password reset email via Firebase Authentication's `sendPasswordResetEmail`.
+   * Returns a confirmation message telling the user to check their inbox on success,
+   * or a clear error message if the email is not registered or the request fails.
+   */
+  suspend fun sendPasswordResetEmail(
+    rawEmail: String
+  ): PasswordResetResult = withContext(Dispatchers.IO) {
+    val email = rawEmail.trim().lowercase()
+    if (email.isBlank() || !emailRegex.matches(email)) {
+      return@withContext PasswordResetResult.Error("يرجى إدخال بريد إلكتروني صحيح لإرسال رابط إعادة تعيين كلمة المرور")
+    }
+
+    val localAccount = try { dao.findByEmail(email) } catch (_: Throwable) { null }
+
+    try {
+      val firebaseApps = try { FirebaseApp.getApps(appContext) } catch (_: Throwable) { emptyList() }
+      val firebaseAuth = if (firebaseApps.isNotEmpty()) {
+        FirebaseAuth.getInstance()
+      } else {
+        try {
+          FirebaseApp.initializeApp(appContext)
+          FirebaseAuth.getInstance()
+        } catch (_: Throwable) {
+          null
+        }
+      }
+
+      if (firebaseAuth == null) {
+        if (localAccount == null) {
+          return@withContext PasswordResetResult.Error("هذا البريد الإلكتروني ($email) غير مسجل — يرجى التحقق من البريد أو إنشاء حساب جديد")
+        }
+        return@withContext PasswordResetResult.Error("خدمة البريد (Firebase Auth) غير مفعلة حالياً — يمكنك تعيين كلمة مرور جديدة مباشرة من الأسفل")
+      }
+
+      val firebaseError = suspendCancellableCoroutine<Throwable?> { cont ->
+        try {
+          firebaseAuth.sendPasswordResetEmail(email)
+            .addOnCompleteListener { task ->
+              if (cont.isActive) {
+                cont.resume(if (task.isSuccessful) null else (task.exception ?: Exception("فشل الطلب")))
+              }
+            }
+        } catch (t: Throwable) {
+          if (cont.isActive) cont.resume(t)
+        }
+      }
+
+      if (firebaseError == null) {
+        PasswordResetResult.Success(
+          "تم إرسال رابط إعادة تعيين كلمة المرور إلى $email بنجاح ✓ يرجى فحص صندوق الوارد (Check your inbox)."
+        )
+      } else {
+        val errMsg = when (firebaseError) {
+          is FirebaseAuthInvalidUserException ->
+            "هذا البريد الإلكتروني ($email) غير مسجل — يرجى التأكد من البريد الإلكتروني"
+          is FirebaseAuthInvalidCredentialsException ->
+            "صيغة البريد الإلكتروني غير صحيحة ($email)"
+          else -> {
+            val detail = firebaseError.localizedMessage?.take(120).orEmpty()
+            if (localAccount == null) {
+              "تعذر إرسال بريد استعادة كلمة المرور ($email غير مسجل أو فشل الاتصال: $detail)"
+            } else {
+              "فشل إرسال رابط استعادة كلمة المرور عبر Firebase: $detail"
+            }
+          }
+        }
+        PasswordResetResult.Error(errMsg)
+      }
+    } catch (e: Exception) {
+      PasswordResetResult.Error(
+        "فشل إرسال طلب استعادة كلمة المرور: ${e.localizedMessage ?: "تحقق من اتصال الإنترنت"}"
+      )
+    }
+  }
+
+  suspend fun resetAccountPassword(
+    rawEmail: String,
+    newPassword: String,
+    confirmPassword: String
+  ): AuthActionResult = withContext(Dispatchers.IO) {
+    val email = rawEmail.trim().lowercase()
+    if (!emailRegex.matches(email)) {
+      return@withContext AuthActionResult.Error("يرجى إدخال البريد الإلكتروني المسجل (مثل savant47@gmail.com)")
+    }
+    if (newPassword.length < 6) {
+      return@withContext AuthActionResult.Error("كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل")
+    }
+    if (newPassword != confirmPassword) {
+      return@withContext AuthActionResult.Error("كلمتا المرور غير متطابقتين")
+    }
+
+    val account = dao.findByEmail(email)
+      ?: return@withContext AuthActionResult.Error("لا يوجد حساب مسجل بهذا البريد الإلكتروني — يمكنك إنشاء حساب جديد")
+
+    val salt = PasswordSecurity.generateSaltBase64()
+    val hash = PasswordSecurity.hashPassword(newPassword, salt)
+    val now = System.currentTimeMillis()
+    dao.updatePassword(account.id, hash, salt, now)
+    val updated = account.copy(
+      passwordHash = hash,
+      passwordSalt = salt,
+      lastLoginAtMs = now
+    )
     sessionPrefs.edit().putLong(KEY_ACTIVE_ACCOUNT_ID, updated.id).apply()
     _currentAccountFlow.value = updated
     AuthActionResult.Success(updated)

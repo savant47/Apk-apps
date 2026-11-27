@@ -443,7 +443,9 @@ fun NativeTvExoPlayer(
     }
 
     try {
-      player.videoScalingMode = targetVideoScalingMode
+      if (player.videoScalingMode != targetVideoScalingMode) {
+        player.videoScalingMode = targetVideoScalingMode
+      }
     } catch (_: Throwable) {}
 
     if (view == null) return
@@ -451,7 +453,9 @@ fun NativeTvExoPlayer(
     try {
       view.clipChildren = true
       view.clipToPadding = true
-      view.resizeMode = targetPvResizeMode
+      if (view.resizeMode != targetPvResizeMode) {
+        view.resizeMode = targetPvResizeMode
+      }
 
       val contentFrame = view.findViewById<AspectRatioFrameLayout>(
         androidx.media3.ui.R.id.exo_content_frame
@@ -461,10 +465,13 @@ fun NativeTvExoPlayer(
       val surface = view.videoSurfaceView
       if (targetPvResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) {
         contentFrame?.setAspectRatio(0f)
-        surface?.layoutParams = FrameLayout.LayoutParams(
-          ViewGroup.LayoutParams.MATCH_PARENT,
-          ViewGroup.LayoutParams.MATCH_PARENT
-        )
+        val lp = surface?.layoutParams
+        if (lp == null || lp.width != ViewGroup.LayoutParams.MATCH_PARENT || lp.height != ViewGroup.LayoutParams.MATCH_PARENT) {
+          surface?.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+          )
+        }
       } else {
         val vs = try { player.videoSize } catch (_: Throwable) { VideoSize.UNKNOWN }
         if (vs.width > 0 && vs.height > 0) {
@@ -477,23 +484,10 @@ fun NativeTvExoPlayer(
 
       val performRelayout = Runnable {
         try {
-          val w = view.width
-          val h = view.height
-          if (w > 0 && h > 0) {
-            contentFrame?.forceLayout()
-            surface?.forceLayout()
-            view.forceLayout()
-            view.measure(
-              View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
-              View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
-            )
-            view.layout(view.left, view.top, view.right, view.bottom)
-            surface?.requestLayout()
-            view.invalidate()
-          } else {
-            contentFrame?.requestLayout()
-            view.requestLayout()
-          }
+          contentFrame?.requestLayout()
+          surface?.requestLayout()
+          view.requestLayout()
+          view.invalidate()
         } catch (_: Throwable) {}
       }
 
@@ -953,8 +947,21 @@ fun NativeTvExoPlayer(
           isError = true
         )
         AppDiagnosticsLogger.recordBreadcrumb(context, "EXOPLAYER_ERR", "$httpCode attempt=$retryAttempt")
-        val maxRetries = if (isUnexpectedEof) 4 else 2
+        val isSurfaceOrDecoderFailure =
+          error.errorCode == PlaybackException.ERROR_CODE_TIMEOUT ||
+          error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+          error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
+        val maxRetries = if (isUnexpectedEof) 4 else if (isSurfaceOrDecoderFailure) 3 else 2
         if (retryAttempt < maxRetries) {
+          if (isSurfaceOrDecoderFailure) {
+            try {
+              player.stop()
+              playerViewRef?.let { pv ->
+                pv.player = null
+                pv.player = player
+              }
+            } catch (_: Throwable) {}
+          }
           retryAttempt += 1
         } else {
           AppDiagnosticsLogger.activePlayerMode = "WebView Fallback (بسبب $httpCode)"

@@ -88,10 +88,12 @@ class MainActivity : ComponentActivity(), KeyEventProvider {
         }
       }
     }
+    com.example.ui.installAndroid7AccessibilityCrashShield(window?.decorView)
   }
 
   override fun onResume() {
     super.onResume()
+    com.example.ui.installAndroid7AccessibilityCrashShield(window?.decorView)
     if (::repository.isInitialized) {
       applyDisplayMode(repository.getDisplayMode())
     }
