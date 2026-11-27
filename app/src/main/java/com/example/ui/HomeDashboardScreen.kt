@@ -332,7 +332,7 @@ fun HomeDashboardScreen(
             .padding(horizontal = if (isCompactMobile) 12.dp else 16.dp, vertical = 10.dp),
           verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-          // Top Search Bar (Opens right at the top for searching any Arabic, English, Korean, Turkish, Asian movie or series)
+          // Top Search Bar (with compact Trakt link button when disconnected)
           item {
             ClipboxTopSearchBar(
               searchQuery = searchQuery,
@@ -349,6 +349,8 @@ fun HomeDashboardScreen(
                 executeMultiSourceSearch(suggestion)
               },
               onOpenSources = onOpenSettings,
+              traktConnected = traktConnected,
+              onOpenTrakt = onOpenTrakt,
               focusRequester = searchInputFocusRequester,
               isCompactMobile = isCompactMobile
             )
@@ -457,42 +459,11 @@ fun HomeDashboardScreen(
         }
       }
 
-      // Home Trakt Integration Banner (when Trakt is NOT linked yet — matches user's design!)
-      if (!traktConnected) {
-        item {
-          HomeTraktConnectBannerCard(
-            onConnectClick = onOpenTrakt
-          )
-        }
-      }
+      val showUpNextSection = traktConnected || displayedUpNext.isNotEmpty() || !traktLastSyncError.isNullOrBlank()
+      val showContinueFirst = displayedUpNext.isEmpty() && history.isNotEmpty() && traktLastSyncError.isNullOrBlank()
 
-      // Up Next Queue Row (التالي للمشاهدة) — Unified with Trakt Official Progress
-      if (traktConnected || displayedUpNext.isNotEmpty() || !traktLastSyncError.isNullOrBlank()) {
-        item {
-          UpNextQueueSection(
-            items = displayedUpNext,
-            onPlayItem = onPlayUpNext,
-            onMarkWatched = { item ->
-              if (onMarkUpNextWatched != null) {
-                onMarkUpNextWatched(item)
-              }
-            },
-            onOpenTrakt = onOpenTrakt,
-            onSyncTrakt = if (traktConnected) onSyncTraktFromHome else null,
-            traktUsername = if (traktConnected) traktUsername else "",
-            syncErrorMessage = traktLastSyncError,
-            onDeleteItem = { item ->
-              repository.removeUpNextItem(item.id)
-            },
-            onClearAll = {
-              repository.clearUpNext()
-            }
-          )
-        }
-      }
-
-      // Continue Watching Row (متابعة المشاهدة) with Clipbox Red Progress Bar & Clear Season/Episode Indicator
-      if (history.isNotEmpty()) {
+      // First content slot: Continue Watching (متابعة المشاهدة) or Up Next (التالي للمشاهدة)
+      if (showContinueFirst) {
         item {
           ContinueWatchingSection(
             history = history,
@@ -517,6 +488,81 @@ fun HomeDashboardScreen(
               repository.clearHistory()
             }
           )
+        }
+        if (showUpNextSection) {
+          item {
+            UpNextQueueSection(
+              items = displayedUpNext,
+              onPlayItem = onPlayUpNext,
+              onMarkWatched = { item ->
+                if (onMarkUpNextWatched != null) {
+                  onMarkUpNextWatched(item)
+                }
+              },
+              onOpenTrakt = onOpenTrakt,
+              onSyncTrakt = if (traktConnected) onSyncTraktFromHome else null,
+              traktUsername = if (traktConnected) traktUsername else "",
+              syncErrorMessage = traktLastSyncError,
+              onDeleteItem = { item ->
+                repository.removeUpNextItem(item.id)
+              },
+              onClearAll = {
+                repository.clearUpNext()
+              }
+            )
+          }
+        }
+      } else {
+        if (showUpNextSection) {
+          item {
+            UpNextQueueSection(
+              items = displayedUpNext,
+              onPlayItem = onPlayUpNext,
+              onMarkWatched = { item ->
+                if (onMarkUpNextWatched != null) {
+                  onMarkUpNextWatched(item)
+                }
+              },
+              onOpenTrakt = onOpenTrakt,
+              onSyncTrakt = if (traktConnected) onSyncTraktFromHome else null,
+              traktUsername = if (traktConnected) traktUsername else "",
+              syncErrorMessage = traktLastSyncError,
+              onDeleteItem = { item ->
+                repository.removeUpNextItem(item.id)
+              },
+              onClearAll = {
+                repository.clearUpNext()
+              }
+            )
+          }
+        }
+
+        if (history.isNotEmpty()) {
+          item {
+            ContinueWatchingSection(
+              history = history,
+              repository = repository,
+              onResumeItem = { entry ->
+                if (onResumeHistory != null) {
+                  onResumeHistory(entry)
+                } else {
+                  onLaunchResultWithSources(
+                    entry.url,
+                    entry.portal,
+                    entry.title,
+                    entry.title,
+                    portalResultsMap
+                  )
+                }
+              },
+              onDeleteItem = { entry ->
+                repository.removeHistoryEntry(entry.id)
+              },
+              onClearAll = {
+                repository.clearHistory()
+              }
+            )
+          }
         }
       }
 
@@ -888,6 +934,8 @@ fun ClipboxTopSearchBar(
   quickSuggestions: List<String>,
   onSuggestionClick: (String) -> Unit,
   onOpenSources: () -> Unit,
+  traktConnected: Boolean = true,
+  onOpenTrakt: () -> Unit = {},
   focusRequester: FocusRequester,
   isCompactMobile: Boolean = false
 ) {
@@ -926,28 +974,69 @@ fun ClipboxTopSearchBar(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        val settingsInteraction = remember { MutableInteractionSource() }
-        val isSettingsFocused by settingsInteraction.collectIsFocusedAsState()
-        Surface(
-          onClick = onOpenSources,
-          interactionSource = settingsInteraction,
-          color = if (isSettingsFocused) CinemaFocusGlow else CinemaSurfaceVariant,
-          shape = RoundedCornerShape(50),
-          border = BorderStroke(
-            width = if (isSettingsFocused) 2.dp else 1.dp,
-            color = if (isSettingsFocused) ClipboxWhite else CinemaBorder
-          ),
-          modifier = Modifier
-            .size(40.dp)
-            .testTag("btn_dashboard_settings_gear")
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.Settings,
-              contentDescription = "الإعدادات",
-              tint = if (isSettingsFocused) Color.Black else CinemaAccent,
-              modifier = Modifier.size(20.dp)
-            )
+          if (!traktConnected) {
+            val traktBtnInteraction = remember { MutableInteractionSource() }
+            val isTraktBtnFocused by traktBtnInteraction.collectIsFocusedAsState()
+            Surface(
+              onClick = onOpenTrakt,
+              interactionSource = traktBtnInteraction,
+              color = if (isTraktBtnFocused) CinemaFocusGlow else Color(0xFFED1C24),
+              shape = RoundedCornerShape(50),
+              border = if (isTraktBtnFocused) BorderStroke(2.dp, ClipboxWhite) else null,
+              modifier = Modifier
+                .heightIn(min = 38.dp)
+                .testTag("btn_home_connect_trakt_code")
+            ) {
+              Row(
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Key,
+                  contentDescription = "ربط Trakt",
+                  tint = if (isTraktBtnFocused) Color.Black else Color.White,
+                  modifier = Modifier.size(14.dp)
+                )
+                Text(
+                  text = "ربط Trakt",
+                  color = if (isTraktBtnFocused) Color.Black else Color.White,
+                  fontSize = 12.5.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  maxLines = 1,
+                  softWrap = false
+                )
+              }
+            }
+          }
+
+          val settingsInteraction = remember { MutableInteractionSource() }
+          val isSettingsFocused by settingsInteraction.collectIsFocusedAsState()
+          Surface(
+            onClick = onOpenSources,
+            interactionSource = settingsInteraction,
+            color = if (isSettingsFocused) CinemaFocusGlow else CinemaSurfaceVariant,
+            shape = RoundedCornerShape(50),
+            border = BorderStroke(
+              width = if (isSettingsFocused) 2.dp else 1.dp,
+              color = if (isSettingsFocused) ClipboxWhite else CinemaBorder
+            ),
+            modifier = Modifier
+              .size(40.dp)
+              .testTag("btn_dashboard_settings_gear")
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "الإعدادات",
+                tint = if (isSettingsFocused) Color.Black else CinemaAccent,
+                modifier = Modifier.size(20.dp)
+              )
+            }
           }
         }
       }
@@ -3355,83 +3444,6 @@ fun UpNextQueueSection(
             }
           }
         }
-      }
-    }
-  }
-}
-
-@Composable
-private fun HomeTraktConnectBannerCard(
-  onConnectClick: () -> Unit
-) {
-  Surface(
-    shape = RoundedCornerShape(18.dp),
-    border = BorderStroke(1.5.dp, Color(0xFF7F1D1D)),
-    color = Color.Transparent,
-    modifier = Modifier
-      .fillMaxWidth()
-      .clip(RoundedCornerShape(18.dp))
-      .background(
-        Brush.horizontalGradient(
-          colors = listOf(Color(0xFF141820), Color(0xFF2D1218))
-        )
-      )
-      .testTag("home_trakt_connect_banner")
-  ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(16.dp),
-      verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-      ) {
-        Box(
-          modifier = Modifier
-            .size(48.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFED1C24)),
-          contentAlignment = Alignment.Center
-        ) {
-          Icon(
-            imageVector = Icons.Default.QueuePlayNext,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(26.dp)
-          )
-        }
-
-        Text(
-          text = "اربط حسابك على Trakt بالكود",
-          color = Color.White,
-          fontSize = 17.5.sp,
-          fontWeight = FontWeight.Black,
-          modifier = Modifier.weight(1f)
-        )
-      }
-
-      Text(
-        text = "اربط حسابك بكود التفعيل لتظهر هنا حلقات «التالي للمشاهدة» تلقائياً مرتبة بآخر مشاهدة مع استكمال المشاهدة.",
-        color = Color(0xFFCBD5E1),
-        fontSize = 13.5.sp,
-        lineHeight = 20.sp
-      )
-
-      Button(
-        onClick = onConnectClick,
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED1C24)),
-        shape = RoundedCornerShape(12.dp),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 11.dp),
-        modifier = Modifier
-          .heightIn(min = 46.dp)
-          .testTag("btn_home_connect_trakt_code")
-      ) {
-        Icon(Icons.Default.Key, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("ربط Trakt بالكود", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
       }
     }
   }

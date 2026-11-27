@@ -1,6 +1,6 @@
 {
-  "name": "Asser Browser",
-  "description": "متصفح ويب فائق الخفة والسرعة (Asser Browser) بواجهة بحث جوجل وتصفح شامل مع تبويب Asser TV المدمج لمشاهدة الأفلام والمسلسلات، متوافق مع الهواتف وشاشات التلفاز والرسيفرات بالريموت والماوس واللمس.",
+  "name": "Asser TV",
+  "description": "تطبيق Asser TV فائق الخفة والسرعة لمشاهدة الأفلام والمسلسلات ومتابعة الحلقات مع متصفح ويب مدمج، متوافق مع الهواتف وشاشات التلفاز والرسيفرات بالريموت والماوس واللمس.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

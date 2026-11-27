@@ -49,7 +49,7 @@ fun SplashScreen(
     ) {
       Image(
         painter = painterResource(id = R.drawable.ic_assertv_logo),
-        contentDescription = "Asser Browser Logo",
+        contentDescription = "Asser TV Logo",
         contentScale = ContentScale.Fit,
         modifier = Modifier
           .size(160.dp)
@@ -59,7 +59,7 @@ fun SplashScreen(
       Spacer(modifier = Modifier.height(14.dp))
 
       Text(
-        text = "Asser Browser",
+        text = "Asser TV",
         color = Color(0xFF38BDF8),
         fontSize = 34.sp,
         fontWeight = FontWeight.Black,
@@ -70,7 +70,7 @@ fun SplashScreen(
       Spacer(modifier = Modifier.height(4.dp))
 
       Text(
-        text = "متصفح الويب السريع وبوابة Asser TV الذكية",
+        text = "بوابة Asser TV الذكية ومتصفح الويب السريع",
         color = Color(0xFFB3B3B3),
         fontSize = 13.sp,
         fontWeight = FontWeight.Medium

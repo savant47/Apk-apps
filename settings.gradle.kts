@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Asser Browser"
+rootProject.name = "Asser TV"
 
 include(":app")
