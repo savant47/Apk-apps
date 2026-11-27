@@ -410,10 +410,9 @@ fun TraktPortalScreen(
     }
   }
 
-  // Strictly filtered to started shows with unwatched aired episodes (0 < watchedCount < totalCount), unified with Home screen
   val displayedUpNext = remember(upNextItems) {
     upNextItems.filter { item ->
-      item.fromTrakt && item.totalCount > 0 && item.watchedCount in 1 until item.totalCount
+      item.fromTrakt && item.seasonNumber > 0 && item.episodeNumber > 0
     }
   }
 

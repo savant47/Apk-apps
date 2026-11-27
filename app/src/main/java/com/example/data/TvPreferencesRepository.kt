@@ -788,8 +788,9 @@ class TvPreferencesRepository(context: Context) {
         val fromTrakt = obj.optBoolean("fromTrakt", false)
 
         // Trakt is the single source of truth for Next to Watch
-        if (!fromTrakt || watchedCount <= 0) continue
-        val normalizedTotal = if (totalCount > watchedCount) totalCount else watchedCount + 1
+        if (!fromTrakt) continue
+        val normalizedWatched = watchedCount.coerceAtLeast(1)
+        val normalizedTotal = if (totalCount > normalizedWatched) totalCount else normalizedWatched + 1
 
         val seriesKey = obj.optString("seriesKey", "").ifBlank {
           buildNormalizedContentKey(showTitle, null, null, isSeries = false)
@@ -805,7 +806,7 @@ class TvPreferencesRepository(context: Context) {
             episodeNumber = e,
             episodeTitle = obj.optString("episodeTitle", ""),
             posterUrl = obj.optString("posterUrl", ""),
-            watchedCount = watchedCount,
+            watchedCount = normalizedWatched,
             totalCount = normalizedTotal,
             traktSlug = obj.optString("traktSlug", ""),
             traktShowId = obj.optLong("traktShowId", 0L),
@@ -855,8 +856,7 @@ class TvPreferencesRepository(context: Context) {
 
   /**
    * Replaces "Next to Watch" and watched history strictly with real Progress items extracted from
-   * the user's Trakt account (`next_episode` only, `completed > 0 && completed < aired`), unifying
-   * the list and count across all screens.
+   * the user's Trakt account (`next_episode` only), unifying the list and count across all screens.
    */
   @Synchronized
   fun mergeTraktProgressItems(
@@ -872,8 +872,9 @@ class TvPreferencesRepository(context: Context) {
     val merged = mutableListOf<UpNextItem>()
 
     for (raw in traktItems) {
-      if (raw.watchedCount <= 0) continue
-      val normalizedTotal = if (raw.totalCount > raw.watchedCount) raw.totalCount else raw.watchedCount + 1
+      if (raw.seasonNumber <= 0 || raw.episodeNumber <= 0) continue
+      val normalizedWatched = raw.watchedCount.coerceAtLeast(1)
+      val normalizedTotal = if (raw.totalCount > normalizedWatched) raw.totalCount else normalizedWatched + 1
       val key = raw.seriesKey.ifBlank {
         buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false)
       }
@@ -882,6 +883,7 @@ class TvPreferencesRepository(context: Context) {
       merged.add(
         raw.copy(
           seriesKey = key,
+          watchedCount = normalizedWatched,
           totalCount = normalizedTotal,
           posterUrl = raw.posterUrl.ifBlank { prev?.posterUrl.orEmpty() },
           preferredPortal = prev?.preferredPortal ?: raw.preferredPortal,

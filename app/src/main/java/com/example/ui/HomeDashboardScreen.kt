@@ -226,11 +226,7 @@ fun HomeDashboardScreen(
 
   val displayedUpNext = remember(upNextQueue, traktConnected) {
     upNextQueue.filter { item ->
-      if (traktConnected) {
-        item.fromTrakt && item.totalCount > 0 && item.watchedCount in 1 until item.totalCount
-      } else {
-        !item.fromTrakt || (item.totalCount > 0 && item.watchedCount in 1 until item.totalCount)
-      }
+      item.fromTrakt && item.seasonNumber > 0 && item.episodeNumber > 0
     }
   }
 
