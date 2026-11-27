@@ -3258,9 +3258,14 @@ fun UpNextQueueSection(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                   ) {
+                    val isPremiere = item.seasonNumber > 1 && item.episodeNumber == 1
                     Text(
-                      text = "${item.watchedCount}/${item.totalCount} ($leftCount)",
-                      color = Color(0xFF9CA3AF),
+                      text = if (isPremiere && leftCount <= 1) {
+                        "${item.watchedCount}/${item.totalCount} • Premiere"
+                      } else {
+                        "${item.watchedCount}/${item.totalCount} ($leftCount)"
+                      },
+                      color = if (isPremiere) CinemaSuccess else Color(0xFF9CA3AF),
                       fontSize = 11.5.sp,
                       fontWeight = FontWeight.SemiBold,
                       maxLines = 1,

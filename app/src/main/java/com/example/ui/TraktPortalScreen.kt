@@ -1159,10 +1159,12 @@ private fun TraktNextToWatchRow(
     0f
   }
   val leftCount = if (item.totalCount > 0) (item.totalCount - item.watchedCount).coerceAtLeast(0) else 0
-  val progressLabel = if (item.totalCount > 0) {
-    "${item.watchedCount}/${item.totalCount} ($leftCount left)"
-  } else {
-    "Season ${item.seasonNumber} • Episode ${item.episodeNumber}"
+  val isSeasonPremiere = item.seasonNumber > 1 && item.episodeNumber == 1
+  val progressLabel = when {
+    isSeasonPremiere && leftCount <= 1 -> "${item.watchedCount}/${item.totalCount} • Premiere"
+    isSeasonPremiere -> "${item.watchedCount}/${item.totalCount} ($leftCount left • Premiere)"
+    item.totalCount > 0 -> "${item.watchedCount}/${item.totalCount} ($leftCount left)"
+    else -> "Season ${item.seasonNumber} • Episode ${item.episodeNumber}"
   }
 
   CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {

@@ -109,11 +109,18 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
    * - RGB_565 bitmaps on Android 9 to halve decoded poster RAM usage
    */
   override fun newImageLoader(): ImageLoader {
+    val isAndroid7OrLower = Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1
     val isAndroid9OrLower = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
     return ImageLoader.Builder(this)
       .memoryCache {
         MemoryCache.Builder(this)
-          .maxSizePercent(if (isAndroid9OrLower) 0.08 else 0.10)
+          .maxSizePercent(
+            when {
+              isAndroid7OrLower -> 0.06
+              isAndroid9OrLower -> 0.08
+              else -> 0.10
+            }
+          )
           .strongReferencesEnabled(true)
           .weakReferencesEnabled(false)
           .build()
@@ -121,7 +128,13 @@ class TvCinemaApplication : Application(), ImageLoaderFactory {
       .diskCache {
         DiskCache.Builder()
           .directory(File(cacheDir, "image_cache"))
-          .maxSizeBytes(if (isAndroid9OrLower) 12L * 1024L * 1024L else 16L * 1024L * 1024L)
+          .maxSizeBytes(
+            when {
+              isAndroid7OrLower -> 10L * 1024L * 1024L
+              isAndroid9OrLower -> 12L * 1024L * 1024L
+              else -> 16L * 1024L * 1024L
+            }
+          )
           .build()
       }
       .allowHardware(!isAndroid9OrLower)

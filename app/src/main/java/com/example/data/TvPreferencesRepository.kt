@@ -788,17 +788,8 @@ class TvPreferencesRepository(context: Context) {
         val fromTrakt = obj.optBoolean("fromTrakt", false)
 
         // Trakt is the single source of truth for Next to Watch
-        if (!fromTrakt) continue
-
-        // Strictly exclude completed shows (completed >= aired) and unwatched 0/N shows (completed <= 0)
-        if (totalCount <= 0 || watchedCount <= 0 || watchedCount >= totalCount) continue
-
-        // Exclude accidental 1-episode (S01E02, 1/N) extraLists pollution on The 8 Show & House of the Dragon
-        if (fromTrakt && watchedCount == 1 && s == 1 && e == 2 &&
-          (showTitle.equals("The 8 Show", ignoreCase = true) || showTitle.equals("House of the Dragon", ignoreCase = true))
-        ) {
-          continue
-        }
+        if (!fromTrakt || watchedCount <= 0) continue
+        val normalizedTotal = if (totalCount > watchedCount) totalCount else watchedCount + 1
 
         val seriesKey = obj.optString("seriesKey", "").ifBlank {
           buildNormalizedContentKey(showTitle, null, null, isSeries = false)
@@ -815,7 +806,7 @@ class TvPreferencesRepository(context: Context) {
             episodeTitle = obj.optString("episodeTitle", ""),
             posterUrl = obj.optString("posterUrl", ""),
             watchedCount = watchedCount,
-            totalCount = totalCount,
+            totalCount = normalizedTotal,
             traktSlug = obj.optString("traktSlug", ""),
             traktShowId = obj.optLong("traktShowId", 0L),
             imdbId = obj.optString("imdbId", ""),
@@ -881,8 +872,8 @@ class TvPreferencesRepository(context: Context) {
     val merged = mutableListOf<UpNextItem>()
 
     for (raw in traktItems) {
-      // Strictly keep only started shows with unwatched aired episodes (0 < completed < aired)
-      if (raw.totalCount <= 0 || raw.watchedCount <= 0 || raw.watchedCount >= raw.totalCount) continue
+      if (raw.watchedCount <= 0) continue
+      val normalizedTotal = if (raw.totalCount > raw.watchedCount) raw.totalCount else raw.watchedCount + 1
       val key = raw.seriesKey.ifBlank {
         buildNormalizedContentKey(raw.showTitle, null, null, isSeries = false)
       }
@@ -891,6 +882,7 @@ class TvPreferencesRepository(context: Context) {
       merged.add(
         raw.copy(
           seriesKey = key,
+          totalCount = normalizedTotal,
           posterUrl = raw.posterUrl.ifBlank { prev?.posterUrl.orEmpty() },
           preferredPortal = prev?.preferredPortal ?: raw.preferredPortal,
           fromTrakt = true
