@@ -246,30 +246,30 @@ fun MainScreen(
                 traktUsername = resolvedUsername
               )
             }
-            repository.mergeTraktProgressItems(finalRes.upNextItems, finalRes.stats)
+            repository.mergeTraktProgressItems(
+              traktItems = finalRes.upNextItems,
+              stats = finalRes.stats,
+              watchedEpisodeKeys = finalRes.watchedEpisodeKeys
+            )
             repository.saveTraktCalendar(emptyList())
             repository.saveTraktWatchlist(emptyList())
             if (showToast) {
               val s = finalRes.stats
               Toast.makeText(
                 context,
-                "تمت المزامنة ✓ (المسحوب ${s.totalWatchedFetched} • المكتمل المستبعد ${s.completedFilteredCount} • الصافي ${finalRes.upNextItems.size})",
+                "تمت المزامنة مع Trakt ✓ (المسحوب ${s.totalWatchedFetched} • المكتمل المستبعد ${s.completedFilteredCount} • الصافي ${finalRes.upNextItems.size})",
                 Toast.LENGTH_LONG
               ).show()
             }
           }
           is TraktFullSyncResult.Unauthorized -> {
-            val errMsg = "انتهت صلاحية جلسة Trakt — يرجى إعادة الربط بالكود"
+            val errMsg = "فشلت المزامنة مع Trakt: انتهت صلاحية الجلسة — يرجى إعادة الربط بالكود"
             repository.setTraktLastSyncError(errMsg)
-            if (showToast) {
-              Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
-            }
+            Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
           }
           is TraktFullSyncResult.Error -> {
             repository.setTraktLastSyncError(finalRes.message)
-            if (showToast) {
-              Toast.makeText(context, finalRes.message, Toast.LENGTH_LONG).show()
-            }
+            Toast.makeText(context, finalRes.message, Toast.LENGTH_LONG).show()
           }
         }
       } finally {
@@ -278,38 +278,198 @@ fun MainScreen(
     }
   }
 
-  fun markUpNextItemWatchedOfficial(item: UpNextItem, showToast: Boolean = true) {
-    val epLabel = "S%02dE%02d".format(java.util.Locale.US, item.seasonNumber, item.episodeNumber)
-    // 1. Advance immediately in local cache for instant feedback
-    repository.advanceUpNextItemLocally(item)
-    // 2. Two-way official Trakt API v2 sync (POST /sync/history + fetch next_episode)
-    if (repository.isTraktConnected()) {
-      scope.launch {
-        val creds = getValidTraktCredentials(forceRefresh = false)
-        if (creds != null) {
-          val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, item)
-          if (synced) {
-            if (showToast) {
-              Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
-            }
-            val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, item)
-            if (updatedNext != null) {
-              repository.replaceSingleUpNextItem(updatedNext)
-            } else {
-              // No more aired unwatched episodes left for this show — remove from Up Next!
-              repository.removeUpNextItem(item.id)
-            }
-          } else if (showToast) {
-            Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
-          }
-        }
+  fun buildTraktSyncItemForEpisode(
+    rawShowTitle: String,
+    seasonNumber: Int,
+    episodeNumber: Int
+  ): Pair<UpNextItem, UpNextItem?> {
+    val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(rawShowTitle)
+      .ifBlank { rawShowTitle }
+      .trim()
+    val showKey = TvPreferencesRepository.buildNormalizedContentKey(cleanShow, null, null, isSeries = false)
+    val matchedUpNext = repository.upNextFlow.value.firstOrNull {
+      (showKey.isNotBlank() && it.seriesKey == showKey) ||
+        it.showTitle.equals(cleanShow, ignoreCase = true)
+    }
+    val itemForSync = (matchedUpNext ?: UpNextItem(
+      id = "trakt_ep_${showKey}_${seasonNumber}_$episodeNumber",
+      seriesKey = showKey,
+      showTitle = cleanShow,
+      seasonNumber = seasonNumber.coerceAtLeast(1),
+      episodeNumber = episodeNumber.coerceAtLeast(1),
+      fromTrakt = true
+    )).copy(
+      seasonNumber = seasonNumber.coerceAtLeast(1),
+      episodeNumber = episodeNumber.coerceAtLeast(1),
+      traktEpisodeId = if (
+        matchedUpNext != null &&
+        matchedUpNext.seasonNumber == seasonNumber &&
+        matchedUpNext.episodeNumber == episodeNumber
+      ) {
+        matchedUpNext.traktEpisodeId
+      } else {
+        ""
       }
-    } else if (showToast) {
-      Toast.makeText(context, "تم الانتقال للحلقة التالية بعد $epLabel ✓", Toast.LENGTH_SHORT).show()
+    )
+    return itemForSync to matchedUpNext
+  }
+
+  fun sendPlayerScrobbleToTrakt(
+    showTitle: String,
+    seasonNumber: Int,
+    episodeNumber: Int,
+    action: String,
+    progressPercent: Float
+  ) {
+    if (!repository.isTraktConnected() || showTitle.isBlank() || episodeNumber <= 0) return
+    val (itemForSync, _) = buildTraktSyncItemForEpisode(showTitle, seasonNumber, episodeNumber)
+    scope.launch {
+      val creds = getValidTraktCredentials(forceRefresh = false)
+      if (creds == null) {
+        val errMsg = "فشل إرسال حالة التشغيل (Scrobble $action) إلى Trakt: تعذر التحقق من الجلسة"
+        repository.setTraktLastSyncError(errMsg)
+        return@launch
+      }
+      val ok = traktSyncService.scrobbleEpisode(
+        clientId = creds.first,
+        accessToken = creds.second,
+        action = action,
+        item = itemForSync,
+        progressPercent = progressPercent
+      )
+      if (!ok) {
+        val errMsg = "تعذر مزامنة حالة المشاهدة (Scrobble $action) مع Trakt"
+        repository.setTraktLastSyncError(errMsg)
+      }
     }
   }
 
-  // Restore saved Trakt tokens from active Room account if needed, and run lightweight background refresh when stale
+  fun syncPlayerEpisodeWithTrakt(
+    showTitle: String,
+    seasonNumber: Int,
+    episodeNumber: Int,
+    markWatched: Boolean,
+    useScrobbleStop: Boolean = false,
+    showToast: Boolean = true
+  ) {
+    val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(showTitle)
+      .ifBlank { showTitle }
+      .trim()
+    if (cleanShow.isBlank() || episodeNumber <= 0) return
+    val s = seasonNumber.coerceAtLeast(1)
+    val e = episodeNumber.coerceAtLeast(1)
+    val epLabel = "S%02dE%02d".format(java.util.Locale.US, s, e)
+
+    if (!repository.isTraktConnected()) {
+      val errMsg = "يرجى ربط حساب Trakt أولاً لتحديث سجل المشاهدة ($epLabel)"
+      repository.setTraktLastSyncError(errMsg)
+      if (showToast) {
+        Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+      }
+      return
+    }
+
+    val (itemForSync, matchedUpNext) = buildTraktSyncItemForEpisode(cleanShow, s, e)
+    scope.launch {
+      val creds = getValidTraktCredentials(forceRefresh = false)
+      if (creds == null) {
+        val errMsg = "فشل الاتصال بـ Trakt لتحديث $epLabel — يرجى إعادة الربط أو المحاولة مجدداً"
+        repository.setTraktLastSyncError(errMsg)
+        if (showToast) {
+          Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+        }
+        return@launch
+      }
+
+      val synced = if (markWatched) {
+        if (useScrobbleStop) {
+          traktSyncService.scrobbleEpisode(creds.first, creds.second, "stop", itemForSync, 100f)
+        } else {
+          traktSyncService.markEpisodeWatched(creds.first, creds.second, itemForSync)
+        }
+      } else {
+        traktSyncService.unmarkEpisodeWatched(creds.first, creds.second, itemForSync)
+      }
+
+      if (synced) {
+        repository.setTraktLastSyncError(null)
+        if (markWatched) {
+          repository.markEpisodeWatched(cleanShow, s, e)
+          if (showToast) {
+            Toast.makeText(context, "تم تسجيل $epLabel كمُشاهد في Trakt ✓", Toast.LENGTH_SHORT).show()
+          }
+        } else {
+          repository.unmarkEpisodeWatched(cleanShow, s, e)
+          if (showToast) {
+            Toast.makeText(context, "تم إزالة $epLabel من سجل Trakt ✓", Toast.LENGTH_SHORT).show()
+          }
+        }
+
+        if (itemForSync.traktShowId > 0L) {
+          val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
+          if (updatedNext != null) {
+            repository.replaceSingleUpNextItem(updatedNext)
+          } else if (matchedUpNext != null) {
+            repository.removeUpNextItem(matchedUpNext.id)
+          }
+        } else {
+          triggerFullTraktSync(showToast = false)
+        }
+      } else {
+        val errMsg = if (markWatched) {
+          "فشل إرسال مشاهدة الحلقة $epLabel إلى Trakt — تحقق من الاتصال وحاول مجدداً"
+        } else {
+          "فشل إلغاء مشاهدة الحلقة $epLabel في Trakt — تحقق من الاتصال وحاول مجدداً"
+        }
+        repository.setTraktLastSyncError(errMsg)
+        Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+      }
+    }
+  }
+
+  fun markUpNextItemWatchedOfficial(item: UpNextItem, showToast: Boolean = true) {
+    val epLabel = "S%02dE%02d".format(java.util.Locale.US, item.seasonNumber, item.episodeNumber)
+    if (!repository.isTraktConnected()) {
+      val errMsg = "يرجى ربط حساب Trakt أولاً لتحديث التالي للمشاهدة"
+      repository.setTraktLastSyncError(errMsg)
+      Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+      return
+    }
+    scope.launch {
+      val creds = getValidTraktCredentials(forceRefresh = false)
+      if (creds == null) {
+        val errMsg = "فشل تحديث $epLabel في Trakt: انتهت صلاحية الجلسة"
+        repository.setTraktLastSyncError(errMsg)
+        Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+        return@launch
+      }
+      val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, item)
+      if (synced) {
+        repository.setTraktLastSyncError(null)
+        repository.advanceUpNextItemLocally(item)
+        if (showToast) {
+          Toast.makeText(context, "تم تعليم $epLabel كمُشاهد وتحديث Trakt ✓", Toast.LENGTH_SHORT).show()
+        }
+        if (item.traktShowId > 0L) {
+          val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, item)
+          if (updatedNext != null) {
+            repository.replaceSingleUpNextItem(updatedNext)
+          } else {
+            // No more aired unwatched episodes left for this show — remove finished show from Next to Watch!
+            repository.removeUpNextItem(item.id)
+          }
+        } else {
+          triggerFullTraktSync(showToast = false)
+        }
+      } else {
+        val errMsg = "فشل تسجيل الحلقة $epLabel كمُشاهدة في Trakt — يرجى إعادة المحاولة"
+        repository.setTraktLastSyncError(errMsg)
+        Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+      }
+    }
+  }
+
+  // Restore saved Trakt tokens from active Room account if needed, and ALWAYS read watched progress from Trakt on app open
   LaunchedEffect(currentAccount?.id) {
     val acc = currentAccount
     if (acc != null && acc.traktAccessToken.isNotBlank() && acc.traktClientId.isNotBlank() && !repository.isTraktConnected()) {
@@ -323,10 +483,7 @@ fun MainScreen(
       )
     }
     if (repository.isTraktConnected()) {
-      val staleMs = System.currentTimeMillis() - repository.traktLastSyncMsFlow.value
-      if (staleMs > 15 * 60_000L || repository.upNextFlow.value.isEmpty()) {
-        triggerFullTraktSync(showToast = false)
-      }
+      triggerFullTraktSync(showToast = false)
     }
   }
 
@@ -2252,94 +2409,39 @@ fun MainScreen(
             repository.setAudioBoostPercent(pct)
           },
           isCurrentEpisodeWatched = isCurrentEpWatchedInPlayer,
-          onAutoMarkWatched = {
+          onScrobbleEvent = { action, progressPct ->
             if (activeEpNumResolved > 0 && activeShowCleanForWatched.isNotBlank()) {
-              repository.markEpisodeWatched(
+              sendPlayerScrobbleToTrakt(
                 showTitle = activeShowCleanForWatched,
                 seasonNumber = activeSeasonResolved,
                 episodeNumber = activeEpNumResolved,
-                preferredPortal = activePortal,
-                nextEpisodeWatchUrl = nextEpisodeItem?.url ?: "",
-                autoEnqueueNext = true
+                action = action,
+                progressPercent = progressPct
               )
-              if (repository.isTraktConnected()) {
-                val showKey = TvPreferencesRepository.buildNormalizedContentKey(activeShowCleanForWatched, null, null, isSeries = false)
-                val matchedUpNext = repository.upNextFlow.value.firstOrNull {
-                  (showKey.isNotBlank() && it.seriesKey == showKey) ||
-                    it.showTitle.equals(activeShowCleanForWatched, ignoreCase = true)
-                }
-                val itemForSync = (matchedUpNext ?: UpNextItem(
-                  id = "exo_sync",
-                  seriesKey = showKey,
-                  showTitle = activeShowCleanForWatched,
-                  seasonNumber = activeSeasonResolved,
-                  episodeNumber = activeEpNumResolved
-                )).copy(
-                  seasonNumber = activeSeasonResolved,
-                  episodeNumber = activeEpNumResolved
-                )
-                scope.launch {
-                  val creds = getValidTraktCredentials(forceRefresh = false)
-                  if (creds != null) {
-                    val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, itemForSync)
-                    if (synced) {
-                      val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
-                      if (updatedNext != null) {
-                        repository.replaceSingleUpNextItem(updatedNext)
-                      } else if (matchedUpNext != null) {
-                        repository.removeUpNextItem(matchedUpNext.id)
-                      }
-                    }
-                  }
-                }
-              }
+            }
+          },
+          onAutoMarkWatched = {
+            if (activeEpNumResolved > 0 && activeShowCleanForWatched.isNotBlank()) {
+              syncPlayerEpisodeWithTrakt(
+                showTitle = activeShowCleanForWatched,
+                seasonNumber = activeSeasonResolved,
+                episodeNumber = activeEpNumResolved,
+                markWatched = true,
+                useScrobbleStop = true,
+                showToast = true
+              )
             }
           },
           onToggleWatchedManual = {
             if (activeEpNumResolved > 0 && activeShowCleanForWatched.isNotBlank()) {
-              if (isCurrentEpWatchedInPlayer) {
-                repository.unmarkEpisodeWatched(activeShowCleanForWatched, activeSeasonResolved, activeEpNumResolved)
-              } else {
-                repository.markEpisodeWatched(
-                  showTitle = activeShowCleanForWatched,
-                  seasonNumber = activeSeasonResolved,
-                  episodeNumber = activeEpNumResolved,
-                  preferredPortal = activePortal,
-                  nextEpisodeWatchUrl = nextEpisodeItem?.url ?: "",
-                  autoEnqueueNext = true
-                )
-                if (repository.isTraktConnected()) {
-                  val showKey = TvPreferencesRepository.buildNormalizedContentKey(activeShowCleanForWatched, null, null, isSeries = false)
-                  val matchedUpNext = repository.upNextFlow.value.firstOrNull {
-                    (showKey.isNotBlank() && it.seriesKey == showKey) ||
-                      it.showTitle.equals(activeShowCleanForWatched, ignoreCase = true)
-                  }
-                  val itemForSync = (matchedUpNext ?: UpNextItem(
-                    id = "exo_sync_manual",
-                    seriesKey = showKey,
-                    showTitle = activeShowCleanForWatched,
-                    seasonNumber = activeSeasonResolved,
-                    episodeNumber = activeEpNumResolved
-                  )).copy(
-                    seasonNumber = activeSeasonResolved,
-                    episodeNumber = activeEpNumResolved
-                  )
-                  scope.launch {
-                    val creds = getValidTraktCredentials(forceRefresh = false)
-                    if (creds != null) {
-                      val synced = traktSyncService.markEpisodeWatched(creds.first, creds.second, itemForSync)
-                      if (synced) {
-                        val updatedNext = traktSyncService.fetchSingleShowNextUp(creds.first, creds.second, itemForSync)
-                        if (updatedNext != null) {
-                          repository.replaceSingleUpNextItem(updatedNext)
-                        } else if (matchedUpNext != null) {
-                          repository.removeUpNextItem(matchedUpNext.id)
-                        }
-                      }
-                    }
-                  }
-                }
-              }
+              syncPlayerEpisodeWithTrakt(
+                showTitle = activeShowCleanForWatched,
+                seasonNumber = activeSeasonResolved,
+                episodeNumber = activeEpNumResolved,
+                markWatched = !isCurrentEpWatchedInPlayer,
+                useScrobbleStop = false,
+                showToast = true
+              )
             }
           },
           externalPause = showSubtitlesDialog,
@@ -3072,21 +3174,14 @@ fun MainScreen(
                 val eN = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
                 if (showT.isNotBlank() && eN > 0) {
                   val already = repository.isEpisodeWatched(showT, sN, eN)
-                  if (already) {
-                    repository.unmarkEpisodeWatched(showT, sN, eN)
-                    Toast.makeText(context, "تم إلغاء علامة المشاهدة", Toast.LENGTH_SHORT).show()
-                  } else {
-                    val nextEp = resolveNextEpisode()
-                    repository.markEpisodeWatched(
-                      showTitle = showT,
-                      seasonNumber = sN,
-                      episodeNumber = eN,
-                      preferredPortal = activePortal,
-                      nextEpisodeWatchUrl = nextEp?.url ?: "",
-                      autoEnqueueNext = true
-                    )
-                    Toast.makeText(context, "✅ تمت المشاهدة — أضيفت الحلقة التالية لقائمة التالي", Toast.LENGTH_SHORT).show()
-                  }
+                  syncPlayerEpisodeWithTrakt(
+                    showTitle = showT,
+                    seasonNumber = sN,
+                    episodeNumber = eN,
+                    markWatched = !already,
+                    useScrobbleStop = false,
+                    showToast = true
+                  )
                 }
               },
               isCompactMobileSheet = true,
@@ -3244,21 +3339,14 @@ fun MainScreen(
                 val eN = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
                 if (showT.isNotBlank() && eN > 0) {
                   val already = repository.isEpisodeWatched(showT, sN, eN)
-                  if (already) {
-                    repository.unmarkEpisodeWatched(showT, sN, eN)
-                    Toast.makeText(context, "تم إلغاء علامة المشاهدة", Toast.LENGTH_SHORT).show()
-                  } else {
-                    val nextEp = resolveNextEpisode()
-                    repository.markEpisodeWatched(
-                      showTitle = showT,
-                      seasonNumber = sN,
-                      episodeNumber = eN,
-                      preferredPortal = activePortal,
-                      nextEpisodeWatchUrl = nextEp?.url ?: "",
-                      autoEnqueueNext = true
-                    )
-                    Toast.makeText(context, "✅ تمت المشاهدة — أضيفت الحلقة التالية لقائمة التالي", Toast.LENGTH_SHORT).show()
-                  }
+                  syncPlayerEpisodeWithTrakt(
+                    showTitle = showT,
+                    seasonNumber = sN,
+                    episodeNumber = eN,
+                    markWatched = !already,
+                    useScrobbleStop = false,
+                    showToast = true
+                  )
                 }
               },
               isCompactMobileSheet = false,

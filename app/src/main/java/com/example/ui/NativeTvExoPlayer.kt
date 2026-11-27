@@ -194,6 +194,7 @@ fun NativeTvExoPlayer(
   isCurrentEpisodeWatched: Boolean = false,
   onAutoMarkWatched: () -> Unit = {},
   onToggleWatchedManual: () -> Unit = {},
+  onScrobbleEvent: (action: String, progressPercent: Float) -> Unit = { _, _ -> },
   externalPause: Boolean = false,
   onFallbackToWebPlayer: () -> Unit = onDismiss
 ) {
@@ -211,6 +212,7 @@ fun NativeTvExoPlayer(
   val latestOnSavePlaybackProgress by rememberUpdatedState(onSavePlaybackProgress)
   val latestOnClearPlaybackProgress by rememberUpdatedState(onClearPlaybackProgress)
   val latestOnAutoMarkWatched by rememberUpdatedState(onAutoMarkWatched)
+  val latestOnScrobbleEvent by rememberUpdatedState(onScrobbleEvent)
 
   var currentAudioBoostPercent by remember { mutableIntStateOf(audioBoostPercent.coerceIn(0, 300)) }
   var loudnessEnhancerRef by remember { mutableStateOf<LoudnessEnhancer?>(null) }
@@ -853,11 +855,15 @@ fun NativeTvExoPlayer(
             } catch (_: Throwable) {}
           }
         } else if (playbackState == Player.STATE_ENDED) {
-          // Mark episode/movie as completed (clears saved resume position)
+          // Mark episode/movie as completed (clears saved resume position & triggers Trakt scrobble stop)
           try {
             val dur = player.duration.coerceAtLeast(1L)
             latestOnSavePlaybackProgress(dur, dur)
           } catch (_: Throwable) {}
+          if (!hasAutoMarkedWatched) {
+            hasAutoMarkedWatched = true
+            latestOnAutoMarkWatched()
+          }
           if (!latestNextEpisodeTitle.isNullOrBlank() &&
               latestIsAutoPlayNextEnabled &&
               !userCancelledNextEpisode &&
@@ -905,7 +911,17 @@ fun NativeTvExoPlayer(
 
       override fun onIsPlayingChanged(isPlaying: Boolean) {
         isPlayerPaused = !isPlaying && player.playbackState == Player.STATE_READY
-        if (!isPlaying && !showResumePrompt) {
+        if (!showResumePrompt && player.playbackState == Player.STATE_READY) {
+          val dur = try { player.duration.coerceAtLeast(0L) } catch (_: Throwable) { 0L }
+          val pos = try { player.currentPosition.coerceAtLeast(0L) } catch (_: Throwable) { 0L }
+          val pct = if (dur > 0L) ((pos.toDouble() / dur.toDouble()) * 100.0).toFloat().coerceIn(1f, 99f) else 1f
+          if (isPlaying) {
+            latestOnScrobbleEvent("start", pct)
+          } else {
+            persistPlaybackProgressNow()
+            latestOnScrobbleEvent("pause", pct)
+          }
+        } else if (!isPlaying && !showResumePrompt) {
           persistPlaybackProgressNow()
         }
       }

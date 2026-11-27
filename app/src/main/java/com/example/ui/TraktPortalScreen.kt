@@ -783,9 +783,9 @@ fun TraktPortalScreen(
                       )
                     }
                     Text(
-                      text = "تحديث",
+                      text = "تحديث الآن • Sync now",
                       color = CinemaSuccess,
-                      fontSize = 12.5.sp,
+                      fontSize = 12.sp,
                       fontWeight = FontWeight.ExtraBold,
                       maxLines = 1,
                       softWrap = false
@@ -1128,7 +1128,7 @@ private fun TraktEmptySectionCard(
           ) {
             Icon(Icons.Default.Sync, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text("تحديث من Trakt", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
+            Text("تحديث الآن • Sync now", color = Color.White, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
           }
         }
       }

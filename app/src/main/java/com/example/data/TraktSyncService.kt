@@ -65,7 +65,8 @@ sealed class TraktFullSyncResult {
     val upNextItems: List<UpNextItem>,
     val calendarItems: List<TraktCalendarItem>,
     val watchlistItems: List<TraktWatchlistItem>,
-    val stats: TraktSyncStats = TraktSyncStats()
+    val stats: TraktSyncStats = TraktSyncStats(),
+    val watchedEpisodeKeys: Set<String> = emptySet()
   ) : TraktFullSyncResult()
 
   data object Unauthorized : TraktFullSyncResult()
@@ -448,6 +449,7 @@ class TraktSyncService {
 
         val seenIds = mutableSetOf<Long>()
         val candidateStubs = mutableListOf<CandidateShowStub>()
+        val watchedEpisodeKeys = LinkedHashSet<String>()
 
         for (i in 0 until watchedArray.length()) {
           val entry = watchedArray.optJSONObject(i) ?: continue
@@ -457,14 +459,10 @@ class TraktSyncService {
           val title = showObj.optString("title", "").trim()
           if (traktId <= 0L || title.isBlank() || !seenIds.add(traktId)) continue
 
-          if (traktId in hiddenIds) {
-            hiddenFilteredCount++
-            continue
-          }
-
           val seasonsArr = entry.optJSONArray("seasons")
           var watchedRegularEps = 0
           var onlyWatchedS01E01 = false
+          val showEpisodeKeys = mutableListOf<String>()
           if (seasonsArr != null) {
             for (si in 0 until seasonsArr.length()) {
               val sObj = seasonsArr.optJSONObject(si) ?: continue
@@ -475,6 +473,15 @@ class TraktSyncService {
                 watchedRegularEps += count
                 if (sNum == 1 && count == 1 && eps?.optJSONObject(0)?.optInt("number", 0) == 1) {
                   onlyWatchedS01E01 = true
+                }
+                if (eps != null) {
+                  for (ei in 0 until count) {
+                    val epNum = eps.optJSONObject(ei)?.optInt("number", 0) ?: 0
+                    if (epNum > 0) {
+                      val key = TvPreferencesRepository.buildEpisodeWatchedKey(title, sNum, epNum)
+                      if (key.isNotBlank()) showEpisodeKeys.add(key)
+                    }
+                  }
                 }
               }
             }
@@ -487,6 +494,13 @@ class TraktSyncService {
           ) {
             removeEpisodeFromHistorySync(clientId, accessToken, traktId, 1, 1)
             completedFilteredCount++
+            continue
+          }
+
+          watchedEpisodeKeys.addAll(showEpisodeKeys)
+
+          if (traktId in hiddenIds) {
+            hiddenFilteredCount++
             continue
           }
 
@@ -599,7 +613,8 @@ class TraktSyncService {
           upNextItems = upNextItems,
           calendarItems = emptyList(),
           watchlistItems = emptyList(),
-          stats = stats
+          stats = stats,
+          watchedEpisodeKeys = watchedEpisodeKeys
         )
       }
     } catch (e: Exception) {
@@ -647,11 +662,38 @@ class TraktSyncService {
           return ProgressCheckOutcome.FilteredCompleted
         }
 
-        // Calculate next episode strictly from `next_episode` in Trakt's response ONLY!
-        val nextEp = obj.optJSONObject("next_episode") ?: return ProgressCheckOutcome.FilteredNoNextEpisode
-        val season = nextEp.optInt("season", 0)
-        val epNum = nextEp.optInt("number", 0)
-        if (season <= 0 || epNum <= 0) {
+        // Resolve the show's next episode from Trakt's `next_episode`, or find the first unwatched episode in `seasons`
+        var nextEp = obj.optJSONObject("next_episode")
+        var season = nextEp?.optInt("season", 0) ?: 0
+        var epNum = nextEp?.optInt("number", 0) ?: 0
+
+        if (nextEp == null || season <= 0 || epNum <= 0) {
+          val seasonsArr = obj.optJSONArray("seasons")
+          if (seasonsArr != null) {
+            outer@ for (si in 0 until seasonsArr.length()) {
+              val sObj = seasonsArr.optJSONObject(si) ?: continue
+              val sNum = sObj.optInt("number", 0)
+              val sAired = sObj.optInt("aired", 0)
+              val sComp = sObj.optInt("completed", 0)
+              if (sNum <= 0 || sComp >= sAired) continue
+              val epsArr = sObj.optJSONArray("episodes") ?: continue
+              for (ei in 0 until epsArr.length()) {
+                val eObj = epsArr.optJSONObject(ei) ?: continue
+                if (!eObj.optBoolean("completed", false)) {
+                  val eNum = eObj.optInt("number", 0)
+                  if (eNum > 0) {
+                    season = sNum
+                    epNum = eNum
+                    nextEp = eObj
+                    break@outer
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (nextEp == null || season <= 0 || epNum <= 0) {
           return ProgressCheckOutcome.FilteredNoNextEpisode
         }
 
@@ -668,7 +710,7 @@ class TraktSyncService {
           if (firstAiredMs > System.currentTimeMillis() + 3600_000L) {
             return ProgressCheckOutcome.FilteredNoNextEpisode
           }
-        } else {
+        } else if (obj.optJSONObject("next_episode") != null) {
           if (epTitle.isBlank() || epTitle.equals("TBA", ignoreCase = true)) {
             return ProgressCheckOutcome.FilteredNoNextEpisode
           }
@@ -766,6 +808,118 @@ class TraktSyncService {
     } catch (e: Exception) {
       AppDiagnosticsLogger.log("TraktAPI", "markEpisodeWatched failed: ${e.message}", isError = true)
       false
+    }
+  }
+
+  /**
+   * Removes an episode from watched history on the user's Trakt account via POST /sync/history/remove.
+   */
+  suspend fun unmarkEpisodeWatched(
+    clientId: String,
+    accessToken: String,
+    item: UpNextItem
+  ): Boolean = withContext(Dispatchers.IO) {
+    if (clientId.isBlank() || accessToken.isBlank()) return@withContext false
+    try {
+      val bodyJson = JSONObject()
+      val epTraktIdLong = item.traktEpisodeId.toLongOrNull() ?: 0L
+      if (epTraktIdLong > 0L) {
+        bodyJson.put(
+          "episodes",
+          JSONArray().put(
+            JSONObject().put("ids", JSONObject().put("trakt", epTraktIdLong))
+          )
+        )
+      } else {
+        val showObj = JSONObject().put("title", item.showTitle)
+        val idsObj = JSONObject()
+        if (item.traktShowId > 0L) idsObj.put("trakt", item.traktShowId)
+        if (item.traktSlug.isNotBlank()) idsObj.put("slug", item.traktSlug)
+        if (item.imdbId.isNotBlank()) idsObj.put("imdb", item.imdbId)
+        if (idsObj.length() > 0) showObj.put("ids", idsObj)
+
+        val epObj = JSONObject().put("number", item.episodeNumber)
+        val seasonObj = JSONObject()
+          .put("number", item.seasonNumber)
+          .put("episodes", JSONArray().put(epObj))
+        showObj.put("seasons", JSONArray().put(seasonObj))
+
+        bodyJson.put("shows", JSONArray().put(showObj))
+      }
+
+      val req = buildTraktRequest("$API_BASE/sync/history/remove", clientId, accessToken)
+        .post(bodyJson.toString().toRequestBody(jsonMediaType))
+        .build()
+
+      client.newCall(req).execute().use { resp ->
+        AppDiagnosticsLogger.log("TraktAPI", "POST /sync/history/remove -> HTTP ${resp.code}")
+        resp.isSuccessful
+      }
+    } catch (e: Exception) {
+      AppDiagnosticsLogger.log("TraktAPI", "unmarkEpisodeWatched failed: ${e.message}", isError = true)
+      false
+    }
+  }
+
+  /**
+   * Official Trakt Scrobble API v2 (`POST /scrobble/start`, `POST /scrobble/pause`, `POST /scrobble/stop`).
+   * Calling `stop` with progress >= 80% automatically marks the episode as watched on Trakt.
+   */
+  suspend fun scrobbleEpisode(
+    clientId: String,
+    accessToken: String,
+    action: String, // "start", "pause", or "stop"
+    item: UpNextItem,
+    progressPercent: Float = 100f
+  ): Boolean = withContext(Dispatchers.IO) {
+    if (clientId.isBlank() || accessToken.isBlank()) return@withContext false
+    val cleanAction = action.lowercase(Locale.US).trim()
+    if (cleanAction !in listOf("start", "pause", "stop")) return@withContext false
+    try {
+      val clampedProgress = progressPercent.coerceIn(1f, 100f)
+      val bodyJson = JSONObject().put("progress", clampedProgress.toDouble())
+      val epTraktIdLong = item.traktEpisodeId.toLongOrNull() ?: 0L
+      if (epTraktIdLong > 0L) {
+        bodyJson.put(
+          "episode",
+          JSONObject().put("ids", JSONObject().put("trakt", epTraktIdLong))
+        )
+      } else {
+        val showObj = JSONObject().put("title", item.showTitle)
+        val idsObj = JSONObject()
+        if (item.traktShowId > 0L) idsObj.put("trakt", item.traktShowId)
+        if (item.traktSlug.isNotBlank()) idsObj.put("slug", item.traktSlug)
+        if (item.imdbId.isNotBlank()) idsObj.put("imdb", item.imdbId)
+        if (idsObj.length() > 0) showObj.put("ids", idsObj)
+        bodyJson.put("show", showObj)
+        bodyJson.put(
+          "episode",
+          JSONObject()
+            .put("season", item.seasonNumber.coerceAtLeast(1))
+            .put("number", item.episodeNumber.coerceAtLeast(1))
+        )
+      }
+
+      val req = buildTraktRequest("$API_BASE/scrobble/$cleanAction", clientId, accessToken)
+        .post(bodyJson.toString().toRequestBody(jsonMediaType))
+        .build()
+
+      val scrobbleOk = client.newCall(req).execute().use { resp ->
+        AppDiagnosticsLogger.log("TraktAPI", "POST /scrobble/$cleanAction (${clampedProgress.toInt()}%) -> HTTP ${resp.code}")
+        // 409 Conflict on /scrobble/stop means Trakt already scrobbled this episode recently
+        resp.isSuccessful || resp.code == 201 || (cleanAction == "stop" && resp.code == 409)
+      }
+      if (!scrobbleOk && cleanAction == "stop" && clampedProgress >= 80f) {
+        return@withContext markEpisodeWatched(clientId, accessToken, item)
+      }
+      scrobbleOk
+    } catch (e: Exception) {
+      AppDiagnosticsLogger.log("TraktAPI", "scrobbleEpisode($cleanAction) failed: ${e.message}", isError = true)
+      if (cleanAction == "stop" && progressPercent >= 80f) {
+        markEpisodeWatched(clientId, accessToken, item)
+      } else {
+        false
+      }
     }
   }
 

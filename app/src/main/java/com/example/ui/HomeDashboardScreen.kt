@@ -466,7 +466,7 @@ fun HomeDashboardScreen(
       }
 
       // Up Next Queue Row (التالي للمشاهدة) — Unified with Trakt Official Progress
-      if (displayedUpNext.isNotEmpty() || (traktConnected && !traktLastSyncError.isNullOrBlank())) {
+      if (traktConnected || displayedUpNext.isNotEmpty() || !traktLastSyncError.isNullOrBlank()) {
         item {
           UpNextQueueSection(
             items = displayedUpNext,
@@ -474,14 +474,12 @@ fun HomeDashboardScreen(
             onMarkWatched = { item ->
               if (onMarkUpNextWatched != null) {
                 onMarkUpNextWatched(item)
-              } else {
-                repository.advanceUpNextItemLocally(item)
               }
             },
             onOpenTrakt = onOpenTrakt,
             onSyncTrakt = if (traktConnected) onSyncTraktFromHome else null,
             traktUsername = if (traktConnected) traktUsername else "",
-            syncErrorMessage = if (traktConnected) traktLastSyncError else null,
+            syncErrorMessage = traktLastSyncError,
             onDeleteItem = { item ->
               repository.removeUpNextItem(item.id)
             },
@@ -2995,9 +2993,9 @@ fun UpNextQueueSection(
                 modifier = Modifier.size(15.dp)
               )
               Text(
-                text = "تحديث",
+                text = "تحديث الآن • Sync now",
                 color = CinemaSuccess,
-                fontSize = 12.5.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.ExtraBold,
                 maxLines = 1,
                 softWrap = false
