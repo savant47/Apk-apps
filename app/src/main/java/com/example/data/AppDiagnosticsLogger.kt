@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.BufferedReader
@@ -219,42 +220,178 @@ object AppDiagnosticsLogger {
     return logFile
   }
 
+  internal fun sanitizeAndTrimForPasteRs(
+    reportText: String,
+    maxUtf8Bytes: Int = 96 * 1024
+  ): ByteArray {
+    val sanitizedBuilder = StringBuilder(reportText.length.coerceAtMost(maxUtf8Bytes))
+    var prevWasCr = false
+    for (ch in reportText) {
+      when {
+        ch == '\r' -> {
+          sanitizedBuilder.append('\n')
+          prevWasCr = true
+        }
+        ch == '\n' -> {
+          if (!prevWasCr) sanitizedBuilder.append('\n')
+          prevWasCr = false
+        }
+        ch == '\t' -> {
+          sanitizedBuilder.append('\t')
+          prevWasCr = false
+        }
+        ch.code in 0x00..0x1F || ch.code == 0x7F -> {
+          prevWasCr = false
+        }
+        else -> {
+          sanitizedBuilder.append(ch)
+          prevWasCr = false
+        }
+      }
+    }
+    val cleaned = sanitizedBuilder.toString().trim()
+    if (cleaned.isEmpty()) {
+      return "Asser TV Diagnostics Report (empty)\n".toByteArray(Charsets.UTF_8)
+    }
+
+    val fullBytes = cleaned.toByteArray(Charsets.UTF_8)
+    if (fullBytes.size <= maxUtf8Bytes) {
+      return fullBytes
+    }
+
+    // Preserve head (crash report + breadcrumbs + device header) and tail (latest logs) within UTF-8 byte budget
+    val marker = "\n\n... [trimmed to fit paste.rs byte limit] ...\n\n"
+    val markerBytes = marker.toByteArray(Charsets.UTF_8)
+    val available = (maxUtf8Bytes - markerBytes.size).coerceAtLeast(1024)
+    val headBudget = (available * 35) / 100
+    val tailBudget = available - headBudget
+
+    val headStr = takeLeadingUtf8Bytes(cleaned, headBudget)
+    val tailStr = takeTrailingUtf8Bytes(cleaned, tailBudget)
+    return (headStr + marker + tailStr).toByteArray(Charsets.UTF_8)
+  }
+
+  private fun takeLeadingUtf8Bytes(text: String, maxBytes: Int): String {
+    if (maxBytes <= 0) return ""
+    val sb = StringBuilder()
+    var used = 0
+    var i = 0
+    while (i < text.length) {
+      val cp = text.codePointAt(i)
+      val charCount = Character.charCount(cp)
+      val byteLen = when {
+        cp <= 0x7F -> 1
+        cp <= 0x7FF -> 2
+        cp <= 0xFFFF -> 3
+        else -> 4
+      }
+      if (used + byteLen > maxBytes) break
+      sb.appendCodePoint(cp)
+      used += byteLen
+      i += charCount
+    }
+    return sb.toString()
+  }
+
+  private fun takeTrailingUtf8Bytes(text: String, maxBytes: Int): String {
+    if (maxBytes <= 0) return ""
+    var used = 0
+    var startIdx = text.length
+    var i = text.length
+    while (i > 0) {
+      val cp = text.codePointBefore(i)
+      val charCount = Character.charCount(cp)
+      val byteLen = when {
+        cp <= 0x7F -> 1
+        cp <= 0x7FF -> 2
+        cp <= 0xFFFF -> 3
+        else -> 4
+      }
+      if (used + byteLen > maxBytes) break
+      used += byteLen
+      startIdx = i - charCount
+      i -= charCount
+    }
+    return text.substring(startIdx)
+  }
+
+  internal fun extractPasteRsErrorSummary(rawBody: String): String {
+    if (rawBody.isBlank()) return "Empty response"
+    val stripped = rawBody
+      .replace(Regex("<head[^>]*>[\\s\\S]*?</head>", RegexOption.IGNORE_CASE), " ")
+      .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), " ")
+      .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), " ")
+      .replace(Regex("<[^>]+>"), " ")
+      .replace(Regex("\\s+"), " ")
+      .trim()
+    return stripped.ifBlank { rawBody.trim() }.take(140)
+  }
+
   /**
-   * Performs a lightweight HTTP POST request to https://paste.rs/ with raw log text in the body
-   * and returns the short paste URL so Android TV users can scan a QR code on their phone.
+   * Performs an HTTP/1.1 POST request exclusively to https://paste.rs/ with UTF-8 byte-bounded
+   * raw log bytes (matching `curl --data-binary`) and returns the short paste.rs URL.
    */
   suspend fun uploadReportToPasteRs(reportText: String): Result<String> = withContext(Dispatchers.IO) {
     try {
-      val client = OkHttpClient.Builder()
+      val client = SearchAndSubtitlesService.buildSslTolerantHttpClient()
+        .newBuilder()
+        .protocols(listOf(Protocol.HTTP_1_1))
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .writeTimeout(25, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
-      val payload = reportText.take(250_000)
-      val body = payload.toRequestBody("text/plain; charset=utf-8".toMediaType())
-      val request = Request.Builder()
-        .url("https://paste.rs/")
-        .post(body)
-        .header("User-Agent", "AsserTV-Diagnostics/1.0")
-        .build()
+      val primaryBytes = sanitizeAndTrimForPasteRs(reportText, maxUtf8Bytes = 96 * 1024)
+      val compactBytes = sanitizeAndTrimForPasteRs(reportText, maxUtf8Bytes = 32 * 1024)
 
-      client.newCall(request).execute().use { response ->
-        val responseText = response.body?.string()?.trim().orEmpty()
-        if ((response.isSuccessful || response.code == 201 || response.code == 206) &&
-            responseText.startsWith("http")
-        ) {
-          val cleanUrl = responseText.lineSequence().firstOrNull { it.startsWith("http") }?.trim()
-            ?: responseText
-          log("LogExport", "Uploaded log to paste.rs: $cleanUrl")
-          Result.success(cleanUrl)
-        } else {
-          val msg = "فشل الرفع إلى paste.rs (HTTP ${response.code}): ${responseText.take(120)}"
-          log("LogExport", msg, isError = true)
-          Result.failure(Exception(msg))
+      // Exclusively targets https://paste.rs/ with Rocket-compatible raw body variants
+      val attempts = listOf(
+        Triple("raw-no-ct", primaryBytes, null),
+        Triple("text-plain", primaryBytes, "text/plain".toMediaType()),
+        Triple("curl-form-compact", compactBytes, "application/x-www-form-urlencoded".toMediaType())
+      )
+
+      var lastCode = 0
+      var lastSummary = ""
+
+      for ((label, bytes, mediaType) in attempts) {
+        val request = Request.Builder()
+          .url("https://paste.rs/")
+          .post(bytes.toRequestBody(mediaType))
+          .header("User-Agent", "curl/8.5.0")
+          .header("Accept", "*/*")
+          .build()
+
+        client.newCall(request).execute().use { response ->
+          val responseText = response.body?.string()?.trim().orEmpty()
+          val pasteUrl = responseText.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("https://paste.rs/") || it.startsWith("http://paste.rs/") }
+
+          if ((response.isSuccessful || response.code == 201 || response.code == 206) && !pasteUrl.isNullOrBlank()) {
+            log("LogExport", "Uploaded log to paste.rs ($label, ${bytes.size}B, HTTP ${response.code}): $pasteUrl")
+            return@withContext Result.success(pasteUrl)
+          }
+
+          lastCode = response.code
+          lastSummary = extractPasteRsErrorSummary(responseText)
+          log(
+            "LogExport",
+            "paste.rs attempt [$label] (${bytes.size}B) -> HTTP ${response.code}: $lastSummary",
+            isError = true
+          )
+
+          // Retry alternate framing only for HTTP 400 / 413 / 415
+          if (response.code != 400 && response.code != 413 && response.code != 415) {
+            val msg = "فشل الرفع إلى paste.rs (HTTP $lastCode): $lastSummary"
+            return@withContext Result.failure(Exception(msg))
+          }
         }
       }
+
+      val msg = "فشل الرفع إلى paste.rs (HTTP $lastCode): $lastSummary"
+      Result.failure(Exception(msg))
     } catch (e: Exception) {
       val msg = "تعذر الاتصال بـ paste.rs: ${e.localizedMessage ?: e.javaClass.simpleName}"
       log("LogExport", msg, isError = true)

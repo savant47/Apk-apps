@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -109,6 +110,7 @@ import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.ClipboxWhite
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import java.net.URLDecoder
@@ -555,6 +557,7 @@ fun MainScreen(
   val watchedEpisodes by repository.watchedEpisodesFlow.collectAsState()
   var webVideoCurrentTimeMs by remember { mutableStateOf(0L) }
   val failedNativeStreamUrls = remember { mutableSetOf<String>() }
+  val failedServerEmbedUrls = remember { mutableSetOf<String>() }
 
   // Standardized Episode Display Title (`Silo S01E01` / `Lost S04E15` / `Movie (2024)`)
   // Backed by derivedStateOf so movablePlayerBox (movableContentOf) ALWAYS observes live updates
@@ -1154,13 +1157,15 @@ fun MainScreen(
     if (force) {
       inFlightScrapeKeyRef.set(null)
       lastResolvedScrapeKeyRef.set(null)
-      scrapeForceNonce += 1L
     }
+    // Always assign a monotonically increasing nonce so late/superseded scrapes NEVER overwrite newer playback!
+    scrapeForceNonce += 1L
 
     isScrapingSeries = true
     detectedVideoQualities = emptyList()
     userManuallyDismissedNativePlayer = false
     failedNativeStreamUrls.clear()
+    failedServerEmbedUrls.clear()
 
     val pureShowHint = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
       titleHint.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery.ifBlank { pageTitle } } }
@@ -1188,6 +1193,14 @@ fun MainScreen(
       inFlightScrapeKeyRef.set(req.requestKey)
     }
 
+    fun isRequestStillCurrent(): Boolean {
+      val currentReq = activeEpisodeScrapeRequest
+      return !isHomeActive &&
+        currentReq != null &&
+        currentReq.nonce == req.nonce &&
+        currentReq.requestKey == req.requestKey
+    }
+
     AppDiagnosticsLogger.recordBreadcrumb(context, "SCRAPE_START", "${req.portal.id}: ${req.targetUrl}")
     try {
       val scraped = searchService.scrapeSeasonsAndEpisodes(
@@ -1197,6 +1210,11 @@ fun MainScreen(
         selectedSeasonNumber = req.selectedSeasonNum,
         selectedEpisodeNumber = req.selectedEpisodeNum
       )
+      // Critical race guard: discard stale scrape results if user navigated elsewhere or started a newer request
+      if (!isRequestStillCurrent()) {
+        AppDiagnosticsLogger.log("Scraper", "Discarded stale scrape result (nonce=${req.nonce}) for ${req.targetUrl}")
+        return@LaunchedEffect
+      }
       lastResolvedScrapeKeyRef.set(req.requestKey)
       val prevBaseTitle = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(seriesStructure.seriesTitle)
         .lowercase().replace(Regex("[^a-z0-9\\u0621-\\u064A]+"), " ").trim()
@@ -1272,6 +1290,9 @@ fun MainScreen(
         val streamReferer = scraped.directStreamReferer.ifBlank {
           scraped.bestCleanPlayerUrl.ifBlank { resolvedPortalWatchUrl }
         }
+        val bestServer = scraped.watchServers.firstOrNull { it.embedUrl == scraped.bestCleanPlayerUrl }
+        activeServerName = bestServer?.name ?: activeServerName.ifBlank { "سيرفر مباشر" }
+        AppDiagnosticsLogger.activeServerName = activeServerName
         activeEmbedRefererUrl = streamReferer
         detectedVideoUrl = chosenDirectUrl
         detectedVideoHeaders = mapOf(
@@ -1299,16 +1320,24 @@ fun MainScreen(
             portalRefererPageUrl = resolvedPortalWatchUrl,
             resetNativePlayer = true
           )
-          // Automatic SPA embed watchdog: if a dynamic embed (e.g. VidLink) does not emit a stream within 9s, auto-switch to the next direct server (e.g. VidSrc)
+          // Automatic SPA embed watchdog: if a dynamic embed (VidLink/VidSrc/MultiEmbed/2Embed) does not emit a stream within 9s, auto-switch to the next direct server
+          val lowerBest = scraped.bestCleanPlayerUrl.lowercase()
+          val isSpaCandidate = lowerBest.contains("vidlink.") ||
+            lowerBest.contains("vidsrc.") ||
+            lowerBest.contains("multiembed.") ||
+            lowerBest.contains("2embed.") ||
+            lowerBest.contains("autoembed.")
           val fallbackServer = scraped.watchServers.firstOrNull {
             it.isDirectEmbed &&
               it.embedUrl != scraped.bestCleanPlayerUrl &&
               !it.embedUrl.startsWith("topcinema-ajax://")
           }
-          if (fallbackServer != null && scraped.bestCleanPlayerUrl.contains("vidlink.", ignoreCase = true)) {
+          if (fallbackServer != null && isSpaCandidate) {
+            val watchdogNonce = req.nonce
             scope.launch {
               kotlinx.coroutines.delay(9000L)
               if (!isHomeActive &&
+                  activeEpisodeScrapeRequest?.nonce == watchdogNonce &&
                   playNativeVideoUrl == null &&
                   detectedVideoUrl.isNullOrBlank() &&
                   currentUrl == scraped.bestCleanPlayerUrl
@@ -1337,7 +1366,9 @@ fun MainScreen(
       }
     } finally {
       inFlightScrapeKeyRef.compareAndSet(req.requestKey, null)
-      isScrapingSeries = false
+      if (activeEpisodeScrapeRequest?.nonce == req.nonce) {
+        isScrapingSeries = false
+      }
     }
   }
 
@@ -1377,6 +1408,7 @@ fun MainScreen(
     preferNativePlayer = !isGeneralBrowser
     userManuallyDismissedNativePlayer = false
     failedNativeStreamUrls.clear()
+    failedServerEmbedUrls.clear()
     detectedVideoUrl = null
     detectedVideoHeaders = emptyMap()
     detectedVideoQualities = emptyList()
@@ -2144,9 +2176,15 @@ fun MainScreen(
           currentUrl.contains("google.com") ||
           currentUrl.contains("instagram.com") ||
           currentUrl.contains("youtube.com")
+      // Mount NativeTvExoPlayer ONLY when a real non-blank stream URL is ready (never allocate/release an empty ExoPlayer while scraping!)
       val showPrimaryNativePlayer = !isGeneralBrowserSession &&
           !isSocialOrSearchFeed &&
-          (playNativeVideoUrl != null || (preferNativePlayer && isScrapingSeries))
+          !playNativeVideoUrl.isNullOrBlank()
+      val showScrapingStreamOverlay = !isGeneralBrowserSession &&
+          !isSocialOrSearchFeed &&
+          !showPrimaryNativePlayer &&
+          isScrapingSeries &&
+          !isWebViewMounted
 
       // Floating Top-Left Video Fullscreen & Diagnostics Controls when using Embedded WebView Player
       if (!isGeneralBrowserSession && !showPrimaryNativePlayer) {
@@ -2300,6 +2338,33 @@ fun MainScreen(
           modifier = Modifier
             .align(Alignment.BottomCenter)
         )
+      }
+
+      if (showScrapingStreamOverlay) {
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.88f)),
+          contentAlignment = Alignment.Center
+        ) {
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(16.dp)
+          ) {
+            CircularProgressIndicator(
+              color = CinemaAccent,
+              strokeWidth = 3.dp,
+              modifier = Modifier.size(34.dp)
+            )
+            Text(
+              text = "جاري البحث واستخراج رابط البث المباشر...",
+              color = Color.White,
+              fontSize = 14.sp,
+              fontWeight = FontWeight.Bold
+            )
+          }
+        }
       }
 
       if (showPrimaryNativePlayer) {
@@ -2466,22 +2531,93 @@ fun MainScreen(
           onFallbackToWebPlayer = {
             playNativeVideoUrl?.let { failedNativeStreamUrls.add(it) }
             detectedVideoUrl?.let { failedNativeStreamUrls.add(it) }
-            preferNativePlayer = false
+            if (activeEmbedRefererUrl.isNotBlank()) {
+              failedServerEmbedUrls.add(activeEmbedRefererUrl)
+            }
+            if (currentUrl.isNotBlank()) {
+              failedServerEmbedUrls.add(currentUrl)
+            }
             playNativeVideoUrl = null
-            val fallbackServerUrl = activeEmbedRefererUrl.ifBlank { currentUrl }
-            loadServerIntoWebView(
-              targetWebView = webViewRef,
-              targetServerUrl = fallbackServerUrl,
-              isDirectEmbed = isCurrentUrlDirectEmbed,
-              portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
-              resetNativePlayer = false,
-              forceReload = true
-            )
-            Toast.makeText(
-              context,
-              "تم التبديل لمشغل السيرفر المدمج",
-              Toast.LENGTH_SHORT
-            ).show()
+
+            // Try up to 2 remaining direct servers automatically before dropping back to WebView
+            val nextCandidateServer = seriesStructure.watchServers.firstOrNull { srv ->
+              srv.isDirectEmbed &&
+                srv.embedUrl !in failedServerEmbedUrls &&
+                srv.embedUrl != activeEmbedRefererUrl &&
+                srv.embedUrl != currentUrl
+            }
+            if (nextCandidateServer != null && failedServerEmbedUrls.size <= 3) {
+              failedServerEmbedUrls.add(nextCandidateServer.embedUrl)
+              activeServerName = nextCandidateServer.name
+              AppDiagnosticsLogger.activeServerName = nextCandidateServer.name
+              AppDiagnosticsLogger.log(
+                "AutoServerRetry",
+                "فشل البث الحالي — تجربة السيرفر البديل تلقائياً: ${nextCandidateServer.name}"
+              )
+              Toast.makeText(
+                context,
+                "جاري تجربة سيرفر بديل: ${nextCandidateServer.name}",
+                Toast.LENGTH_SHORT
+              ).show()
+              activeServerSelectionJob?.cancel()
+              val targetWatchReferer = activeWatchPageUrl.ifBlank { activePortal.homeUrl }
+              activeServerSelectionJob = scope.launch {
+                val resolution = searchService.extractDirectStreamFromServer(
+                  embedUrl = nextCandidateServer.embedUrl,
+                  refererUrl = targetWatchReferer
+                )
+                if (!isActive || isHomeActive) return@launch
+                if (resolution.primaryStreamUrl.isNotBlank() &&
+                    resolution.primaryStreamUrl !in failedNativeStreamUrls
+                ) {
+                  val chosenUrl = selectPreferredDirectStreamUrl(
+                    resolution.primaryStreamUrl,
+                    resolution.detectedQualities
+                  )
+                  activeEmbedRefererUrl = resolution.refererUrl.ifBlank { nextCandidateServer.embedUrl }
+                  detectedVideoUrl = chosenUrl
+                  detectedVideoHeaders = mapOf(
+                    "Referer" to activeEmbedRefererUrl,
+                    "User-Agent" to desktopChromeUa
+                  )
+                  if (resolution.detectedQualities.isNotEmpty()) {
+                    mergeDetectedQualities(resolution.detectedQualities)
+                  }
+                  preferNativePlayer = true
+                  hardDestroyWebView("Auto-fallback server resolved direct stream")
+                  playNativeVideoUrl = chosenUrl
+                } else {
+                  preferNativePlayer = false
+                  val resolvedTarget = resolution.refererUrl.takeIf { it.startsWith("http") }
+                    ?: nextCandidateServer.embedUrl.takeIf { it.startsWith("http") }
+                    ?: targetWatchReferer
+                  loadServerIntoWebView(
+                    targetWebView = webViewRef,
+                    targetServerUrl = resolvedTarget,
+                    isDirectEmbed = nextCandidateServer.isDirectEmbed,
+                    portalRefererPageUrl = targetWatchReferer,
+                    resetNativePlayer = false,
+                    forceReload = true
+                  )
+                }
+              }
+            } else {
+              preferNativePlayer = false
+              val fallbackServerUrl = activeEmbedRefererUrl.ifBlank { currentUrl }
+              loadServerIntoWebView(
+                targetWebView = webViewRef,
+                targetServerUrl = fallbackServerUrl,
+                isDirectEmbed = isCurrentUrlDirectEmbed,
+                portalRefererPageUrl = activeWatchPageUrl.ifBlank { activePortal.homeUrl },
+                resetNativePlayer = false,
+                forceReload = true
+              )
+              Toast.makeText(
+                context,
+                "تم التبديل لمشغل السيرفر المدمج",
+                Toast.LENGTH_SHORT
+              ).show()
+            }
           },
           modifier = Modifier.fillMaxSize()
         )
@@ -2775,25 +2911,53 @@ fun MainScreen(
             lastSearchQuery = cleanShow
             lastSearchPortalResults = allResults
 
-            val portalOrder = listOf(
-              preferredPortal,
-              StreamingPortal.WATCH_SERIES,
-              StreamingPortal.TOP_CINEMA,
-              StreamingPortal.LAROZA,
-              StreamingPortal.EGY_DEAD,
-              StreamingPortal.FLIXER
-            ).distinct()
+            val isLegacyAndroidWebView = Build.VERSION.SDK_INT <= Build.VERSION_CODES.N_MR1
+            // On Android 7.1.2 and older, SPA embeds (WatchSeries/Flixer) fail on Chromium v52-58,
+            // so prioritize direct-stream portals (TopCinema / EgyDead / LaRoza) first!
+            val portalOrder = if (isLegacyAndroidWebView) {
+              listOf(
+                StreamingPortal.TOP_CINEMA,
+                StreamingPortal.EGY_DEAD,
+                StreamingPortal.LAROZA,
+                preferredPortal,
+                StreamingPortal.WATCH_SERIES,
+                StreamingPortal.FLIXER
+              ).distinct()
+            } else {
+              listOf(
+                preferredPortal,
+                StreamingPortal.WATCH_SERIES,
+                StreamingPortal.TOP_CINEMA,
+                StreamingPortal.LAROZA,
+                StreamingPortal.EGY_DEAD,
+                StreamingPortal.FLIXER
+              ).distinct()
+            }
 
             var chosenPortal = preferredPortal
             var bestResult: SearchResultItem? = null
+            // Pass 1: Prefer genuine scraped results over synthetic fallback links
             for (p in portalOrder) {
-              val hits = allResults[p].orEmpty()
-              if (hits.isNotEmpty()) {
+              val realHits = allResults[p].orEmpty().filterNot { SearchAndSubtitlesService.isSyntheticFallbackResult(it) }
+              if (realHits.isNotEmpty()) {
                 chosenPortal = p
-                bestResult = hits.firstOrNull {
+                bestResult = realHits.firstOrNull {
                   it.title.contains(cleanShow, ignoreCase = true)
-                } ?: hits.first()
+                } ?: realHits.first()
                 break
+              }
+            }
+            // Pass 2: Fall back to any available result if every portal returned only synthetic fallback items
+            if (bestResult == null) {
+              for (p in portalOrder) {
+                val hits = allResults[p].orEmpty()
+                if (hits.isNotEmpty()) {
+                  chosenPortal = p
+                  bestResult = hits.firstOrNull {
+                    it.title.contains(cleanShow, ignoreCase = true)
+                  } ?: hits.first()
+                  break
+                }
               }
             }
 
@@ -3115,8 +3279,35 @@ fun MainScreen(
                 )
               },
               onSwitchPortalDirect = { portal ->
-                val url = if (lastSearchQuery.isNotBlank()) portal.buildSearchUrl(lastSearchQuery) else portal.homeUrl
-                navigateTo(url, portal, portal.displayNameArabic, isGeneralBrowser = false, autoScrapeAndLoadEmbed = false)
+                val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+                  standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                ).ifBlank { lastSearchQuery }
+                val targetSeason = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val targetEpisode = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                val existingRealHit = lastSearchPortalResults[portal]
+                  .orEmpty()
+                  .filterNot { SearchAndSubtitlesService.isSyntheticFallbackResult(it) }
+                  .firstOrNull { cleanShow.isBlank() || it.title.contains(cleanShow, ignoreCase = true) }
+                  ?: lastSearchPortalResults[portal]
+                    .orEmpty()
+                    .filterNot { SearchAndSubtitlesService.isSyntheticFallbackResult(it) }
+                    .firstOrNull()
+                val targetUrl = existingRealHit?.url
+                  ?: if (cleanShow.isNotBlank()) portal.buildSearchUrl(cleanShow) else portal.homeUrl
+                val navTitle = when {
+                  cleanShow.isNotBlank() && targetEpisode > 0 -> buildCleanEpisodeNavTitle(targetSeason, targetEpisode, cleanShow)
+                  cleanShow.isNotBlank() -> cleanShow
+                  else -> portal.displayNameArabic
+                }
+                navigateTo(
+                  url = targetUrl,
+                  portal = portal,
+                  title = navTitle,
+                  isGeneralBrowser = false,
+                  autoScrapeAndLoadEmbed = cleanShow.isNotBlank() || existingRealHit != null,
+                  selectedSeasonNum = targetSeason,
+                  selectedEpisodeNum = targetEpisode
+                )
               },
               onSelectSeason = { season ->
                 val pureShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
@@ -3288,8 +3479,35 @@ fun MainScreen(
                 )
               },
               onSwitchPortalDirect = { portal ->
-                val url = if (lastSearchQuery.isNotBlank()) portal.buildSearchUrl(lastSearchQuery) else portal.homeUrl
-                navigateTo(url, portal, portal.displayNameArabic, isGeneralBrowser = false, autoScrapeAndLoadEmbed = false)
+                val cleanShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(
+                  standardizedMediaInfo.cleanTitle.ifBlank { seriesStructure.seriesTitle.ifBlank { lastSearchQuery } }
+                ).ifBlank { lastSearchQuery }
+                val targetSeason = (standardizedMediaInfo.seasonNumber ?: seriesStructure.selectedSeasonNumber).coerceAtLeast(1)
+                val targetEpisode = (standardizedMediaInfo.episodeNumber ?: seriesStructure.currentEpisodeNumber).coerceAtLeast(0)
+                val existingRealHit = lastSearchPortalResults[portal]
+                  .orEmpty()
+                  .filterNot { SearchAndSubtitlesService.isSyntheticFallbackResult(it) }
+                  .firstOrNull { cleanShow.isBlank() || it.title.contains(cleanShow, ignoreCase = true) }
+                  ?: lastSearchPortalResults[portal]
+                    .orEmpty()
+                    .filterNot { SearchAndSubtitlesService.isSyntheticFallbackResult(it) }
+                    .firstOrNull()
+                val targetUrl = existingRealHit?.url
+                  ?: if (cleanShow.isNotBlank()) portal.buildSearchUrl(cleanShow) else portal.homeUrl
+                val navTitle = when {
+                  cleanShow.isNotBlank() && targetEpisode > 0 -> buildCleanEpisodeNavTitle(targetSeason, targetEpisode, cleanShow)
+                  cleanShow.isNotBlank() -> cleanShow
+                  else -> portal.displayNameArabic
+                }
+                navigateTo(
+                  url = targetUrl,
+                  portal = portal,
+                  title = navTitle,
+                  isGeneralBrowser = false,
+                  autoScrapeAndLoadEmbed = cleanShow.isNotBlank() || existingRealHit != null,
+                  selectedSeasonNum = targetSeason,
+                  selectedEpisodeNum = targetEpisode
+                )
               },
               onSelectSeason = { season ->
                 val pureShow = SearchAndSubtitlesService.stripEpisodeAndSeasonSuffix(

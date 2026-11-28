@@ -124,6 +124,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -384,7 +385,9 @@ fun NativeTvExoPlayer(
   val player = remember {
     val mediaSourceFactory = DefaultMediaSourceFactory(httpDataSourceFactory)
       .setLoadErrorHandlingPolicy(resilientLoadErrorPolicy)
-    ExoPlayer.Builder(context)
+    val renderersFactory = DefaultRenderersFactory(context)
+      .setEnableDecoderFallback(true)
+    ExoPlayer.Builder(context, renderersFactory)
       .setMediaSourceFactory(mediaSourceFactory)
       .setTrackSelector(trackSelector)
       .setLoadControl(balancedLowRamLoadControl)

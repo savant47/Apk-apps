@@ -26,10 +26,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import java.security.GeneralSecurityException
 import java.security.MessageDigest
+import java.security.NoSuchAlgorithmException
 import java.security.SecureRandom
+import java.util.Arrays
+import javax.crypto.Mac
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.resume
 
 @Entity(
@@ -125,6 +131,7 @@ abstract class AsserTvDatabase : RoomDatabase() {
 object PasswordSecurity {
   private const val ITERATIONS = 100_000
   private const val KEY_LENGTH_BITS = 256
+  private const val KEY_LENGTH_BYTES = KEY_LENGTH_BITS / 8
   private val secureRandom = SecureRandom()
 
   fun generateSaltBase64(): String {
@@ -133,16 +140,80 @@ object PasswordSecurity {
     return Base64.encodeToString(bytes, Base64.NO_WRAP)
   }
 
-  fun hashPassword(password: String, saltBase64: String): String {
-    val saltBytes = Base64.decode(saltBase64, Base64.NO_WRAP)
-    val spec = PBEKeySpec(password.toCharArray(), saltBytes, ITERATIONS, KEY_LENGTH_BITS)
+  /**
+   * RFC 2898 PBKDF2-HMAC-SHA256 pure-Kotlin implementation backed by `Mac("HmacSHA256")`.
+   * Available on all Android versions (API 1+) and byte-for-byte identical to
+   * `SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")` (which is API 26+ only).
+   */
+  internal fun pbkdf2HmacSha256Fallback(
+    password: CharArray,
+    salt: ByteArray,
+    iterations: Int = ITERATIONS,
+    keyLengthBytes: Int = KEY_LENGTH_BYTES
+  ): ByteArray {
+    val passwordBytes = String(password).toByteArray(Charsets.UTF_8)
+    try {
+      val mac = Mac.getInstance("HmacSHA256")
+      mac.init(SecretKeySpec(passwordBytes, "HmacSHA256"))
+      val hashLen = mac.macLength
+      val blockCount = (keyLengthBytes + hashLen - 1) / hashLen
+      val derivedKey = ByteArray(keyLengthBytes)
+      val intBlock = ByteArray(4)
+
+      for (blockIndex in 1..blockCount) {
+        intBlock[0] = (blockIndex ushr 24).toByte()
+        intBlock[1] = (blockIndex ushr 16).toByte()
+        intBlock[2] = (blockIndex ushr 8).toByte()
+        intBlock[3] = blockIndex.toByte()
+
+        mac.reset()
+        mac.update(salt)
+        mac.update(intBlock)
+        var u = mac.doFinal()
+        val t = u.copyOf()
+
+        for (iter in 1 until iterations) {
+          u = mac.doFinal(u)
+          for (j in t.indices) {
+            t[j] = (t[j].toInt() xor u[j].toInt()).toByte()
+          }
+        }
+
+        val destOffset = (blockIndex - 1) * hashLen
+        val copyLen = minOf(hashLen, keyLengthBytes - destOffset)
+        System.arraycopy(t, 0, derivedKey, destOffset, copyLen)
+      }
+      return derivedKey
+    } finally {
+      Arrays.fill(passwordBytes, 0.toByte())
+    }
+  }
+
+  internal fun deriveHashBytes(
+    password: String,
+    saltBytes: ByteArray,
+    iterations: Int = ITERATIONS,
+    keyLengthBits: Int = KEY_LENGTH_BITS
+  ): ByteArray {
+    val chars = password.toCharArray()
+    val spec = PBEKeySpec(chars, saltBytes, iterations, keyLengthBits)
     return try {
       val skf = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-      val hash = skf.generateSecret(spec).encoded
-      Base64.encodeToString(hash, Base64.NO_WRAP)
+      skf.generateSecret(spec).encoded
+    } catch (_: NoSuchAlgorithmException) {
+      pbkdf2HmacSha256Fallback(chars, saltBytes, iterations, keyLengthBits / 8)
+    } catch (_: GeneralSecurityException) {
+      pbkdf2HmacSha256Fallback(chars, saltBytes, iterations, keyLengthBits / 8)
     } finally {
       spec.clearPassword()
+      Arrays.fill(chars, '\u0000')
     }
+  }
+
+  fun hashPassword(password: String, saltBase64: String): String {
+    val saltBytes = Base64.decode(saltBase64, Base64.NO_WRAP)
+    val hash = deriveHashBytes(password, saltBytes, ITERATIONS, KEY_LENGTH_BITS)
+    return Base64.encodeToString(hash, Base64.NO_WRAP)
   }
 
   fun verifyPassword(password: String, saltBase64: String, expectedHashBase64: String): Boolean {
@@ -211,13 +282,25 @@ class AccountAuthRepository(context: Context) {
       return@withContext AuthActionResult.Error("كلمتا المرور غير متطابقتين")
     }
 
-    val existing = dao.findByEmail(email)
+    val existing = try {
+      dao.findByEmail(email)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (_: Exception) {
+      return@withContext AuthActionResult.Error("تعذر الوصول لقاعدة البيانات المحلية — أعد المحاولة")
+    }
     if (existing != null) {
       return@withContext AuthActionResult.Error("هذا البريد الإلكتروني مسجل بالفعل — يمكنك تسجيل الدخول")
     }
 
     val salt = PasswordSecurity.generateSaltBase64()
-    val hash = PasswordSecurity.hashPassword(password, salt)
+    val hash = try {
+      PasswordSecurity.hashPassword(password, salt)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      return@withContext AuthActionResult.Error("تعذر تشفير كلمة المرور على هذا الجهاز: ${e.javaClass.simpleName}")
+    }
     val displayName = rawDisplayName.trim().ifBlank {
       email.substringBefore('@').replaceFirstChar { it.uppercaseChar() }
     }
@@ -233,6 +316,8 @@ class AccountAuthRepository(context: Context) {
 
     val newId = try {
       dao.insertAccount(entity)
+    } catch (e: CancellationException) {
+      throw e
     } catch (_: Exception) {
       return@withContext AuthActionResult.Error("تعذر إنشاء الحساب — تحقق من البريد الإلكتروني")
     }
@@ -254,7 +339,13 @@ class AccountAuthRepository(context: Context) {
       return@withContext AuthActionResult.Error("يرجى إدخال كلمة المرور")
     }
 
-    var account = dao.findByEmail(email)
+    var account = try {
+      dao.findByEmail(email)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (_: Exception) {
+      return@withContext AuthActionResult.Error("تعذر قراءة بيانات الحساب المحلية — أعد المحاولة")
+    }
     // Seamless TV Box / Mobile sync for the owner's account (savant47@gmail.com with 000000)
     if (account == null && email == "savant47@gmail.com" && password == "000000") {
       return@withContext registerAccount(
@@ -271,12 +362,18 @@ class AccountAuthRepository(context: Context) {
 
     var valid = PasswordSecurity.verifyPassword(password, account.passwordSalt, account.passwordHash)
     if (!valid && email == "savant47@gmail.com" && password == "000000") {
-      val salt = PasswordSecurity.generateSaltBase64()
-      val hash = PasswordSecurity.hashPassword(password, salt)
-      val now = System.currentTimeMillis()
-      dao.updatePassword(account.id, hash, salt, now)
-      account = account.copy(passwordHash = hash, passwordSalt = salt, lastLoginAtMs = now)
-      valid = true
+      try {
+        val salt = PasswordSecurity.generateSaltBase64()
+        val hash = PasswordSecurity.hashPassword(password, salt)
+        val now = System.currentTimeMillis()
+        dao.updatePassword(account.id, hash, salt, now)
+        account = account.copy(passwordHash = hash, passwordSalt = salt, lastLoginAtMs = now)
+        valid = true
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        return@withContext AuthActionResult.Error("تعذر تحديث بيانات الدخول المحلية: ${e.javaClass.simpleName}")
+      }
     }
 
     if (!valid) {
@@ -284,7 +381,11 @@ class AccountAuthRepository(context: Context) {
     }
 
     val now = System.currentTimeMillis()
-    dao.updateLastLogin(account.id, now)
+    try {
+      dao.updateLastLogin(account.id, now)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (_: Exception) {}
     val updated = account.copy(lastLoginAtMs = now)
     sessionPrefs.edit().putLong(KEY_ACTIVE_ACCOUNT_ID, updated.id).apply()
     _currentAccountFlow.value = updated
@@ -383,13 +484,30 @@ class AccountAuthRepository(context: Context) {
       return@withContext AuthActionResult.Error("كلمتا المرور غير متطابقتين")
     }
 
-    val account = dao.findByEmail(email)
-      ?: return@withContext AuthActionResult.Error("لا يوجد حساب مسجل بهذا البريد الإلكتروني — يمكنك إنشاء حساب جديد")
+    val account = try {
+      dao.findByEmail(email)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (_: Exception) {
+      return@withContext AuthActionResult.Error("تعذر الوصول لقاعدة البيانات المحلية — أعد المحاولة")
+    } ?: return@withContext AuthActionResult.Error("لا يوجد حساب مسجل بهذا البريد الإلكتروني — يمكنك إنشاء حساب جديد")
 
     val salt = PasswordSecurity.generateSaltBase64()
-    val hash = PasswordSecurity.hashPassword(newPassword, salt)
+    val hash = try {
+      PasswordSecurity.hashPassword(newPassword, salt)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      return@withContext AuthActionResult.Error("تعذر تشفير كلمة المرور الجديدة: ${e.javaClass.simpleName}")
+    }
     val now = System.currentTimeMillis()
-    dao.updatePassword(account.id, hash, salt, now)
+    try {
+      dao.updatePassword(account.id, hash, salt, now)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (_: Exception) {
+      return@withContext AuthActionResult.Error("تعذر حفظ كلمة المرور الجديدة — أعد المحاولة")
+    }
     val updated = account.copy(
       passwordHash = hash,
       passwordSalt = salt,

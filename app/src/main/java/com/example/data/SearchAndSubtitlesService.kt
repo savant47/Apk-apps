@@ -20,6 +20,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.ConnectionSpec
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -28,6 +29,8 @@ import org.json.JSONObject
 import org.jsoup.Jsoup
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.net.InetAddress
+import java.net.Socket
 import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.security.SecureRandom
@@ -38,6 +41,8 @@ import java.util.regex.Pattern
 import java.util.zip.GZIPInputStream
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
@@ -1812,30 +1817,66 @@ class SearchAndSubtitlesService {
       "Fast-scraped ${seasons.size} seasons (active=S$effectiveSeasonNumber), ${episodes.size} episodes, ${watchServers.size} servers in ${scrapeElapsedMs}ms from $normalizedWatchUrl"
     )
 
-    // Resolve the primary server, and if it fails/times out, try up to 1 fallback direct server before falling back to WebView
-    if (!okHttpBlockedByCloudflare && directCandidateServers.isNotEmpty()) {
-      for (candidate in directCandidateServers.take(2)) {
-        if (isDynamicSpaEmbed(candidate.embedUrl)) {
+    // Resolve the primary server, and if it fails/times out, try up to 2 fallback direct or lazy TopCinema AJAX servers
+    if (!okHttpBlockedByCloudflare) {
+      val orderedCandidates = mutableListOf<ScrapedWatchServer>()
+      orderedCandidates.addAll(directCandidateServers.take(3))
+      val lazyTopCinemaServers = watchServers.filter {
+        it.isDirectEmbed && it.embedUrl.startsWith("topcinema-ajax://")
+      }
+      orderedCandidates.addAll(lazyTopCinemaServers.take(2))
+
+      var attempts = 0
+      for (candidate in orderedCandidates) {
+        if (attempts >= 3) break
+        if (System.currentTimeMillis() - scrapeStartMs > 16_000L && attempts >= 1) break
+
+        var actualCandidate = candidate
+        var targetEmbedUrl = candidate.embedUrl
+        if (targetEmbedUrl.startsWith("topcinema-ajax://")) {
+          val parts = targetEmbedUrl.removePrefix("topcinema-ajax://").split("|")
+          if (parts.size != 3) continue
+          val resolvedLazy = resolveTopCinemaAjaxEmbed(
+            origin = parts[0],
+            postId = parts[1],
+            serverNum = parts[2],
+            refererUrl = normalizedWatchUrl
+          )
+          if (resolvedLazy.isBlank()) continue
+          targetEmbedUrl = resolvedLazy
+          val idxInList = watchServers.indexOfFirst { it.id == candidate.id }
+          if (idxInList >= 0) {
+            actualCandidate = candidate.copy(embedUrl = resolvedLazy)
+            watchServers[idxInList] = actualCandidate
+          }
+        }
+
+        if (isDynamicSpaEmbed(targetEmbedUrl)) {
           if (chosenServer == null) {
-            chosenServer = candidate
-            bestEmbedUrl = candidate.embedUrl
+            chosenServer = actualCandidate
+            bestEmbedUrl = targetEmbedUrl
           }
           continue
         }
+
+        attempts++
         val extractStartMs = System.currentTimeMillis()
-        val resolution = resolveDirectStreamFromEmbed(candidate.embedUrl, normalizedWatchUrl)
+        val resolution = resolveDirectStreamFromEmbed(targetEmbedUrl, normalizedWatchUrl)
         if (resolution.primaryStreamUrl.isNotBlank()) {
-          chosenServer = candidate
-          bestEmbedUrl = candidate.embedUrl
+          chosenServer = actualCandidate
+          bestEmbedUrl = targetEmbedUrl
           extractedDirectStream = resolution.primaryStreamUrl
-          extractedStreamReferer = resolution.refererUrl.ifBlank { candidate.embedUrl }
+          extractedStreamReferer = resolution.refererUrl.ifBlank { targetEmbedUrl }
           detectedQualities = resolution.detectedQualities
           val extractElapsedMs = System.currentTimeMillis() - extractStartMs
           AppDiagnosticsLogger.log(
             "StreamExtractor",
-            "Resolved selected server [${candidate.name}] in ${extractElapsedMs}ms: ${resolution.primaryStreamUrl} | Qualities: ${detectedQualities.joinToString { it.label }}"
+            "Resolved selected server [${actualCandidate.name}] in ${extractElapsedMs}ms: ${resolution.primaryStreamUrl} | Qualities: ${detectedQualities.joinToString { it.label }}"
           )
           break
+        } else if (chosenServer == null) {
+          chosenServer = actualCandidate
+          bestEmbedUrl = targetEmbedUrl
         }
       }
     }
@@ -3626,17 +3667,63 @@ class SearchAndSubtitlesService {
       )
     }
 
+    private class Tls12CompatSocketFactory(
+      private val delegate: SSLSocketFactory
+    ) : SSLSocketFactory() {
+      override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
+      override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+
+      private fun enableModernTls(socket: Socket): Socket {
+        if (socket is SSLSocket) {
+          try {
+            val supported = socket.supportedProtocols.orEmpty().toSet()
+            val preferred = listOf("TLSv1.3", "TLSv1.2").filter { it in supported }
+            if (preferred.isNotEmpty()) {
+              socket.enabledProtocols = preferred.toTypedArray()
+            }
+          } catch (_: Throwable) {}
+        }
+        return socket
+      }
+
+      override fun createSocket(s: Socket, host: String, port: Int, autoClose: Boolean): Socket =
+        enableModernTls(delegate.createSocket(s, host, port, autoClose))
+
+      override fun createSocket(host: String, port: Int): Socket =
+        enableModernTls(delegate.createSocket(host, port))
+
+      override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+        enableModernTls(delegate.createSocket(host, port, localHost, localPort))
+
+      override fun createSocket(host: InetAddress, port: Int): Socket =
+        enableModernTls(delegate.createSocket(host, port))
+
+      override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+        enableModernTls(delegate.createSocket(address, port, localAddress, localPort))
+    }
+
+    fun isSyntheticFallbackResult(item: SearchResultItem): Boolean {
+      val id = item.id.lowercase()
+      return id.startsWith("tc_direct_") ||
+        id.startsWith("ws_direct_") ||
+        id.startsWith("lr_direct_") ||
+        id.startsWith("ed_direct_") ||
+        id.startsWith("flx_direct_") ||
+        id.endsWith("_custom_direct")
+    }
+
     /**
-     * Installs a permissive SSL socket factory on `HttpsURLConnection` so Media3 ExoPlayer
+     * Installs a permissive TLS 1.2+ SSL socket factory on `HttpsURLConnection` so Media3 ExoPlayer
      * (`DefaultHttpDataSource`) and `OkHttpClient` never fail with `SSLHandshakeException`
-     * on video streaming CDN edge servers (such as `serv-stream-cdn10.cdn-video.xyz`).
+     * on video streaming CDN edge servers or Android 7.1.2 (SDK 25) devices.
      */
     fun installPermissiveSslForStreaming() {
       if (sslInstalled) return
       try {
         val sslContext = SSLContext.getInstance("TLS")
         sslContext.init(null, arrayOf<TrustManager>(trustAllManager), SecureRandom())
-        HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
+        val compatFactory = Tls12CompatSocketFactory(sslContext.socketFactory)
+        HttpsURLConnection.setDefaultSSLSocketFactory(compatFactory)
         HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
         sslInstalled = true
       } catch (_: Exception) {
@@ -3649,11 +3736,19 @@ class SearchAndSubtitlesService {
         .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        .connectionSpecs(
+          listOf(
+            ConnectionSpec.MODERN_TLS,
+            ConnectionSpec.COMPATIBLE_TLS,
+            ConnectionSpec.CLEARTEXT
+          )
+        )
       return try {
         val sslContext = SSLContext.getInstance("TLS")
         sslContext.init(null, arrayOf<TrustManager>(trustAllManager), SecureRandom())
+        val compatFactory = Tls12CompatSocketFactory(sslContext.socketFactory)
         builder
-          .sslSocketFactory(sslContext.socketFactory, trustAllManager)
+          .sslSocketFactory(compatFactory, trustAllManager)
           .hostnameVerifier { _, _ -> true }
           .build()
       } catch (_: Exception) {

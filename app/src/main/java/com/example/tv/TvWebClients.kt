@@ -699,6 +699,115 @@ class TvWebViewClient(
               );
             };
           }
+          if (typeof Promise !== 'undefined' && !Promise.allSettled) {
+            Promise.allSettled = function(promises) {
+              return Promise.all(Array.prototype.map.call(promises || [], function(p) {
+                return Promise.resolve(p).then(
+                  function(v) { return { status: 'fulfilled', value: v }; },
+                  function(r) { return { status: 'rejected', reason: r }; }
+                );
+              }));
+            };
+          }
+          if (!Object.fromEntries) {
+            Object.fromEntries = function(entries) {
+              var obj = {};
+              if (entries && entries.length !== undefined) {
+                for (var i = 0; i < entries.length; i++) {
+                  if (entries[i]) obj[entries[i][0]] = entries[i][1];
+                }
+              }
+              return obj;
+            };
+          }
+          if (!String.prototype.endsWith) {
+            String.prototype.endsWith = function(search, thisLen) {
+              if (thisLen === undefined || thisLen > this.length) thisLen = this.length;
+              return this.substring(thisLen - search.length, thisLen) === search;
+            };
+          }
+          if (!String.prototype.padStart) {
+            String.prototype.padStart = function(targetLength, padString) {
+              targetLength = targetLength >> 0;
+              padString = String(typeof padString !== 'undefined' ? padString : ' ');
+              if (this.length >= targetLength || !padString.length) return String(this);
+              targetLength = targetLength - this.length;
+              if (targetLength > padString.length) padString += padString.repeat(Math.ceil(targetLength / padString.length));
+              return padString.slice(0, targetLength) + String(this);
+            };
+          }
+          if (!String.prototype.padEnd) {
+            String.prototype.padEnd = function(targetLength, padString) {
+              targetLength = targetLength >> 0;
+              padString = String(typeof padString !== 'undefined' ? padString : ' ');
+              if (this.length >= targetLength || !padString.length) return String(this);
+              targetLength = targetLength - this.length;
+              if (targetLength > padString.length) padString += padString.repeat(Math.ceil(targetLength / padString.length));
+              return String(this) + padString.slice(0, targetLength);
+            };
+          }
+          if (!String.prototype.replaceAll) {
+            String.prototype.replaceAll = function(search, replacement) {
+              if (search instanceof RegExp) return this.replace(search, replacement);
+              return this.split(String(search)).join(String(replacement));
+            };
+          }
+          if (!String.prototype.trimStart) {
+            String.prototype.trimStart = String.prototype.trimLeft || function() { return this.replace(/^\s+/, ''); };
+          }
+          if (!String.prototype.trimEnd) {
+            String.prototype.trimEnd = String.prototype.trimRight || function() { return this.replace(/\s+$/, ''); };
+          }
+          if (!Array.prototype.flat) {
+            Array.prototype.flat = function(depth) {
+              var d = depth === undefined ? 1 : Number(depth);
+              var flatten = function(arr, level) {
+                var out = [];
+                for (var i = 0; i < arr.length; i++) {
+                  if (Array.isArray(arr[i]) && level > 0) out = out.concat(flatten(arr[i], level - 1));
+                  else out.push(arr[i]);
+                }
+                return out;
+              };
+              return flatten(this, isNaN(d) ? 1 : d);
+            };
+          }
+          if (!Array.prototype.flatMap) {
+            Array.prototype.flatMap = function(cb, thisArg) {
+              return this.map(cb, thisArg).flat(1);
+            };
+          }
+          if (!Array.prototype.at) {
+            Array.prototype.at = function(n) {
+              n = Math.trunc(n) || 0;
+              if (n < 0) n += this.length;
+              if (n < 0 || n >= this.length) return undefined;
+              return this[n];
+            };
+          }
+          if (typeof window.queueMicrotask !== 'function') {
+            window.queueMicrotask = function(cb) {
+              if (typeof Promise !== 'undefined') Promise.resolve().then(cb);
+              else setTimeout(cb, 0);
+            };
+          }
+          if (typeof window.AbortController === 'undefined') {
+            window.AbortController = function() {
+              var listeners = [];
+              this.signal = {
+                aborted: false,
+                onabort: null,
+                addEventListener: function(t, fn) { if (t === 'abort' && typeof fn === 'function') listeners.push(fn); },
+                removeEventListener: function(t, fn) { listeners = listeners.filter(function(f) { return f !== fn; }); }
+              };
+              this.abort = function() {
+                if (this.signal.aborted) return;
+                this.signal.aborted = true;
+                if (typeof this.signal.onabort === 'function') { try { this.signal.onabort(); } catch(e) {} }
+                for (var i = 0; i < listeners.length; i++) { try { listeners[i](); } catch(e) {} }
+              };
+            };
+          }
 
           // 4. Strict Anti-Popup, Anti-Click-Hijack & Safe Sandbox Shield (avoids "Please Disable Sandbox" breakages)
           var strictSandboxOn = ${if (isStrictIframeSandboxEnabled()) "true" else "false"};

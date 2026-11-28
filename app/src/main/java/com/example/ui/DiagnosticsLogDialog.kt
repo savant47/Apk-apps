@@ -4,8 +4,10 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +52,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -57,6 +60,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -71,7 +76,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
-import coil.compose.AsyncImage
 import com.example.data.AppDiagnosticsLogger
 import com.example.ui.theme.CinemaAccent
 import com.example.ui.theme.CinemaBorder
@@ -81,8 +85,13 @@ import com.example.ui.theme.CinemaSecondary
 import com.example.ui.theme.CinemaSuccess
 import com.example.ui.theme.CinemaSurface
 import com.example.ui.theme.ClipboxWhite
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.net.URLEncoder
+import kotlinx.coroutines.withContext
 
 @Composable
 fun DiagnosticsLogDialog(
@@ -552,17 +561,14 @@ fun DiagnosticsLogDialog(
             }
           }
 
-          // 5. QR Code Display Card (appears when paste.rs upload succeeds)
+          // 5. QR Code Display Card (appears when paste.rs upload succeeds — generated locally via ZXing!)
           val shortUrl = uploadedPasteUrl
           if (!shortUrl.isNullOrBlank()) {
-            val encodedUrl = remember(shortUrl) {
-              try {
-                URLEncoder.encode(shortUrl, "UTF-8")
-              } catch (_: Exception) {
-                shortUrl
+            val qrImageBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = shortUrl) {
+              value = withContext(Dispatchers.Default) {
+                generateLocalQrBitmap(shortUrl, sizePx = 360)?.asImageBitmap()
               }
             }
-            val qrImageUrl = "https://quickchart.io/qr?size=360&margin=2&ecLevel=M&text=$encodedUrl"
 
             Surface(
               color = CinemaSurface,
@@ -588,12 +594,21 @@ fun DiagnosticsLogDialog(
                     .padding(6.dp),
                   contentAlignment = Alignment.Center
                 ) {
-                  AsyncImage(
-                    model = qrImageUrl,
-                    contentDescription = "QR Code للرابط المختصر $shortUrl",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(112.dp)
-                  )
+                  val bmp = qrImageBitmap
+                  if (bmp != null) {
+                    Image(
+                      bitmap = bmp,
+                      contentDescription = "QR Code للرابط المختصر $shortUrl",
+                      contentScale = ContentScale.Fit,
+                      modifier = Modifier.size(112.dp)
+                    )
+                  } else {
+                    CircularProgressIndicator(
+                      color = Color.Black,
+                      strokeWidth = 2.dp,
+                      modifier = Modifier.size(28.dp)
+                    )
+                  }
                 }
 
                 Column(
@@ -767,3 +782,30 @@ fun DiagnosticsLogDialog(
     }
   }
 }
+
+internal fun generateLocalQrBitmap(content: String, sizePx: Int = 360): Bitmap? {
+  if (content.isBlank() || sizePx <= 0) return null
+  return try {
+    val hints = mapOf(
+      EncodeHintType.MARGIN to 1,
+      EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
+      EncodeHintType.CHARACTER_SET to "UTF-8"
+    )
+    val bitMatrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+    val width = bitMatrix.width
+    val height = bitMatrix.height
+    val pixels = IntArray(width * height)
+    for (y in 0 until height) {
+      val offset = y * width
+      for (x in 0 until width) {
+        pixels[offset + x] = if (bitMatrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+      }
+    }
+    Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
+      setPixels(pixels, 0, width, 0, 0, width, height)
+    }
+  } catch (_: Throwable) {
+    null
+  }
+}
+
